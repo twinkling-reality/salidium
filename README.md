@@ -35,9 +35,10 @@ On first run, Salidium detects Claude Code and Codex from their local commands o
 
 Later, the same command starts or finds the daemon and opens Salidium without repeating completed setup. In a non-interactive terminal, Salidium never waits for input and does not change provider settings unless `--yes` is passed. Use `--no-open` when a browser should not open.
 
-`salidium` is a single self-contained script with no runtime dependencies: its public workspace
-packages are not published separately and are bundled into it, so running it adds nothing to your
-tree but Salidium itself.
+`salidium` is a single self-contained script with no runtime dependencies: its local runtime
+packages are private workspaces bundled into it, so running it adds nothing to your tree but
+Salidium itself. The separately releasable `@salidium/sync-contract` contains only strict data and
+wire validators for consent-gated interoperability; it is not required to run the CLI.
 
 ```bash
 salidium install-hooks  # connect detected agents manually
@@ -108,6 +109,8 @@ agent runtime ──hooks (async sh relay)──▶ ┐
 - `packages/core` — pure derivation: `applyEvent(state, event) → SemanticChange[]`, session projections, verification parsing, review rules, redaction, replay.
 - `packages/adapter-kit`, `packages/adapters/*` — provider parsers (transcript/rollout lines + hook payloads → events with deterministic ids).
 - `packages/daemon` — tailing, hook ingress, persistence, git snapshots, loopback HTTP/SSE server.
+- `packages/sync-contract` — separately versioned runtime validators for minimized, consent-gated sync records.
+- `packages/sync` — private workspace implementation of the disabled-by-default durable SQLite outbox.
 - `packages/ui` — React client that folds the event stream with the same reducer.
 - `packages/cli` — `salidium` command.
 
