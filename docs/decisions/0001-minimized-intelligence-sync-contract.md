@@ -26,8 +26,17 @@ provenance-backed approval gate; the private consumer starts only after it can p
 ## Consequences
 
 The public contract incurs real compatibility cost, so it begins experimental at 0.x with retained
-fixtures and additive evolution. Transport acceptance and deletion completion stay distinct. Cloud
-tenant identity is absent from payloads because it must come from authentication context. The broad
+fixtures. Evolution is not additive and should not be described that way: every message is a strict
+object and the wire version is a literal, so a field added later is rejected by an already-released
+consumer. That is deliberate, because the hosted boundary requires unknown fields to fail closed and
+a permissive extension bag would be an over-collection channel. The cost is that adding a field is a
+new package minor version and a coordinated consumer bump, which is affordable only while the
+consumer set is small and known. It is the reason the release gate keeps a retained fixture for
+every operation type and message before a version ships, and the reason publishing before a real
+consumer has exercised the wire is expensive rather than merely early.
+
+Transport acceptance and deletion completion stay distinct. Cloud tenant identity is absent from
+payloads because it must come from authentication context. The broad
 semantic vocabulary prevents future collapse of claims, decisions, preferences, and inferences, but
 does not activate unimplemented producers.
 

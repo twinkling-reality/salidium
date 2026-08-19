@@ -8,6 +8,16 @@ Version 1 supports personal continuity only. Authenticated service context, not 
 determines the hosted tenant and principal. Raw transcripts, rollout records, prompts, commands,
 outputs, diffs, local paths, provider identifiers, and raw-record hashes are not contract fields.
 
+Read that as a statement about structure, not about content. There is no field for a transcript, so
+nothing can extract one into a record; the schema rejects unknown fields rather than stripping them.
+But a decision carries free-form prose that a person wrote, and whatever they typed there is what
+crosses. The local producer removes credential-shaped text and hidden characters as defense in
+depth, which is not the same as minimization: a path, a command, a diff excerpt, a colleague's name,
+or a customer identifier typed into a rationale is content the schema has no way to recognize. The
+control for that is the consent preview showing the exact payload before it is enqueued, and every
+consumer must treat all text fields as untrusted input to escape at render, search, and index
+boundaries.
+
 The schemas define the complete intelligence vocabulary, while Phase 0's local producer emits only
 explicitly user-confirmed decision threads. Other item kinds are contract vocabulary for later,
 separately evaluated producers; their presence is not permission to infer or upload them.

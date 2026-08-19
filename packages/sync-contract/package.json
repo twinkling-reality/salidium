@@ -1,7 +1,7 @@
 {
   "name": "@salidium/sync-contract",
   "version": "0.1.0",
-  "description": "Runtime contracts for consent-gated Salidium intelligence synchronization.",
+  "description": "Experimental 0.x runtime contracts for consent-gated Salidium intelligence synchronization.",
   "license": "MIT",
   "type": "module",
   "exports": {
