@@ -176,6 +176,7 @@ describe('intelligence item v1', () => {
         layer: 'episodic',
         summary: 'A bounded incident episode.',
         promotionPolicyVersion: 'episode-v1',
+        links: [{ relation: 'derived-from', target: { itemId: IDS.other, revision: 1 } }],
       },
       {
         ...common('inference'),
@@ -212,6 +213,17 @@ describe('intelligence item v1', () => {
         promotionPolicyVersion: 'v1',
       }),
     ).toThrow();
+  });
+
+  it('requires durable memory to name what it was promoted from', () => {
+    expect(() =>
+      IntelligenceItemV1Schema.parse({
+        ...common('memory'),
+        layer: 'semantic',
+        summary: 'A fact with no stated origin.',
+        promotionPolicyVersion: 'semantic-v1',
+      }),
+    ).toThrow(/derived-from/);
   });
 
   it('keeps classifier confidence separate from factual probability', () => {

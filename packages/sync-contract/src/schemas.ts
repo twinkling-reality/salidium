@@ -386,6 +386,18 @@ export const IntelligenceItemV1Schema = z
         });
       }
     }
+    if (item.kind === 'memory' && !item.links.some((link) => link.relation === 'derived-from')) {
+      /*
+       * A memory is promoted material, so it has to say what it was promoted from. Without that
+       * link, deleting the record a memory was built on cannot find the memory, and the deletion
+       * lineage the retention model promises stops at the item boundary.
+       */
+      ctx.addIssue({
+        code: 'custom',
+        path: ['links'],
+        message: 'durable memory requires a derived-from link to what it was promoted from',
+      });
+    }
     if (item.kind === 'outcome' && !item.links.some((link) => link.relation === 'outcome-of')) {
       ctx.addIssue({
         code: 'custom',
