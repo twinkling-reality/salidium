@@ -345,19 +345,46 @@ export const IntelligenceItemV1Schema = z
         });
       }
     }
+    /*
+     * Model output is never authority. Guarding by `kind` alone left the durable layer of a memory
+     * unchecked, so an all-model `memory` with `layer: 'decision'` asserted what a `decision` may
+     * not. The rule is therefore stated three ways: the kinds that assert a fact about the world,
+     * the kinds that put words in the authenticated user's mouth, and the epistemic status any item
+     * may claim. `inference` and `preference.inferred` are deliberately absent because they are
+     * required to stay labelled as probabilistic and never present themselves as established.
+     */
     const modelOnly = item.evidence.every((evidence) => evidence.authority === 'model');
-    if (
-      modelOnly &&
-      (item.kind === 'observation' ||
+    if (modelOnly) {
+      const assertsFact =
+        item.kind === 'observation' ||
         item.kind === 'decision' ||
         item.kind === 'preference.explicit' ||
-        (item.kind === 'memory' && item.layer === 'procedural'))
-    ) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['evidence'],
-        message: 'model output alone cannot support this durable item',
-      });
+        (item.kind === 'memory' && item.layer !== 'episodic');
+      const attributedToUser =
+        (item.kind === 'commitment' && item.actor === 'authenticated-user') ||
+        (item.kind === 'intention' && item.actor === 'authenticated-user') ||
+        (item.kind === 'claim' && item.claimant === 'authenticated-user');
+      if (assertsFact || attributedToUser) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['evidence'],
+          message: 'model output alone cannot support this durable item',
+        });
+      }
+      if (item.epistemic === 'observed') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['epistemic'],
+          message: 'model output alone cannot establish an observation',
+        });
+      }
+      if (item.assessment.mode === 'verification' && item.assessment.state === 'verified') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['assessment'],
+          message: 'model output alone cannot establish verification',
+        });
+      }
     }
     if (item.kind === 'outcome' && !item.links.some((link) => link.relation === 'outcome-of')) {
       ctx.addIssue({

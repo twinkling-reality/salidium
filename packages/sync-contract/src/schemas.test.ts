@@ -249,6 +249,85 @@ describe('intelligence item v1', () => {
     }
   });
 
+  it('forbids model-only promotion through the durable memory layer and user attribution', () => {
+    const evidence = [{ ...common('decision').evidence[0], authority: 'model' }];
+    const memory = (layer: string) => ({
+      ...common('memory'),
+      // A model-summarized episode is honest only while it stays unverified.
+      assessment: { mode: 'verification', state: 'unverified' },
+      layer,
+      summary: 'A durable assertion.',
+      promotionPolicyVersion: 'v1',
+      links: [{ relation: 'derived-from', target: { itemId: IDS.other, revision: 1 } }],
+      evidence,
+    });
+    // Guarding on `kind` alone let a memory assert at a layer its own kind may not.
+    for (const layer of ['semantic', 'decision', 'procedural', 'preference']) {
+      expect(() => IntelligenceItemV1Schema.parse(memory(layer))).toThrow(/model output alone/);
+    }
+    // An episode is a bounded record of what happened and may be summarized.
+    expect(IntelligenceItemV1Schema.parse(memory('episodic')).kind).toBe('memory');
+
+    for (const value of [
+      {
+        ...common('commitment'),
+        epistemic: 'planned',
+        actor: 'authenticated-user',
+        description: 'A duty the user never accepted.',
+        status: 'active',
+        evidence,
+      },
+      {
+        ...common('intention'),
+        epistemic: 'planned',
+        actor: 'authenticated-user',
+        description: 'A plan the user never stated.',
+        status: 'active',
+        evidence,
+      },
+      {
+        ...common('claim'),
+        claimant: 'authenticated-user',
+        statement: 'Words the user never said.',
+        evidence,
+      },
+    ]) {
+      expect(() => IntelligenceItemV1Schema.parse(value)).toThrow(/model output alone/);
+    }
+    // An agent may be quoted; that is what a claim is for.
+    expect(
+      IntelligenceItemV1Schema.parse({
+        ...common('claim'),
+        assessment: { mode: 'verification', state: 'unverified' },
+        claimant: 'agent',
+        statement: 'The agent said the migration is safe.',
+        evidence,
+      }).kind,
+    ).toBe('claim');
+  });
+
+  it('forbids model-only evidence from claiming observation or verification', () => {
+    const evidence = [{ ...common('decision').evidence[0], authority: 'model' }];
+    expect(() =>
+      IntelligenceItemV1Schema.parse({
+        ...common('inference'),
+        epistemic: 'observed',
+        assessment: { mode: 'confidence', probability: 0.5, method: { id: 'm', version: '1' } },
+        proposition: 'Dressed as an observation.',
+        evidence,
+      }),
+    ).toThrow(/cannot establish an observation/);
+    expect(() =>
+      IntelligenceItemV1Schema.parse({
+        ...common('entity'),
+        entityType: 'project',
+        name: 'Verified by nobody',
+        assessment: { mode: 'verification', state: 'verified' },
+        evidence,
+      }),
+    ).toThrow(/cannot establish verification/);
+  });
+
   it('requires an explicitly verified user decision rather than provider or model inference', () => {
     expect(() =>
       IntelligenceItemV1Schema.parse({
