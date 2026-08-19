@@ -164,7 +164,8 @@ describe('durable minimized sync outbox', () => {
     expect(json).not.toContain('/Users/private/repo');
     expect(json).not.toContain('transcriptPath');
     expect(json).not.toContain(SECRET_CANARY);
-    expect(json).toContain('ghp_[GITHUB_TOKEN#1]');
+    expect(json).toContain('ghp_[GITHUB_TOKEN]');
+    expect(json).not.toContain('GITHUB_TOKEN#1');
     outbox.close();
   });
 

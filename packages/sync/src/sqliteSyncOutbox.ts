@@ -643,7 +643,17 @@ export class SqliteSyncOutbox {
     input: Pick<CaptureDecisionInput, 'question' | 'selected' | 'rationale' | 'alternatives'>,
   ): Pick<DecisionItem, 'question' | 'selected' | 'rationale' | 'alternatives'> {
     const redactor = createRedactor();
-    const redact = (text: string) => redactor.redact(text).text;
+    const redact = (text: string) => {
+      const result = redactor.redact(text);
+      let minimized = result.text;
+      // Session-local numbering is useful in the local report but is not a durable identity. Keep
+      // exported markers deliberately non-linkable so two unrelated secrets cannot both become #1.
+      for (const finding of result.findings.toReversed()) {
+        const marker = minimized.slice(finding.start, finding.end).replace(/#\d+\]/g, ']');
+        minimized = `${minimized.slice(0, finding.start)}${marker}${minimized.slice(finding.end)}`;
+      }
+      return minimized;
+    };
     return {
       ...(input.question === undefined ? {} : { question: redact(input.question) }),
       selected: redact(input.selected),
