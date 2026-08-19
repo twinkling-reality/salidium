@@ -19,11 +19,25 @@ export const SYNC_BATCH_MAX_BYTES = 256 * 1024;
 export const SyncLaneSchema = z.enum(['control', 'data']);
 export type SyncLane = z.infer<typeof SyncLaneSchema>;
 
+/**
+ * Positions are unique within one generation of a replica, not within the replica forever.
+ *
+ * Restoring an older local database gives a replica back its old identity and an old cursor, so it
+ * re-sends positions the destination already holds, with different content. That is indistinguishable
+ * from a hostile fork, and a receiver is required to treat it as a security conflict. Bumping the
+ * generation gives the recovered replica a fresh position space and says plainly that its history
+ * restarted, which is a fact a destination can act on instead of an alarm it cannot interpret.
+ *
+ * The idempotency key is therefore (tenant, stream, replica, generation, lane, position).
+ */
+const ReplicaGenerationSchema = z.number().int().positive();
+
 const OperationBase = {
   contract: z.literal(SYNC_OPERATION_CONTRACT),
   contractVersion: z.literal(SYNC_WIRE_VERSION),
   streamId: OpaqueIdSchema,
   replicaId: OpaqueIdSchema,
+  replicaGeneration: ReplicaGenerationSchema,
   lane: SyncLaneSchema,
   position: z.number().int().nonnegative(),
   operationId: OpaqueIdSchema,
@@ -136,6 +150,7 @@ export const SyncBatchV1Schema = z
     contractVersion: z.literal(SYNC_WIRE_VERSION),
     streamId: OpaqueIdSchema,
     replicaId: OpaqueIdSchema,
+    replicaGeneration: ReplicaGenerationSchema,
     lane: SyncLaneSchema,
     afterPosition: z.number().int().min(-1),
     operations: z.array(SyncOperationV1Schema).min(1).max(SYNC_BATCH_MAX_OPERATIONS),
@@ -145,12 +160,13 @@ export const SyncBatchV1Schema = z
       if (
         operation.streamId !== batch.streamId ||
         operation.replicaId !== batch.replicaId ||
+        operation.replicaGeneration !== batch.replicaGeneration ||
         operation.lane !== batch.lane
       ) {
         ctx.addIssue({
           code: 'custom',
           path: ['operations', index],
-          message: 'operation belongs to another stream, replica, or lane',
+          message: 'operation belongs to another stream, replica, generation, or lane',
         });
       }
       if (operation.position !== batch.afterPosition + index + 1) {
@@ -176,6 +192,8 @@ export const SyncAckV1Schema = z.strictObject({
   contract: z.literal('salidium.sync-ack'),
   contractVersion: z.literal(SYNC_WIRE_VERSION),
   streamId: OpaqueIdSchema,
+  /** Which generation's position space this confirms. An ack for a superseded one is not applied. */
+  replicaGeneration: ReplicaGenerationSchema,
   lane: SyncLaneSchema,
   acceptedThrough: z.number().int().min(-1),
   retryAfterMs: z.number().int().min(100).max(86_400_000).optional(),
@@ -236,6 +254,7 @@ export const ReconciliationInventoryV1Schema = z.strictObject({
   contract: z.literal('salidium.reconciliation-inventory'),
   contractVersion: z.literal(SYNC_WIRE_VERSION),
   streamId: OpaqueIdSchema,
+  replicaGeneration: ReplicaGenerationSchema,
   cursor: z.string().max(500).optional(),
   complete: z.boolean(),
   live: z

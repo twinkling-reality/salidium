@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -96,7 +96,7 @@ class FakeConsumer {
   >();
 
   accept(batch: SyncBatchV1): { acceptedThrough: number; conflict?: number } {
-    const key = `${batch.streamId}:${batch.lane}`;
+    const key = `${batch.streamId}:${batch.replicaGeneration}:${batch.lane}`;
     const state = this.accepted.get(key) ?? { through: -1, operations: new Map<number, string>() };
     for (const operation of batch.operations) {
       const prior = state.operations.get(operation.position);
@@ -186,6 +186,7 @@ describe('durable minimized sync outbox', () => {
       contract: 'salidium.sync-ack',
       contractVersion: 1,
       streamId: stream.streamId,
+      replicaGeneration: 1,
       lane: 'data',
       acceptedThrough: 0,
     });
@@ -209,6 +210,7 @@ describe('durable minimized sync outbox', () => {
         contract: 'salidium.sync-ack',
         contractVersion: 1,
         streamId: stream.streamId,
+        replicaGeneration: 1,
         lane: 'data',
         acceptedThrough: 1,
       }),
@@ -291,6 +293,60 @@ describe('durable minimized sync outbox', () => {
     outbox.close();
   });
 
+  it('tells a restored replica apart from a fork instead of reporting a conflict', () => {
+    const { path, outbox, stream } = open();
+    outbox.grantConsent(stream.streamId, grant());
+    capture(outbox, stream.streamId);
+    const consumer = new FakeConsumer();
+    consumer.accept(required(outbox.nextBatch(stream.streamId, 'control'), 'control'));
+    consumer.accept(required(outbox.nextBatch(stream.streamId, 'data'), 'data'));
+    // Closed first so the write-ahead log is checkpointed into the file being copied.
+    outbox.close();
+    const backup = join(required(dirs.at(-1), 'missing temp dir'), 'backup.db');
+    copyFileSync(path, backup);
+
+    // Work continues after the backup was taken, and reaches the destination.
+    const resumed = new SqliteSyncOutbox(path);
+    capture(resumed, stream.streamId);
+    consumer.accept(required(resumed.nextBatch(stream.streamId, 'data'), 'data'));
+    resumed.close();
+
+    // The machine is restored from the older copy.
+    copyFileSync(backup, path);
+    const restored = new SqliteSyncOutbox(path);
+
+    // It resends position 0 unchanged, which is a harmless replay, and then reuses position 1 for a
+    // decision the destination has never seen. Under a single generation that second one is
+    // indistinguishable from a hostile fork, and the destination must call it a conflict.
+    capture(restored, stream.streamId);
+    const collision = required(restored.nextBatch(stream.streamId, 'data'), 'data');
+    expect(collision.operations.map((operation) => operation.position)).toEqual([0, 1]);
+    expect(consumer.accept(collision).conflict).toBe(1);
+
+    // Declaring a new generation gives the recovered replica a fresh position space and resends
+    // what it actually holds, so the same content is accepted rather than alarmed on.
+    const next = restored.beginGeneration(stream.streamId);
+    expect(next.generation).toBe(2);
+    expect(next.operations).toBeGreaterThan(0);
+    const resent = required(restored.nextBatch(stream.streamId, 'data'), 'data');
+    expect(resent.replicaGeneration).toBe(2);
+    expect(resent.afterPosition).toBe(-1);
+    expect(consumer.accept(resent).conflict).toBeUndefined();
+
+    // An acknowledgement minted for the abandoned generation can never move the new cursor.
+    expect(() =>
+      restored.acknowledge({
+        contract: 'salidium.sync-ack',
+        contractVersion: 1,
+        streamId: stream.streamId,
+        replicaGeneration: 1,
+        lane: 'data',
+        acceptedThrough: 0,
+      }),
+    ).toThrow(/superseded replica generation/);
+    restored.close();
+  });
+
   it('steps over a permanently refused data operation but never a control one', () => {
     const { outbox, stream } = open();
     outbox.grantConsent(stream.streamId, grant());
@@ -301,6 +357,7 @@ describe('durable minimized sync outbox', () => {
       contract: 'salidium.sync-ack',
       contractVersion: 1,
       streamId: stream.streamId,
+      replicaGeneration: 1,
       lane: 'data',
       acceptedThrough: -1,
       rejection: { position: 0, code: 'invalid-record', retryable: false },
@@ -319,6 +376,7 @@ describe('durable minimized sync outbox', () => {
       contract: 'salidium.sync-ack',
       contractVersion: 1,
       streamId: stream.streamId,
+      replicaGeneration: 1,
       lane: 'control',
       acceptedThrough: -1,
       rejection: { position: 0, code: 'scope-denied', retryable: false },
@@ -340,6 +398,7 @@ describe('durable minimized sync outbox', () => {
         contract: 'salidium.sync-ack',
         contractVersion: 1,
         streamId: stream.streamId,
+        replicaGeneration: 1,
         lane: 'data',
         acceptedThrough,
         ...extra,
@@ -366,6 +425,7 @@ describe('durable minimized sync outbox', () => {
         contract: 'salidium.sync-ack',
         contractVersion: 1,
         streamId: stream.streamId,
+        replicaGeneration: 1,
         lane: 'control',
         acceptedThrough: -1,
         rejection: { position: 7, code: 'invalid-record', retryable: false },

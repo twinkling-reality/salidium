@@ -65,6 +65,8 @@ function derivedUuid(namespace: string, name: string): string {
 export interface SyncStream {
   streamId: string;
   replicaId: string;
+  /** Positions are unique within this generation. See `beginGeneration`. */
+  generation: number;
   destinationId: string;
   acknowledged: Record<SyncLane, number>;
 }
@@ -186,7 +188,7 @@ export class SqliteSyncOutbox {
   stream(streamId: string): SyncStream {
     const row = this.db
       .prepare(
-        `SELECT stream_id, replica_id, destination_id,
+        `SELECT stream_id, replica_id, replica_generation, destination_id,
                 acknowledged_control_position, acknowledged_data_position
            FROM sync_streams WHERE stream_id=?`,
       )
@@ -194,6 +196,7 @@ export class SqliteSyncOutbox {
       | {
           stream_id: string;
           replica_id: string;
+          replica_generation: number;
           destination_id: string;
           acknowledged_control_position: number;
           acknowledged_data_position: number;
@@ -203,6 +206,7 @@ export class SqliteSyncOutbox {
     return {
       streamId: row.stream_id,
       replicaId: row.replica_id,
+      generation: row.replica_generation,
       destinationId: row.destination_id,
       acknowledged: {
         control: row.acknowledged_control_position,
@@ -482,6 +486,111 @@ export class SqliteSyncOutbox {
     return tombstoned;
   }
 
+  /**
+   * Starts a fresh position space for this replica and re-describes everything it currently holds.
+   *
+   * This is the recovery path for a restored backup. The restored database has the replica's old
+   * identity and an old cursor, so it would otherwise re-send positions the destination already
+   * holds with different content, which a receiver must treat as a security conflict. Bumping the
+   * generation states plainly that history restarted, and the destination reconciles against the
+   * resent state instead of alarming.
+   *
+   * The new generation carries current state, not old history: every consent revision in order, so
+   * the receiver can still evaluate authority; every live item at its current revision; and every
+   * tombstone. Replaying the old operation log would be replaying positions whose meaning is
+   * exactly what was just abandoned.
+   */
+  beginGeneration(streamId: string): { generation: number; operations: number } {
+    return this.transaction(() => {
+      const previous = this.stream(streamId);
+      this.db
+        .prepare(
+          `UPDATE sync_streams SET
+             replica_generation = replica_generation + 1,
+             next_control_position = 0, next_data_position = 0,
+             acknowledged_control_position = -1, acknowledged_data_position = -1,
+             previous_control_operation_id = NULL, previous_data_operation_id = NULL
+           WHERE stream_id=?`,
+        )
+        .run(streamId);
+      // The abandoned operations belonged to the old position space and can never be resent under
+      // it. Their content survives as consent revisions, records, and tombstones.
+      this.db.prepare('DELETE FROM sync_outbox WHERE stream_id=?').run(streamId);
+      const stream = this.stream(streamId);
+      let operations = 0;
+
+      const revisions = this.db
+        .prepare(
+          'SELECT json FROM sync_consent_revisions WHERE stream_id=? ORDER BY grant_id, revision',
+        )
+        .all(streamId) as Array<{ json: string }>;
+      for (const row of revisions) {
+        const grant = ConsentGrantV1Schema.parse(JSON.parse(row.json));
+        const type = grant.status === 'revoked' ? 'consent.revoke' : 'consent.put';
+        this.enqueue(stream, 'control', type, { grant }, grant.grantId);
+        operations += 1;
+      }
+
+      const live = this.db
+        .prepare(
+          'SELECT json FROM intelligence_records WHERE stream_id=? AND current=1 ORDER BY item_id',
+        )
+        .all(streamId) as Array<{ json: string }>;
+      for (const row of live) {
+        const item = IntelligenceItemV1Schema.parse(JSON.parse(row.json));
+        this.enqueue(
+          stream,
+          'data',
+          'item.put',
+          { grant: item.consent, item },
+          item.consent.grantId,
+          item.itemId,
+        );
+        operations += 1;
+      }
+
+      const tombstones = this.db
+        .prepare(
+          `SELECT t.item_id, t.delete_through_revision, t.reason, t.requested_at,
+                  r.grant_id, r.grant_revision, r.json
+             FROM intelligence_tombstones t
+             JOIN intelligence_records r
+               ON r.stream_id = t.stream_id AND r.item_id = t.item_id
+                  AND r.revision = t.delete_through_revision
+            WHERE t.stream_id=? ORDER BY t.item_id`,
+        )
+        .all(streamId) as Array<{
+        item_id: string;
+        delete_through_revision: number;
+        reason: string;
+        requested_at: string;
+        grant_id: string;
+        grant_revision: number;
+        json: string;
+      }>;
+      for (const row of tombstones) {
+        const item = IntelligenceItemV1Schema.parse(JSON.parse(row.json));
+        this.enqueue(
+          stream,
+          'control',
+          'item.delete',
+          {
+            grant: { grantId: row.grant_id, revision: row.grant_revision },
+            scope: item.scope,
+            itemId: row.item_id,
+            deleteThroughRevision: row.delete_through_revision,
+            reason: row.reason,
+            requestedAt: row.requested_at,
+          },
+          row.grant_id,
+          row.item_id,
+        );
+        operations += 1;
+      }
+      return { generation: previous.generation + 1, operations };
+    });
+  }
+
   nextBatch(
     streamId: string,
     lane: SyncLane,
@@ -513,6 +622,7 @@ export class SqliteSyncOutbox {
         contractVersion: SYNC_WIRE_VERSION,
         streamId,
         replicaId: stream.replicaId,
+        replicaGeneration: stream.generation,
         lane,
         afterPosition: after,
         operations: [...operations, operation],
@@ -529,6 +639,7 @@ export class SqliteSyncOutbox {
       contractVersion: SYNC_WIRE_VERSION,
       streamId,
       replicaId: stream.replicaId,
+      replicaGeneration: stream.generation,
       lane,
       afterPosition: after,
       operations,
@@ -550,6 +661,11 @@ export class SqliteSyncOutbox {
     const ack = SyncAckV1Schema.parse(value);
     return this.transaction(() => {
       const stream = this.stream(ack.streamId);
+      if (ack.replicaGeneration !== stream.generation) {
+        // Positions mean nothing across generations, so applying a stale confirmation would move
+        // the new cursor over operations the destination never saw.
+        throw new Error('acknowledgement names a superseded replica generation');
+      }
       const current = stream.acknowledged[ack.lane];
       const at = acknowledgedAt.toISOString();
       const result: AcknowledgementResult = { acknowledgedThrough: current };
@@ -936,6 +1052,7 @@ export class SqliteSyncOutbox {
       contractVersion: SYNC_WIRE_VERSION,
       streamId: stream.streamId,
       replicaId: stream.replicaId,
+      replicaGeneration: stream.generation,
       lane,
       position: state.position,
       operationId,

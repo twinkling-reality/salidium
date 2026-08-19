@@ -3,6 +3,7 @@
   "contractVersion": 1,
   "streamId": "30000000-0000-4000-8000-000000000004",
   "replicaId": "30000000-0000-4000-8000-000000000005",
+  "replicaGeneration": 1,
   "lane": "data",
   "afterPosition": -1,
   "operations": [
@@ -11,11 +12,12 @@
       "contractVersion": 1,
       "streamId": "30000000-0000-4000-8000-000000000004",
       "replicaId": "30000000-0000-4000-8000-000000000005",
+      "replicaGeneration": 1,
       "lane": "data",
       "position": 0,
       "operationId": "30000000-0000-4000-8000-000000000020",
       "occurredAt": "2026-08-19T12:00:00.000Z",
-      "contentDigest": "sha256:6b9662b324d8e1d4199a93a900f5474506058b1a99ceeb13fc9ed2352c2ff79f",
+      "contentDigest": "sha256:70e25496db2a2386f01b792bc17c346fad0651bfce0d0ec4e284749c35df2178",
       "type": "item.put",
       "grant": {
         "grantId": "30000000-0000-4000-8000-000000000001",

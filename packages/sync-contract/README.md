@@ -37,7 +37,14 @@ skips them is not interoperable and, in several cases, is not safe.
   must be namespaced under the authenticated tenant before use, or one account can address another
   account's stream.
 - **Treat same position plus same digest as replay, and same position plus different digest as a
-  security conflict**, per lane and per replica. Do not overwrite.
+  security conflict.** The key is (tenant, stream, replica, generation, lane, position). Do not
+  overwrite.
+- **Honour `replicaGeneration`.** Positions are unique within a generation, not within a replica
+  forever. A replica restored from an older backup keeps its identity but rewinds its cursor, so
+  without generations its reused positions are indistinguishable from a fork. A producer that
+  declares a new generation is stating that its history restarted and resending what it currently
+  holds; reconcile against that rather than raising a conflict, and never apply an acknowledgement
+  from a superseded generation.
 - **Fence deletions against later arrivals.** `item.delete` carries `deleteThroughRevision`;
   `item.put` for that item at or below that revision must stay rejected after the tombstone exists,
   including when the delete arrives on the control lane before the put arrives on the data lane.

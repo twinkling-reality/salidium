@@ -197,6 +197,9 @@ CREATE TABLE IF NOT EXISTS sync_identity (
 CREATE TABLE IF NOT EXISTS sync_streams (
   stream_id TEXT PRIMARY KEY,
   replica_id TEXT NOT NULL,
+  -- Positions are unique per generation, not per replica. A replica restored from an older backup
+  -- bumps this so its reused positions are a declared restart rather than a content conflict.
+  replica_generation INTEGER NOT NULL DEFAULT 1,
   destination_id TEXT NOT NULL UNIQUE,
   next_control_position INTEGER NOT NULL DEFAULT 0,
   next_data_position INTEGER NOT NULL DEFAULT 0,
