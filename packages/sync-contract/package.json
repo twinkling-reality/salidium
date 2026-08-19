@@ -1,0 +1,37 @@
+{
+  "name": "@salidium/sync-contract",
+  "version": "0.1.0",
+  "description": "Runtime contracts for consent-gated Salidium intelligence synchronization.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "fixtures",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "test": "vitest run --root ../.."
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/twinkling-reality/salidium.git",
+    "directory": "packages/sync-contract"
+  }
+}

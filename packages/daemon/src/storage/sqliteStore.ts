@@ -32,7 +32,7 @@ import type {
  *
  * All rows carry session_id so cross-session queries (project, provider, time) are cheap later.
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 /** Parser contract written into durable re-ingestion jobs. Bump when record interpretation changes. */
 export const INGEST_PARSER_REVISION = '2026-08-19.1';
@@ -180,6 +180,108 @@ CREATE TABLE IF NOT EXISTS usage_rollups (
   output_tokens INTEGER NOT NULL DEFAULT 0,
   cache_read_tokens INTEGER NOT NULL DEFAULT 0,
   cache_write_tokens INTEGER NOT NULL DEFAULT 0
+);
+`;
+
+/**
+ * Schema 6 is deliberately separate from the local evidence DDL. Existing stores create these
+ * tables inside the offline migration transaction; a failed migration therefore cannot advertise
+ * schema 6 with only part of the sync foundation present. Nothing is backfilled or enabled.
+ */
+const SCHEMA_6_DDL = `
+CREATE TABLE IF NOT EXISTS sync_identity (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  replica_id TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sync_streams (
+  stream_id TEXT PRIMARY KEY,
+  replica_id TEXT NOT NULL,
+  destination_id TEXT NOT NULL UNIQUE,
+  next_control_position INTEGER NOT NULL DEFAULT 0,
+  next_data_position INTEGER NOT NULL DEFAULT 0,
+  acknowledged_control_position INTEGER NOT NULL DEFAULT -1,
+  acknowledged_data_position INTEGER NOT NULL DEFAULT -1,
+  previous_control_operation_id TEXT,
+  previous_data_operation_id TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sync_consent_revisions (
+  stream_id TEXT NOT NULL,
+  grant_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('active', 'revoked')),
+  destination_id TEXT NOT NULL,
+  json TEXT NOT NULL,
+  recorded_at TEXT NOT NULL,
+  PRIMARY KEY (stream_id, grant_id, revision),
+  FOREIGN KEY (stream_id) REFERENCES sync_streams(stream_id)
+);
+CREATE INDEX IF NOT EXISTS sync_consent_current
+  ON sync_consent_revisions(stream_id, grant_id, revision DESC);
+CREATE TABLE IF NOT EXISTS intelligence_records (
+  stream_id TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  grant_id TEXT NOT NULL,
+  grant_revision INTEGER NOT NULL,
+  current INTEGER NOT NULL CHECK (current IN (0, 1)),
+  json TEXT NOT NULL,
+  recorded_at TEXT NOT NULL,
+  PRIMARY KEY (stream_id, item_id, revision),
+  FOREIGN KEY (stream_id) REFERENCES sync_streams(stream_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS intelligence_one_current_revision
+  ON intelligence_records(stream_id, item_id) WHERE current = 1;
+CREATE TABLE IF NOT EXISTS intelligence_evidence_map (
+  evidence_id TEXT PRIMARY KEY,
+  independence_id TEXT NOT NULL,
+  session_id TEXT,
+  event_id TEXT,
+  authority TEXT NOT NULL,
+  role TEXT NOT NULL,
+  captured_at TEXT NOT NULL,
+  descriptor_digest TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS intelligence_tombstones (
+  stream_id TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  delete_through_revision INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  requested_at TEXT NOT NULL,
+  receipt_id TEXT,
+  completed_at TEXT,
+  PRIMARY KEY (stream_id, item_id),
+  FOREIGN KEY (stream_id) REFERENCES sync_streams(stream_id)
+);
+CREATE TABLE IF NOT EXISTS sync_outbox (
+  stream_id TEXT NOT NULL,
+  lane TEXT NOT NULL CHECK (lane IN ('control', 'data')),
+  position INTEGER NOT NULL,
+  operation_id TEXT NOT NULL UNIQUE,
+  operation_type TEXT NOT NULL,
+  content_digest TEXT NOT NULL,
+  grant_id TEXT,
+  item_id TEXT,
+  json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT,
+  acknowledged_at TEXT,
+  PRIMARY KEY (stream_id, lane, position),
+  FOREIGN KEY (stream_id) REFERENCES sync_streams(stream_id)
+);
+CREATE INDEX IF NOT EXISTS sync_outbox_pending
+  ON sync_outbox(stream_id, lane, acknowledged_at, position);
+CREATE TABLE IF NOT EXISTS sync_deletion_receipts (
+  receipt_id TEXT PRIMARY KEY,
+  stream_id TEXT NOT NULL,
+  operation_id TEXT NOT NULL,
+  json TEXT NOT NULL,
+  completed_at TEXT NOT NULL,
+  FOREIGN KEY (stream_id) REFERENCES sync_streams(stream_id)
 );
 `;
 
@@ -623,6 +725,15 @@ function migrateToSchema5(db: DatabaseSync, migratedAt = new Date().toISOString(
   );
 }
 
+/** Adds an empty, disabled sync foundation. Historical sessions are never enrolled implicitly. */
+function migrateToSchema6(db: DatabaseSync, migratedAt = new Date().toISOString()): void {
+  db.exec(SCHEMA_6_DDL);
+  db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(
+    'schema_6_migrated_at',
+    migratedAt,
+  );
+}
+
 /** How many rows the session list asks for when nobody says otherwise. */
 export const SESSION_PAGE = 500;
 
@@ -715,6 +826,7 @@ export class SqliteStore implements SalidiumStore {
       'PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA foreign_keys = ON;',
     );
     this.db.exec(DDL);
+    if (priorVersion === undefined && !hadLegacyTables) this.db.exec(SCHEMA_6_DDL);
     /*
      * The change log is derived, exactly as the state is, so it carries the version of the reducer
      * that wrote it. Without this a version bump invalidated checkpoints — state re-derived — and
@@ -737,6 +849,7 @@ export class SqliteStore implements SalidiumStore {
         if ((priorVersion ?? 0) < 3) migrateToSchema3(this.db);
         if ((priorVersion ?? 0) < 4) migrateToSchema4(this.db);
         if ((priorVersion ?? 0) < 5) migrateToSchema5(this.db);
+        if ((priorVersion ?? 0) < 6) migrateToSchema6(this.db);
         this.db.exec('COMMIT');
       } catch (error) {
         try {

@@ -125,6 +125,21 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
 
+  packages/sync:
+    dependencies:
+      '@salidium/sync-contract':
+        specifier: workspace:*
+        version: link:../sync-contract
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
+  packages/sync-contract:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
   packages/ui:
     dependencies:
       '@salidium/core':
