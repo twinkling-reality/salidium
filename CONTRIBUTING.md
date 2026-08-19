@@ -1,7 +1,8 @@
 # Contributing
 
-Thank you for helping improve Salidium. The current repository is the complete MIT-licensed local
-product; its open-core boundary is documented in [docs/open-core.md](docs/open-core.md).
+Thank you for helping improve Salidium. This repository is the complete MIT-licensed, open-source,
+local-first product. The exact public and hosted split is documented in the
+[open-source and hosted-service boundary](docs/open-source-boundary.md).
 
 ## Development
 

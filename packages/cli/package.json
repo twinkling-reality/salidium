@@ -14,7 +14,7 @@
   "bin": {
     "salidium": "bundle/salidium.mjs"
   },
-  "description": "See what your coding agent did, why, how, what is verified, what is left, and what needs you. Local-first, no telemetry.",
+  "description": "Turn Claude Code and Codex sessions into a clear, evidence-linked report of what changed, why, what was verified, and what needs you.",
   "license": "MIT",
   "author": "Glendon Chin",
   "homepage": "https://github.com/twinkling-reality/salidium#readme",

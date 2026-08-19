@@ -183,7 +183,7 @@ This protects the local service from ordinary cross-origin access and accidental
 not a sandbox against another process already running with the same operating-system user account.
 
 There is no Salidium telemetry in the local product. A future hosted service must be an explicit,
-separate trust boundary; see [open-core.md](open-core.md).
+separate trust boundary; see [open-source-boundary.md](open-source-boundary.md).
 
 ## Extension boundaries
 
