@@ -3,9 +3,10 @@ import { expect, openSalidium, test } from './fixtures.ts';
 
 async function expectNoA11yViolations(page: import('@playwright/test').Page): Promise<void> {
   // Measure contrast at the settled surface, not while the panel fade is blending its text with
-  // the dimmed page beneath it.
+  // the dimmed page beneath it. Replaced animations reject `finished` when canceled, so settling
+  // must treat that normal lifecycle as completion instead of aborting the accessibility scan.
   await page.evaluate(() =>
-    Promise.all(
+    Promise.allSettled(
       document
         .getAnimations()
         .filter((animation) => animation.effect?.getTiming().iterations !== Infinity)

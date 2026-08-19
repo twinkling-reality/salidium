@@ -13,9 +13,17 @@ function temporaryDirectory(): string {
   return path;
 }
 
-function executable(path: string): void {
-  writeFileSync(path, '#!/bin/sh\nexit 0\n');
-  chmodSync(path, 0o700);
+function providerCommand(directory: string, name: string): string {
+  // Windows resolves bare commands through PATHEXT; an extensionless POSIX shell fixture can
+  // never be found there. Use the native installed-command shape so this exercises the same
+  // resolver contract on both CI families rather than only making a file that exists.
+  const path = join(directory, process.platform === 'win32' ? `${name}.CMD` : name);
+  writeFileSync(
+    path,
+    process.platform === 'win32' ? '@echo off\r\nexit /b 0\r\n' : '#!/bin/sh\nexit 0\n',
+  );
+  if (process.platform !== 'win32') chmodSync(path, 0o700);
+  return path;
 }
 
 afterEach(() => {
@@ -31,14 +39,14 @@ describe('provider integration boundaries', () => {
     expect(() => registry.register(integration)).toThrow(/already registered/);
   });
 
-  it('ignores project package bins while detecting an absolute installed provider command', () => {
+  it('ignores project package bins while detecting an absolute native installed command', () => {
     const root = temporaryDirectory();
     const projectBin = join(root, 'project', 'node_modules', '.bin');
     const installedBin = join(root, 'installed', 'bin');
     mkdirSync(projectBin, { recursive: true });
     mkdirSync(installedBin, { recursive: true });
-    executable(join(projectBin, 'claude'));
-    executable(join(installedBin, 'claude'));
+    providerCommand(projectBin, 'claude');
+    providerCommand(installedBin, 'claude');
     const claude = providerIntegrations.find((provider) => provider.id === 'claude-code');
     expect(claude).toBeDefined();
 
