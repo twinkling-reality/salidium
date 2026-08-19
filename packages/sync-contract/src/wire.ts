@@ -257,6 +257,22 @@ export function digestCanonical(value: unknown): `sha256:${string}` {
   return `sha256:${createHash('sha256').update(canonicalJson(value)).digest('hex')}`;
 }
 
+/**
+ * `contentDigest` is defined over the *validated* operation with `contentDigest` itself removed,
+ * never over the bytes a peer happened to send. Schema defaults such as `links` and `aliases` are
+ * materialized by validation, so digesting the raw input instead would give an operation that omits
+ * an optional field a different digest from the identical operation that spells it out. A receiver
+ * is required to treat one position carrying two digests as a security conflict, so that difference
+ * would report benign producers as attackers. Both directions therefore normalize first.
+ */
+const UNSEALED_DIGEST = `sha256:${'0'.repeat(64)}`;
+
+function digestBody(operation: SyncOperationV1): `sha256:${string}` {
+  const body = { ...operation } as Record<string, unknown>;
+  delete body.contentDigest;
+  return digestCanonical(body);
+}
+
 export function sealSyncOperation(value: unknown): SyncOperationV1 {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('sync operation must be an object');
@@ -264,13 +280,16 @@ export function sealSyncOperation(value: unknown): SyncOperationV1 {
   const unsigned = { ...(value as Record<string, unknown>) };
   if ('contentDigest' in unsigned)
     throw new Error('unsigned operation must not contain contentDigest');
-  return SyncOperationV1Schema.parse({ ...unsigned, contentDigest: digestCanonical(unsigned) });
+  const normalized = SyncOperationV1Schema.parse({ ...unsigned, contentDigest: UNSEALED_DIGEST });
+  return SyncOperationV1Schema.parse({ ...normalized, contentDigest: digestBody(normalized) });
 }
 
 export function verifySyncOperationDigest(operation: SyncOperationV1): boolean {
-  const unsigned = { ...operation } as Record<string, unknown>;
-  delete unsigned.contentDigest;
-  return operation.contentDigest === digestCanonical(unsigned);
+  // Validate rather than trust the caller to have done it: a receiver that digested an unvalidated
+  // object would be comparing against whichever defaults the sender chose to omit.
+  const normalized = SyncOperationV1Schema.safeParse(operation);
+  if (!normalized.success) return false;
+  return operation.contentDigest === digestBody(normalized.data);
 }
 
 export function serializedBatchBytes(batch: SyncBatchV1): number {

@@ -13,6 +13,7 @@ import {
   digestCanonical,
   SyncAckV1Schema,
   SyncBatchV1Schema,
+  SyncOperationV1Schema,
   sealSyncOperation,
   verifySyncOperationDigest,
 } from './wire.ts';
@@ -340,6 +341,47 @@ describe('consent and wire behavior', () => {
         operations: [{ ...first, occurredAt: '2026-08-19T12:00:01.000Z' }],
       }),
     ).toThrow(/invalid digest/);
+  });
+
+  it('digests the validated operation so an omitted default is not a content conflict', () => {
+    /*
+     * `links` carries a schema default. A producer that spells it out and a producer that leaves it
+     * to the default are sending the same operation, and a receiver is required to treat one
+     * position carrying two digests as a security conflict, so the two must digest identically.
+     */
+    const base = {
+      contract: 'salidium.sync-operation',
+      contractVersion: 1,
+      streamId: IDS.stream,
+      replicaId: IDS.replica,
+      lane: 'data',
+      position: 0,
+      operationId: IDS.operation,
+      occurredAt: AT,
+      type: 'item.put',
+      grant: { grantId: IDS.grant, revision: 1 },
+    } as const;
+    const { links: _spelledOut, ...withoutLinks } = decision();
+
+    const omitted = sealSyncOperation({ ...base, item: withoutLinks });
+    const explicit = sealSyncOperation({ ...base, item: { ...withoutLinks, links: [] } });
+
+    expect(omitted.contentDigest).toBe(explicit.contentDigest);
+    expect(verifySyncOperationDigest(omitted)).toBe(true);
+    expect(
+      verifySyncOperationDigest(SyncOperationV1Schema.parse(JSON.parse(JSON.stringify(omitted)))),
+    ).toBe(true);
+    expect(() =>
+      assertSendableBatch({
+        contract: 'salidium.sync-batch',
+        contractVersion: 1,
+        streamId: IDS.stream,
+        replicaId: IDS.replica,
+        lane: 'data',
+        afterPosition: -1,
+        operations: [omitted],
+      }),
+    ).not.toThrow();
   });
 
   it('does not confuse transport acknowledgement with deletion completion', () => {
