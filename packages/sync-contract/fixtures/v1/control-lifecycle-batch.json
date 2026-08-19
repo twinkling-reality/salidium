@@ -115,7 +115,7 @@
       "operationId": "30000000-0000-4000-8000-000000000023",
       "previousOperationId": "30000000-0000-4000-8000-000000000022",
       "occurredAt": "2026-08-19T12:00:00.000Z",
-      "contentDigest": "sha256:22bf1cfe739abe1b909b77871809f8d68711cd99aaaa6d4fe84608724a66e768",
+      "contentDigest": "sha256:e406b5c0356be926ad6510ad256a7994a4621b0c74e0aeaa78dafb3df8436589",
       "type": "scope.delete",
       "grant": {
         "grantId": "30000000-0000-4000-8000-000000000001",
@@ -125,6 +125,7 @@
         "kind": "project",
         "projectId": "30000000-0000-4000-8000-000000000003"
       },
+      "deleteThroughDataPosition": 0,
       "reason": "consent-withdrawn",
       "requestedAt": "2026-08-19T12:00:00.000Z"
     }

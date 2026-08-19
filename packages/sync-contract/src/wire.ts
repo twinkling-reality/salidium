@@ -74,6 +74,20 @@ const ScopeDeleteOperationSchema = z.strictObject({
   type: z.literal('scope.delete'),
   grant: ConsentReferenceSchema,
   scope: PersonalScopeSchema,
+  /**
+   * The producer's highest data-lane position when deletion was requested, or -1 if it had sent
+   * nothing. This is the only happens-before signal between the two lanes, and without it a scope
+   * deletion has no defined relationship to a queued `item.put` at all.
+   *
+   * A receiver deletes everything in the scope up to and including this position and keeps the
+   * fence, so a data-lane put that arrives later but was produced at or below it is still refused.
+   * A put above it was produced after the request and is not covered: deletion is an ordered
+   * operation over history, not a permanent ban on a scope.
+   *
+   * `item.delete` fences one item by revision. This is the same guarantee for a whole scope, which
+   * has no revision of its own to fence by.
+   */
+  deleteThroughDataPosition: z.number().int().min(-1),
   reason: DeletionReasonSchema,
   requestedAt: CanonicalTimestampSchema,
 });

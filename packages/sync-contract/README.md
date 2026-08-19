@@ -41,6 +41,10 @@ skips them is not interoperable and, in several cases, is not safe.
 - **Fence deletions against later arrivals.** `item.delete` carries `deleteThroughRevision`;
   `item.put` for that item at or below that revision must stay rejected after the tombstone exists,
   including when the delete arrives on the control lane before the put arrives on the data lane.
+  `scope.delete` carries `deleteThroughDataPosition`, the producer's highest data-lane position when
+  deletion was requested. Keep it: it is the only happens-before signal between the lanes, and a put
+  arriving later but produced at or below that position is still covered. A put above it was
+  produced after the request and is not.
 - **Recheck consent at ingest, not only at capture.** An operation cites the grant revision that was
   current when it was produced. An offline device can present operations authorized by a grant that
   has since been revoked, and the receiver, not the producer, is the authority on that.

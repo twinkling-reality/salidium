@@ -291,6 +291,62 @@ describe('durable minimized sync outbox', () => {
     outbox.close();
   });
 
+  it('fences a scope deletion against the data it was asked to cover', () => {
+    const { outbox, stream } = open();
+    outbox.grantConsent(stream.streamId, grant());
+    capture(outbox, stream.streamId);
+    capture(outbox, stream.streamId);
+
+    expect(outbox.deleteScope(stream.streamId, GRANT)).toBe(2);
+    // Local state now agrees with what the destination was told, so reconciliation can converge.
+    expect(outbox.inventory(stream.streamId).live).toEqual([]);
+    expect(outbox.inventory(stream.streamId).tombstones).toHaveLength(2);
+
+    const deletion = required(
+      outbox
+        .nextBatch(stream.streamId, 'control')
+        ?.operations.find((operation) => operation.type === 'scope.delete'),
+      'missing scope deletion',
+    );
+    if (deletion.type !== 'scope.delete') throw new Error('wrong operation type');
+    // The two puts sat at data positions 0 and 1, so the fence has to cover through 1.
+    expect(deletion.deleteThroughDataPosition).toBe(1);
+    expect(deletion.scope).toEqual({ kind: 'project', projectId: PROJECT });
+    outbox.close();
+  });
+
+  it('carries a fence of -1 when nothing has been produced yet', () => {
+    const { outbox, stream } = open();
+    outbox.grantConsent(stream.streamId, grant());
+    expect(outbox.deleteScope(stream.streamId, GRANT)).toBe(0);
+    const deletion = required(
+      outbox
+        .nextBatch(stream.streamId, 'control')
+        ?.operations.find((operation) => operation.type === 'scope.delete'),
+      'missing scope deletion',
+    );
+    if (deletion.type !== 'scope.delete') throw new Error('wrong operation type');
+    expect(deletion.deleteThroughDataPosition).toBe(-1);
+    outbox.close();
+  });
+
+  it('refuses a consent revision that moves the scope out from under captured items', () => {
+    const { outbox, stream } = open();
+    outbox.grantConsent(stream.streamId, grant());
+    capture(outbox, stream.streamId);
+    // Moving or widening scope by revision would authorize records the user never consented to
+    // under those terms, and would leave the old scope's items undeletable by revocation.
+    expect(() =>
+      outbox.grantConsent(stream.streamId, grant({ revision: 2, scope: { kind: 'personal' } })),
+    ).toThrow(/cannot change scope/);
+    // Narrowing the rest of the grant is still allowed.
+    expect(
+      outbox.grantConsent(stream.streamId, grant({ revision: 2, maximumSensitivity: 'public' }))
+        .maximumSensitivity,
+    ).toBe('public');
+    outbox.close();
+  });
+
   it('strips hidden characters before a decision reaches the wire', () => {
     const { outbox, stream } = open();
     outbox.grantConsent(stream.streamId, grant());

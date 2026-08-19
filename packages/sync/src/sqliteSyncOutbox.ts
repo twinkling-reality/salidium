@@ -217,6 +217,18 @@ export class SqliteSyncOutbox {
       if (previous && grant.revision !== previous.revision + 1)
         throw new Error('consent revision must advance by one');
       if (!previous && grant.revision !== 1) throw new Error('first consent revision must be one');
+      /*
+       * Scope and purpose are what a grant is, not settings inside it. A revision that moved the
+       * scope left items captured under the old one authorized by a grant that no longer mentions
+       * them, so revoking deleted the wrong scope and orphaned the rest. Widening would also be
+       * silent escalation over records the user consented to under narrower terms.
+       */
+      if (previous) {
+        if (JSON.stringify(grant.scope) !== JSON.stringify(previous.scope))
+          throw new Error('a consent revision cannot change scope; issue a separate grant');
+        if (grant.purpose !== previous.purpose)
+          throw new Error('a consent revision cannot change purpose; issue a separate grant');
+      }
       this.insertGrant(streamId, grant);
       this.enqueue(stream, 'control', 'consent.put', { grant }, grant.grantId);
       return grant;
@@ -237,18 +249,7 @@ export class SqliteSyncOutbox {
       });
       this.insertGrant(streamId, revoked);
       this.enqueue(stream, 'control', 'consent.revoke', { grant: revoked }, revoked.grantId);
-      this.enqueue(
-        stream,
-        'control',
-        'scope.delete',
-        {
-          grant: { grantId: revoked.grantId, revision: revoked.revision },
-          scope: revoked.scope,
-          reason: 'consent-withdrawn',
-          requestedAt: revokedAt.toISOString(),
-        },
-        revoked.grantId,
-      );
+      this.enqueueScopeDelete(stream, revoked, 'consent-withdrawn', revokedAt);
       return revoked;
     });
   }
@@ -385,6 +386,84 @@ export class SqliteSyncOutbox {
       );
       return true;
     });
+  }
+
+  /**
+   * Deletes everything this replica holds in one scope. The user-facing form of what revocation
+   * does implicitly, kept as one code path so the local tombstones and the wire fence cannot drift.
+   */
+  deleteScope(
+    streamId: string,
+    grantId: string,
+    reason: 'user-request' | 'scope-deleted' = 'user-request',
+    requestedAt = new Date(),
+  ): number {
+    return this.transaction(() => {
+      const stream = this.stream(streamId);
+      const grant = this.currentGrant(streamId, grantId);
+      if (!grant) throw new Error('unknown consent grant');
+      return this.enqueueScopeDelete(stream, grant, reason, requestedAt);
+    });
+  }
+
+  /**
+   * Tombstones every live item in the grant's scope and enqueues one fenced scope deletion.
+   *
+   * Writing the tombstones matters as much as sending the operation. Revocation used to enqueue the
+   * deletion and leave `intelligence_records` untouched, so the local inventory kept reporting items
+   * as live that the destination had been told to erase, and reconciliation could never converge.
+   */
+  private enqueueScopeDelete(
+    stream: SyncStream,
+    grant: ConsentGrantV1,
+    reason: 'consent-withdrawn' | 'user-request' | 'scope-deleted',
+    requestedAt: Date,
+  ): number {
+    const scope = JSON.stringify(grant.scope);
+    const requested = requestedAt.toISOString();
+    const live = this.db
+      .prepare(
+        'SELECT item_id, revision, json FROM intelligence_records WHERE stream_id=? AND current=1',
+      )
+      .all(stream.streamId) as Array<{ item_id: string; revision: number; json: string }>;
+    let tombstoned = 0;
+    for (const row of live) {
+      const item = IntelligenceItemV1Schema.parse(JSON.parse(row.json));
+      if (JSON.stringify(item.scope) !== scope) continue;
+      this.db
+        .prepare('UPDATE intelligence_records SET current=0 WHERE stream_id=? AND item_id=?')
+        .run(stream.streamId, row.item_id);
+      this.db
+        .prepare(
+          `INSERT INTO intelligence_tombstones
+             (stream_id, item_id, delete_through_revision, reason, requested_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(stream_id, item_id) DO UPDATE SET
+             delete_through_revision=MAX(delete_through_revision, excluded.delete_through_revision),
+             reason=excluded.reason, requested_at=excluded.requested_at`,
+        )
+        .run(stream.streamId, row.item_id, row.revision, reason, requested);
+      tombstoned += 1;
+    }
+    // Everything produced so far is covered. A put enqueued after this request is not, because it
+    // records a decision the user made after asking for the scope to be cleared.
+    const next = this.db
+      .prepare('SELECT next_data_position AS position FROM sync_streams WHERE stream_id=?')
+      .get(stream.streamId) as { position: number };
+    this.enqueue(
+      stream,
+      'control',
+      'scope.delete',
+      {
+        grant: { grantId: grant.grantId, revision: grant.revision },
+        scope: grant.scope,
+        deleteThroughDataPosition: next.position - 1,
+        reason,
+        requestedAt: requested,
+      },
+      grant.grantId,
+    );
+    return tombstoned;
   }
 
   nextBatch(
