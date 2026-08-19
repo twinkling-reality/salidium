@@ -291,6 +291,51 @@ describe('durable minimized sync outbox', () => {
     outbox.close();
   });
 
+  it('does not turn one repeated source record into many independent sources', () => {
+    const { outbox, stream } = open();
+    outbox.grantConsent(stream.streamId, grant());
+    const cited = (times: number) =>
+      outbox.captureDecision(stream.streamId, {
+        grant: { grantId: GRANT, revision: 1 },
+        capturedAt: AT,
+        retentionExpiresAt: EXPIRES,
+        sensitivity: 'internal',
+        selected: 'A choice supported by one record cited repeatedly.',
+        rationale: 'Repetition is not corroboration.',
+        alternatives: [{ label: 'Alt', disposition: 'rejected', rationale: 'Fixture.' }],
+        evidence: Array.from({ length: times }, () => ({
+          authority: 'user-explicit' as const,
+          capturedAt: AT,
+          sessionId: 'session-a',
+          eventId: 'event-1',
+        })),
+      });
+
+    const repeated = cited(12);
+    expect(repeated.evidence).toHaveLength(12);
+    expect(new Set(repeated.evidence.map((e) => e.independenceId)).size).toBe(1);
+    // Distinct evidence ids still identify each reference; only the group collapses.
+    expect(new Set(repeated.evidence.map((e) => e.evidenceId)).size).toBe(12);
+
+    const distinct = outbox.captureDecision(stream.streamId, {
+      grant: { grantId: GRANT, revision: 1 },
+      capturedAt: AT,
+      retentionExpiresAt: EXPIRES,
+      sensitivity: 'internal',
+      selected: 'A choice supported by genuinely separate records.',
+      rationale: 'Two sources, two groups.',
+      alternatives: [{ label: 'Alt', disposition: 'rejected', rationale: 'Fixture.' }],
+      evidence: [
+        { authority: 'user-explicit', capturedAt: AT, sessionId: 'session-a', eventId: 'event-1' },
+        { authority: 'user-explicit', capturedAt: AT, sessionId: 'session-b', eventId: 'event-9' },
+      ],
+    });
+    expect(new Set(distinct.evidence.map((e) => e.independenceId)).size).toBe(2);
+    // The group is derived, so the same record cited in a later decision lands in the same group.
+    expect(distinct.evidence[0]?.independenceId).toBe(repeated.evidence[0]?.independenceId);
+    outbox.close();
+  });
+
   it('refuses to invent the user attribution a decision needs', () => {
     const { outbox, stream } = open();
     outbox.grantConsent(stream.streamId, grant());

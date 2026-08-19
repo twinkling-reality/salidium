@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { createRedactor } from '@salidium/core';
 import {
@@ -27,6 +27,8 @@ import {
 import { z } from 'zod';
 
 const REQUIRED_STORE_SCHEMA = 6;
+/** Fixed namespace so an independence group is reproducible across restarts and devices. */
+const INDEPENDENCE_NAMESPACE = '6f9d3a52-1c47-4d8e-9b21-0f5a7c4e83d6';
 const SUPPORTED_REDACTION_POLICY = 'secrets-v1';
 const SUPPORTED_MINIMIZATION_POLICY = 'decision-v1';
 const SENSITIVITY: Record<Sensitivity, number> = {
@@ -35,6 +37,19 @@ const SENSITIVITY: Record<Sensitivity, number> = {
   confidential: 2,
   restricted: 3,
 };
+
+/** RFC 9562 name-based (version 5) identifier: same source record, same group, every time. */
+function derivedUuid(namespace: string, name: string): string {
+  const digest = createHash('sha1')
+    .update(Buffer.from(namespace.replaceAll('-', ''), 'hex'))
+    .update(name, 'utf8')
+    .digest();
+  const bytes = Uint8Array.prototype.slice.call(digest, 0, 16);
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x50;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+  const hex = Buffer.from(bytes).toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
 export interface SyncStream {
   streamId: string;
@@ -590,7 +605,22 @@ export class SqliteSyncOutbox {
     if (!inputs.length) throw new Error('a decision requires at least one explicit evidence input');
     return inputs.map((input) => {
       const evidenceId = randomUUID();
-      const independenceId = input.independenceId ?? randomUUID();
+      /*
+       * Independence is a property of the underlying record, not of the act of citing it. Minting a
+       * fresh id per reference made one provider record cited a hundred times look like a hundred
+       * corroborating sources, which is precisely the amplification the threat model forbids. Group
+       * by whatever source identifiers exist and mint only when there is nothing to group by;
+       * under-counting independence is the safe direction.
+       */
+      const groupingKey =
+        input.sessionId === undefined && input.eventId === undefined
+          ? undefined
+          : `${input.sessionId ?? ''}\u0000${input.eventId ?? ''}`;
+      const independenceId =
+        input.independenceId ??
+        (groupingKey === undefined
+          ? randomUUID()
+          : derivedUuid(INDEPENDENCE_NAMESPACE, groupingKey));
       const descriptor = {
         evidenceId,
         role: input.role ?? 'supports',
