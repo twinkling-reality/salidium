@@ -66,30 +66,42 @@ fixture produced by the code under test proves only that the code agrees with it
 The packed artifact is now verified in CI rather than only at release, under every condition its
 export map advertises, by the same committed script the release workflow runs.
 
-## Open decisions that publication would foreclose
+## Design decisions taken before the freeze
 
-These are design questions, not defects, and each one becomes a breaking change the moment a version
-ships. They are recorded here rather than settled unilaterally.
+Each of these becomes a breaking change the moment a version ships, so they were settled while the
+package was still absent from the registry and schema 6 still absent from every user's database.
 
-1. `exportDigest` is recomputable from the sibling fields it accompanies, so it commits to nothing.
-   Give it something a receiver cannot recompute, or remove it.
-2. `EvidenceReference` carries no scope, sensitivity, or expiry, so the derived-scope rule the threat
-   model treats as core (intersection of scopes, maximum sensitivity, earliest expiry) is not
-   computable by a receiver. Add the fields or record that the rule is producer-asserted in v1.
-3. `SyncAckV1` can reject an operation but cannot express terminal refusal, so a permanently refused
-   operation stalls its lane. Any fix must be lane-asymmetric: letting a destination tell a client to
-   skip past a `consent.revoke` or `item.delete` hands it the ability to suppress exactly the
-   operations a user relies on.
-4. `item.delete` carries `deleteThroughRevision`; `scope.delete` carries no fence at all, and there
-   is no cross-lane watermark, so a standalone scope deletion has undefined ordering against queued
-   puts.
-5. There is no replica generation, so a restore from an older local backup is indistinguishable from
-   a fork and reuses lane positions with different content, which this project's own threat model
-   classifies as a security conflict.
-6. `audience` is not representable and is not derivable from `personal | project` scope. Phase 1 is
-   personal-only so nothing needs it yet, but Phase 3 does.
-7. There is no wire representation for whether a recalled item helped, which is the measurement the
-   Phase 2 gate in [the evaluation protocol](../evaluation-protocol.md) is built on.
+1. **`exportDigest` is removed.** It was computed over exactly the sibling fields it travelled with,
+   so any receiver could recompute it from the record it accompanied. It authenticated nothing while
+   looking like it authenticated evidence, and the operation's own `contentDigest` already covers
+   those fields in transit. The local map keeps an equivalent digest to bind its private row.
+2. **Derived scope stays producer-asserted, and says so.** Adding scope, sensitivity, and expiry to
+   an evidence reference was rejected: a receiver holds none of the evidence, so it could not check
+   the copies, and an unverifiable field reads as a checked constraint. The obligation is documented
+   instead, and enforcement belongs where the evidence actually is.
+3. **Terminal refusal is acted on, and is lane-asymmetric.** A non-retryable rejection may be
+   stepped over on the data lane so it drains, and never on the control lane, which stops until a
+   person resolves it. A destination able to say "skip that one" about `consent.revoke`,
+   `item.delete`, or a scope fence could suppress precisely the operations a user depends on. A
+   cursor that moves backwards is reported and never followed.
+4. **`scope.delete` carries `deleteThroughDataPosition`.** It is the only happens-before signal
+   between the lanes. A consent revision can also no longer change scope or purpose: a grant is its
+   scope, and moving it stranded items captured under the old one and deleted the wrong one on
+   revocation.
+5. **Operations are namespaced by `replicaGeneration`.** The idempotency key is now (tenant, stream,
+   replica, generation, lane, position). A replica restored from an older backup declares a new
+   generation and resends what it holds, which is a fact a destination can act on, rather than
+   reusing positions with different content, which its own threat model says is an attack.
+
+## Deferred with reasons
+
+- **`audience` is not representable.** Phase 1 is personal-only and nothing can populate an audience
+  correctly yet. Adding a field with no producer and no policy behind it manufactures the false
+  assurance items 1 and 2 were removed for. It is a Phase 3 prerequisite and a known v2 cost.
+- **There is no wire representation for whether a recalled item helped.** That is the Phase 2
+  measurement in [the evaluation protocol](../evaluation-protocol.md), and it is not yet clear it
+  belongs on this wire at all rather than in the hosted service's own records. Deciding it before
+  running the evaluation would be guessing.
 
 ## Rejected alternatives
 
@@ -106,7 +118,13 @@ ships. They are recorded here rather than settled unilaterally.
   releases are the thing private CI pins. Publishing an artifact that fails its own digest check,
   and that no consumer has exercised, spends the only irreversible move available for no gain.
 - **Regenerate the fixtures from the current code at test time.** Proves only self-consistency. A
-  fixture is evidence about a released version precisely because the code cannot rewrite it.
+  fixture is evidence about a released version precisely because the code cannot rewrite it. They
+  were regenerated once here, while the version was still being prepared, which is the last moment
+  that is honest.
+- **Add a reserved extension slot or signature field for a future need.** Considered for
+  authenticity and rejected for the same reason as items 1 and 2 above: a field nothing populates
+  and nothing verifies is not optionality, it is a claim. Per-operation authenticity is a
+  transport-layer concern for the life of wire version 1.
 - **Treat the free-form prose fields as minimized because secrets are redacted.** Reproduced the
   opposite: paths, commands, diff hunks, names, and identifiers typed into a rationale cross intact.
   Redaction is defense in depth. The control is the consent preview, which does not exist yet, and
