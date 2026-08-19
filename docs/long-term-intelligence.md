@@ -105,6 +105,12 @@ lower confidence bound for accurate-resumption improvement over the realistic ba
 zero with no increase in incorrect recommendations. Model judges and developer-written happy paths
 alone are insufficient.
 
+[Evaluation protocol](evaluation-protocol.md) records that design concretely: matched pairs, the
+tool allowlist the baseline arm gets, the sample size the effect requires once abstention dilutes
+it, blind human adjudication, and an explicit statement of which safety properties a study this size
+cannot establish. It is written before there is anything to measure, because a gate defined after
+the results are known is not a gate.
+
 ## Phases and gates
 
 - Phase 0: public strict contract, compatibility fixtures, empty schema migration, explicit

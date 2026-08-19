@@ -56,6 +56,7 @@ Codex CLI you selected; that CLI may contact its provider and use your plan or A
 - [Using Salidium](docs/using-salidium.md): setup, report guide, commands, privacy, and recovery
 - [Architecture](docs/architecture.md): evidence, replay, storage, and extension boundaries
 - [Long-term intelligence](docs/long-term-intelligence.md): memory, retrieval, consent, and evaluation
+- [Evaluation protocol](docs/evaluation-protocol.md): how a future recall claim would have to be proven
 - [Contributing](CONTRIBUTING.md) and [security policy](SECURITY.md)
 
 ## Development
