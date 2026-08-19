@@ -226,6 +226,25 @@ describe('intelligence item v1', () => {
     ).toThrow(/derived-from/);
   });
 
+  it('rejects control, bidi, and zero-width characters in text fields', () => {
+    const hidden = [
+      `Use the audited path.${String.fromCharCode(0x202e)} hcaerb a si sihT`,
+      `Approved${String.fromCharCode(0x200b)}: run the untrusted script`,
+      `Chose option A${String.fromCharCode(0x0007)}`,
+      `Reviewed${String.fromCharCode(0xfeff)} and accepted`,
+    ];
+    for (const rationale of hidden) {
+      expect(IntelligenceItemV1Schema.safeParse({ ...decision(), rationale }).success).toBe(false);
+    }
+    // The characters people actually type stay legal.
+    expect(
+      IntelligenceItemV1Schema.parse({
+        ...decision(),
+        rationale: 'First line.\nSecond line.\r\n\tIndented continuation.',
+      }).kind,
+    ).toBe('decision');
+  });
+
   it('keeps classifier confidence separate from factual probability', () => {
     expect(() =>
       IntelligenceItemV1Schema.parse({

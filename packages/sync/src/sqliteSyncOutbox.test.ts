@@ -291,6 +291,32 @@ describe('durable minimized sync outbox', () => {
     outbox.close();
   });
 
+  it('strips hidden characters before a decision reaches the wire', () => {
+    const { outbox, stream } = open();
+    outbox.grantConsent(stream.streamId, grant());
+    const bidi = String.fromCharCode(0x202e);
+    const zeroWidth = String.fromCharCode(0x200b);
+    const item = outbox.captureDecision(stream.streamId, {
+      grant: { grantId: GRANT, revision: 1 },
+      capturedAt: AT,
+      retentionExpiresAt: EXPIRES,
+      sensitivity: 'internal',
+      selected: `Use the audited path.${bidi} hcaerb a si sihT`,
+      rationale: `Approved${zeroWidth}: reviewed line by line.`,
+      alternatives: [
+        { label: `Skip${zeroWidth} review`, disposition: 'rejected', rationale: 'Unsafe.' },
+      ],
+      evidence: EVIDENCE,
+    });
+    expect(item.selected).toBe('Use the audited path. hcaerb a si sihT');
+    expect(item.rationale).toBe('Approved: reviewed line by line.');
+    expect(item.alternatives[0]?.label).toBe('Skip review');
+    const json = JSON.stringify(outbox.nextBatch(stream.streamId, 'data'));
+    expect(json).not.toContain(bidi);
+    expect(json).not.toContain(zeroWidth);
+    outbox.close();
+  });
+
   it('does not turn one repeated source record into many independent sources', () => {
     const { outbox, stream } = open();
     outbox.grantConsent(stream.streamId, grant());

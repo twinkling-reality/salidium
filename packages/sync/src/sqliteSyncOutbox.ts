@@ -27,6 +27,17 @@ import {
 import { z } from 'zod';
 
 const REQUIRED_STORE_SCHEMA = 6;
+/** Mirrors the contract's inert-text rule: C0/C1 controls except tab, newline and carriage return,
+ * zero-width and bidi characters, invisible operators, and the byte order mark. */
+const HIDDEN_CHARACTERS = new RegExp(
+  '[' +
+    '\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F' +
+    '\\u200B-\\u200F\\u2028\\u2029\\u202A-\\u202E' +
+    '\\u2060-\\u2064\\u2066-\\u2069\\uFEFF' +
+    ']',
+  'gu',
+);
+
 /** Fixed namespace so an independence group is reproducible across restarts and devices. */
 const INDEPENDENCE_NAMESPACE = '6f9d3a52-1c47-4d8e-9b21-0f5a7c4e83d6';
 const SUPPORTED_REDACTION_POLICY = 'secrets-v1';
@@ -678,8 +689,16 @@ export class SqliteSyncOutbox {
     input: Pick<CaptureDecisionInput, 'question' | 'selected' | 'rationale' | 'alternatives'>,
   ): Pick<DecisionItem, 'question' | 'selected' | 'rationale' | 'alternatives'> {
     const redactor = createRedactor();
+    /*
+     * The contract refuses hidden characters outright, because a receiver must not trust a client.
+     * This side owns a person's own paste buffer, where a zero-width character from a web page is
+     * an accident rather than an attack, so it is removed here instead. Doing it before redaction
+     * also means a secret cannot be split by an invisible character and slip past a rule, and the
+     * consent preview shows the same text the wire will carry.
+     */
+    const strip = (text: string) => text.replaceAll(HIDDEN_CHARACTERS, '');
     const redact = (text: string) => {
-      const result = redactor.redact(text);
+      const result = redactor.redact(strip(text));
       let minimized = result.text;
       // Session-local numbering is useful in the local report but is not a durable identity. Keep
       // exported markers deliberately non-linkable so two unrelated secrets cannot both become #1.
