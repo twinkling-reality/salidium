@@ -15,6 +15,7 @@
     "test": "vitest run --root ../.."
   },
   "dependencies": {
+    "@salidium/core": "workspace:*",
     "@salidium/sync-contract": "workspace:*",
     "zod": "^4.4.3"
   }

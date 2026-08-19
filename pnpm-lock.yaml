@@ -127,6 +127,9 @@ importers:
 
   packages/sync:
     dependencies:
+      '@salidium/core':
+        specifier: workspace:*
+        version: link:../core
       '@salidium/sync-contract':
         specifier: workspace:*
         version: link:../sync-contract

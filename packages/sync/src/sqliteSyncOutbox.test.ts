@@ -16,6 +16,7 @@ const EXPIRES = '2026-09-18T12:00:00.000Z';
 const DESTINATION = '20000000-0000-4000-8000-000000000001';
 const PROJECT = '20000000-0000-4000-8000-000000000002';
 const GRANT = '20000000-0000-4000-8000-000000000003';
+const SECRET_CANARY = 'ghp_0123456789abcdefghijklmnopqrstuvwxyzAB';
 const dirs: string[] = [];
 
 afterEach(() => {
@@ -62,7 +63,7 @@ function capture(outbox: SqliteSyncOutbox, streamId: string) {
     sensitivity: 'internal',
     question: 'What should cross the public boundary?',
     selected: 'Only a minimized, user-confirmed decision thread.',
-    rationale: 'The raw record stays locally inspectable and never becomes an upload unit.',
+    rationale: `The raw record stays local even if a token is pasted: ${SECRET_CANARY}`,
     alternatives: [
       {
         label: 'Upload canonical events',
@@ -162,6 +163,8 @@ describe('durable minimized sync outbox', () => {
     expect(json).not.toContain('CANARY-EVENT');
     expect(json).not.toContain('/Users/private/repo');
     expect(json).not.toContain('transcriptPath');
+    expect(json).not.toContain(SECRET_CANARY);
+    expect(json).toContain('ghp_[GITHUB_TOKEN#1]');
     outbox.close();
   });
 

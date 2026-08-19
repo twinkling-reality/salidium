@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { createRedactor } from '@salidium/core';
 import {
   assertSendableBatch,
   type ConsentGrantV1,
@@ -26,6 +27,8 @@ import {
 import { z } from 'zod';
 
 const REQUIRED_STORE_SCHEMA = 6;
+const SUPPORTED_REDACTION_POLICY = 'secrets-v1';
+const SUPPORTED_MINIMIZATION_POLICY = 'decision-v1';
 const SENSITIVITY: Record<Sensitivity, number> = {
   public: 0,
   internal: 1,
@@ -173,6 +176,12 @@ export class SqliteSyncOutbox {
     if (grant.allowedKinds.length !== 1 || grant.allowedKinds[0] !== 'decision') {
       throw new Error('Phase 0 consent may authorize decision records only');
     }
+    if (
+      grant.redactionPolicyVersion !== SUPPORTED_REDACTION_POLICY ||
+      grant.minimizationPolicyVersion !== SUPPORTED_MINIMIZATION_POLICY
+    ) {
+      throw new Error('consent names an unsupported local redaction or minimization policy');
+    }
     return this.transaction(() => {
       const stream = this.stream(streamId);
       if (grant.destinationId !== stream.destinationId)
@@ -222,6 +231,7 @@ export class SqliteSyncOutbox {
       const stream = this.stream(streamId);
       const grant = this.authorizingGrant(streamId, input.grant, input.capturedAt);
       const evidence = this.recordEvidence(input.evidence ?? [], input.capturedAt);
+      const minimized = this.minimizeDecisionFields(input);
       const item = DecisionItemSchema.parse({
         contract: 'salidium.intelligence-item',
         contractVersion: SYNC_WIRE_VERSION,
@@ -253,12 +263,12 @@ export class SqliteSyncOutbox {
         links: [],
         redactionPolicyVersion: grant.redactionPolicyVersion,
         minimizationPolicyVersion: grant.minimizationPolicyVersion,
-        question: input.question,
-        selected: input.selected,
-        rationale: input.rationale,
+        question: minimized.question,
+        selected: minimized.selected,
+        rationale: minimized.rationale,
         owner: 'authenticated-user',
         status: input.status ?? 'active',
-        alternatives: input.alternatives,
+        alternatives: minimized.alternatives,
       });
       this.assertEligible(grant, item);
       this.insertItem(stream, item);
@@ -273,6 +283,7 @@ export class SqliteSyncOutbox {
       if (current?.kind !== 'decision') throw new Error('unknown decision item');
       const grant = this.authorizingGrant(streamId, current.consent, input.capturedAt);
       const evidence = this.recordEvidence(input.evidence ?? [], input.capturedAt);
+      const minimized = this.minimizeDecisionFields(input);
       const relation = input.relation;
       const item = DecisionItemSchema.parse({
         ...current,
@@ -294,11 +305,11 @@ export class SqliteSyncOutbox {
           ...current.links,
           { relation, target: { itemId: current.itemId, revision: current.revision } },
         ],
-        question: input.question,
-        selected: input.selected,
-        rationale: input.rationale,
+        question: minimized.question,
+        selected: minimized.selected,
+        rationale: minimized.rationale,
         status: input.status ?? 'active',
-        alternatives: input.alternatives,
+        alternatives: minimized.alternatives,
       });
       this.assertEligible(grant, item);
       this.insertItem(stream, item);
@@ -625,6 +636,24 @@ export class SqliteSyncOutbox {
     ) {
       throw new Error('item policy versions do not match consent');
     }
+  }
+
+  /** Field allowlisting happens structurally; this second pass removes accidental credentials. */
+  private minimizeDecisionFields(
+    input: Pick<CaptureDecisionInput, 'question' | 'selected' | 'rationale' | 'alternatives'>,
+  ): Pick<DecisionItem, 'question' | 'selected' | 'rationale' | 'alternatives'> {
+    const redactor = createRedactor();
+    const redact = (text: string) => redactor.redact(text).text;
+    return {
+      ...(input.question === undefined ? {} : { question: redact(input.question) }),
+      selected: redact(input.selected),
+      rationale: redact(input.rationale),
+      alternatives: input.alternatives.map((alternative) => ({
+        ...alternative,
+        label: redact(alternative.label),
+        rationale: redact(alternative.rationale),
+      })),
+    };
   }
 
   private insertItem(stream: SyncStream, item: IntelligenceItemV1): void {
