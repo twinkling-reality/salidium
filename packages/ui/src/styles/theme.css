@@ -1,0 +1,65 @@
+/*
+ * Shared Salidium identity and light/dark surface palette.
+ * Product UI and public surfaces import this file rather than restating brand colors or modes.
+ */
+:root {
+  --font-sans:
+    ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+  --brand-charcoal: #344047;
+  --brand-warm-white: #f5f4ef;
+
+  --gray-1: #ffffff;
+  --gray-2: #f7f7f5;
+  --gray-3: #eae9e6;
+  --gray-4: #e3e2e0;
+  --gray-5: #d0cec9;
+  --gray-6: #b4b3ae;
+  --gray-7: #8b8a85;
+  --gray-8: #5f5e5b;
+  --gray-9: #48463f;
+  --gray-10: #37352f;
+
+  --bg: var(--gray-1);
+  --bg-subtle: var(--gray-2);
+  --bg-muted: var(--gray-3);
+  --border: var(--gray-4);
+  --border-strong: var(--gray-5);
+  --text: var(--gray-10);
+  --text-secondary: var(--gray-8);
+  --text-tertiary: #66655f;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --gray-1: #191919;
+    --gray-2: #202020;
+    --gray-3: #2c2c2c;
+    --gray-4: #2f2f2f;
+    --gray-5: #3d3d3d;
+    --gray-6: #525252;
+    --gray-7: #7a7a7a;
+    --gray-8: #b4b4b2;
+    --gray-9: #d4d4d3;
+    --gray-10: #ededec;
+    --text-tertiary: #9a9a9a;
+  }
+}
+
+:root[data-theme="dark"] {
+  --gray-1: #191919;
+  --gray-2: #202020;
+  --gray-3: #2c2c2c;
+  --gray-4: #2f2f2f;
+  --gray-5: #3d3d3d;
+  --gray-6: #525252;
+  --gray-7: #7a7a7a;
+  --gray-8: #b4b4b2;
+  --gray-9: #d4d4d3;
+  --gray-10: #ededec;
+  --text-tertiary: #9a9a9a;
+}

@@ -1,0 +1,291 @@
+@import "./theme.css";
+
+/*
+ * Salidium design tokens. One near-achromatic scale with semantic slots (background 1–3,
+ * border 4–6, text 9–10), one accent for interaction, status colours only at indicator scale.
+ * Light and dark are generated from the same slots. 13 px base on a 4 px grid; monospace for
+ * every evidence token (paths, commands, counts, hashes, exit codes) so form encodes provenance.
+ */
+:root {
+  /*
+   * The stacking order, declared once.
+   *
+   * These were four numbers written where each layer happened to be defined, and nothing said how
+   * they related: the raw record drawer was 20 and a panel 30, so opening a record from inside a
+   * panel put it *behind* the thing you opened it from, loading forever out of sight. A scale in
+   * one place is checkable by reading it — the record is the escape hatch from every surface, so
+   * it is above all of them, by construction rather than by whoever edited last.
+   */
+  --z-toolbar: 5;
+  --z-float: 6;
+  --z-panel: 30;
+  --z-drawer: 40;
+
+  --text-xs: 11px;
+  --text-sm: 12.5px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 19px;
+  --text-xl: 23px;
+  --text-display: 30px;
+  --leading: 1.5;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  /*
+   * One family of corners, and they are squircles rather than rounded rectangles: `corner-shape`
+   * draws a superellipse, which is what makes a small control and a large panel look like the same
+   * shape at different sizes — a shared `border-radius` alone does not, because a circular corner
+   * reads heavier the bigger the box gets. Browsers without `corner-shape` fall back to the
+   * rounded rectangle the radius already describes, which is the shape this app had before.
+   */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --row-h: 28px;
+
+  /*
+   * Motion. Two durations and one easing curve for the whole app: `fast` for a control answering
+   * a pointer, `base` for anything that changes the shape of the page. Nothing else is invented
+   * locally — a transition written by hand in a component file is a transition that will not match
+   * the one beside it.
+   *
+   * Both are one-shot: something happened, and the interface catches up. A **continuous
+   * indicator's period is not one of these** and is deliberately not tokenised — the loading orb
+   * pulses at 1.4s and the skeleton shimmers at 2.4s, and there is no reason those two should
+   * agree, because the rule above exists so that things standing next to each other match, and a
+   * loop matches nothing. Their periods are stated at their own keyframes with the reason. Tokenising
+   * them would make `--motion-base` mean two unrelated things; adding a third loop token would
+   * invite the next loop to be a fourth. `panel-in` was the real violation and is fixed.
+   */
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+
+  /*
+   * Controls. Every button, chip and field is built from these four numbers, which is what makes
+   * a row of them line up without anyone measuring: same height, same corner, same inner gap.
+   */
+  --control-h: 28px;
+  --control-px: 9px;
+  --control-radius: var(--radius-sm);
+  --control-gap: 6px;
+  --icon: 14px;
+  /* The square footprint of controls that flank a floating surface at the pane's foot. */
+  --foot-h: 42px;
+  /*
+   * The measured column the document is set in. Shared by the page and its floating scrubber so
+   * the timeline reads as controlling the document rather than the whole window.
+   */
+  --page-w: 1000px;
+  /*
+   * The ground of anything that floats over the page: translucent enough to admit what is behind
+   * it, blurred enough to stay legible over it. Described once so a floating panel and a floating
+   * control cannot end up two different materials.
+   */
+  --float-bg: color-mix(in srgb, var(--bg) 82%, transparent);
+  --float-blur: blur(12px) saturate(1.6);
+
+  /* Scrollbars are a thumb only; the surface behind them is whatever the panel already is. */
+  --scroll-thumb: rgba(55, 53, 47, 0.2);
+  --scroll-thumb-hover: rgba(55, 53, 47, 0.38);
+  /* Width at which prose stops being comfortable to read. */
+  --measure: 68ch;
+
+  --accent: #3b5bdb;
+  --accent-fg: #ffffff;
+  --accent-soft: rgba(59, 91, 219, 0.1);
+  --ok: #147638;
+  --ok-soft: rgba(21, 128, 61, 0.12);
+  --warn: #8a5a12;
+  --warn-soft: rgba(183, 121, 31, 0.14);
+  --danger: #c0392b;
+  --danger-soft: rgba(192, 57, 43, 0.12);
+  --info: #4c6ef5;
+  /* Two facets have no status meaning to borrow a colour from, so they get their own. */
+  --facet-why: #7c4bb0;
+  --facet-how: #25708a;
+  /*
+   * Provider identity. The one place a brand colour is allowed: which agent produced a session is
+   * a fact you scan for across a list, and it is identity rather than status, so it cannot be
+   * confused with the verdict palette.
+   */
+  --brand-claude: #a8452a;
+  --brand-claude-soft: rgba(217, 119, 87, 0.14);
+  --brand-codex: #0b7a5e;
+  --brand-codex-soft: rgba(16, 163, 127, 0.14);
+  --diff-add-bg: rgba(21, 128, 61, 0.12);
+  --diff-del-bg: rgba(192, 57, 43, 0.12);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  /*
+   * For panels that float over content rather than sitting in the layout, and — at a fraction of
+   * the spread — for controls that do. A 24 px blur around a 42 px box is a halo wider than the box
+   * is tall: it fills the whole shape and the control reads as a grey chip beside a white panel
+   * wearing the same fill. The two were measured side by side before they were split.
+   */
+  --shadow-float: 0 6px 24px rgb(0 0 0 / 10%), 0 1px 3px rgb(0 0 0 / 8%);
+  --shadow-float-sm: 0 2px 8px rgb(0 0 0 / 7%), 0 1px 2px rgb(0 0 0 / 6%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --accent: #8fa6ff;
+    --accent-fg: #191919;
+    --accent-soft: rgba(143, 166, 255, 0.14);
+    --ok: #5fcf88;
+    --ok-soft: rgba(95, 207, 136, 0.14);
+    --warn: #e0a83c;
+    --warn-soft: rgba(224, 168, 60, 0.16);
+    --danger: #f0736a;
+    --danger-soft: rgba(240, 115, 106, 0.16);
+    --info: #8da2fb;
+    --facet-why: #b98ce0;
+    --facet-how: #57b0c9;
+    --brand-claude: #e79b7d;
+    --brand-claude-soft: rgba(217, 119, 87, 0.16);
+    --brand-codex: #4fc4a3;
+    --brand-codex-soft: rgba(16, 163, 127, 0.16);
+    --diff-add-bg: rgba(95, 207, 136, 0.14);
+    --diff-del-bg: rgba(240, 115, 106, 0.14);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-float: 0 6px 24px rgb(0 0 0 / 44%), 0 1px 3px rgb(0 0 0 / 30%);
+    --shadow-float-sm: 0 2px 8px rgb(0 0 0 / 34%), 0 1px 2px rgb(0 0 0 / 24%);
+    --scroll-thumb: rgba(237, 237, 236, 0.18);
+    --scroll-thumb-hover: rgba(237, 237, 236, 0.34);
+  }
+}
+
+:root[data-theme="dark"] {
+  --accent: #8fa6ff;
+  --accent-fg: #191919;
+  --accent-soft: rgba(143, 166, 255, 0.14);
+  --ok: #5fcf88;
+  --ok-soft: rgba(95, 207, 136, 0.14);
+  --warn: #e0a83c;
+  --warn-soft: rgba(224, 168, 60, 0.16);
+  --danger: #f0736a;
+  --danger-soft: rgba(240, 115, 106, 0.16);
+  --info: #8da2fb;
+  --facet-why: #b98ce0;
+  --facet-how: #57b0c9;
+  --brand-claude: #e79b7d;
+  --brand-claude-soft: rgba(217, 119, 87, 0.16);
+  --brand-codex: #4fc4a3;
+  --brand-codex-soft: rgba(16, 163, 127, 0.16);
+  --diff-add-bg: rgba(95, 207, 136, 0.14);
+  --diff-del-bg: rgba(240, 115, 106, 0.14);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-float: 0 6px 24px rgb(0 0 0 / 44%), 0 1px 3px rgb(0 0 0 / 30%);
+  --shadow-float-sm: 0 2px 8px rgb(0 0 0 / 34%), 0 1px 2px rgb(0 0 0 / 24%);
+  --scroll-thumb: rgba(237, 237, 236, 0.18);
+  --scroll-thumb-hover: rgba(237, 237, 236, 0.34);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/*
+ * Every corner in the app is the same superellipse. Set once here rather than beside each radius,
+ * so a new component cannot quietly opt out of the shape by forgetting a line.
+ */
+@supports (corner-shape: squircle) {
+  *,
+  *::before,
+  *::after {
+    corner-shape: squircle;
+  }
+
+  /* Circles must stay circles: a squircle at 50% is a rounded square. */
+  [class*="dot"],
+  [class*="mark"],
+  [class*="pulse"],
+  .opt-mark,
+  .pop-help {
+    corner-shape: round;
+  }
+}
+
+/*
+ * The shell owns the viewport and every scroll inside it belongs to a named pane. The window may
+ * never scroll: anything that escapes a pane's clipping is a bug, and without this it is a bug
+ * that presents as a scrollbar into empty space rather than as anything anyone can diagnose.
+ */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: 400;
+  line-height: var(--leading);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Large type is set light and tight; small type stays at normal weight to hold up at 11–12 px. */
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+code,
+.mono {
+  font-family: var(--font-mono);
+  font-size: 0.94em;
+  font-variant-numeric: tabular-nums;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: var(--radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

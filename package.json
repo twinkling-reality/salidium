@@ -1,0 +1,40 @@
+{
+  "name": "salidium-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Salidium: translates coding-agent work into a trustworthy, structured, visual explanation.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@11.22.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "tsc --build && pnpm --filter @salidium/ui build",
+    "typecheck": "tsc --build",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "test": "vitest run",
+    "test:e2e": "pnpm build && playwright test",
+    "test:e2e:full": "pnpm build && PLAYWRIGHT_FULL_BROWSERS=1 playwright test",
+    "test:watch": "vitest",
+    "dev": "pnpm --filter @salidium/daemon dev",
+    "salidium": "node --conditions=development packages/cli/src/main.ts",
+    "clean": "rm -rf packages/*/dist packages/adapters/*/dist packages/cli/bundle packages/*/*.tsbuildinfo packages/adapters/*/*.tsbuildinfo",
+    "package": "pnpm build && pnpm --filter salidium bundle"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@biomejs/biome": "^2.5.8",
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^6.0.5",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.1",
+    "vitest": "^4.1.10"
+  }
+}

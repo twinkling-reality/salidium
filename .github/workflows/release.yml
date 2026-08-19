@@ -1,0 +1,207 @@
+name: Release CLI
+
+# Publishing is intentionally impossible from a push, pull request, or tag event. A maintainer must
+# select this workflow, provide an existing release tag, and type the exact package confirmation.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing tag to publish, for example v0.1.0
+        required: true
+        type: string
+      npm_tag:
+        description: npm distribution tag
+        required: true
+        default: latest
+        type: choice
+        options: [latest, next]
+      authentication:
+        description: Use OIDC after bootstrap; use the token path only for the first package version
+        required: true
+        default: trusted-publisher
+        type: choice
+        options: [trusted-publisher, bootstrap-token]
+      confirm:
+        description: Type publish salidium@VERSION, or bootstrap salidium@VERSION for first publish
+        required: true
+        type: string
+
+concurrency:
+  group: release-cli
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  # Build and exercise the release with no OIDC permission and no npm credential in the job. The
+  # publisher below receives only the already-verified tarball and its checksum.
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      package_sha256: ${{ steps.pack.outputs.package_sha256 }}
+    steps:
+      # Release jobs are part of the npm trust boundary. Pin every third-party action to a reviewed
+      # commit instead of allowing a moving major tag to gain the workflow's identity later.
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ inputs.release_tag }}
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@d15e628ca66d93ee5f352c71671a7bc6a97af5c9 # v6.0.8
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Verify the explicit release request
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          AUTHENTICATION: ${{ inputs.authentication }}
+        run: |
+          node <<'NODE'
+          const { execFileSync } = require('node:child_process');
+          const root = require('./package.json');
+          const cli = require('./packages/cli/package.json');
+          const expectedTag = `v${cli.version}`;
+          const verb = process.env.AUTHENTICATION === 'bootstrap-token' ? 'bootstrap' : 'publish';
+          const expectedConfirmation = `${verb} salidium@${cli.version}`;
+          if (root.version !== cli.version) throw new Error('root and CLI versions differ');
+          if (process.env.RELEASE_TAG !== expectedTag)
+            throw new Error(`release tag must be ${expectedTag}`);
+          if (process.env.CONFIRM !== expectedConfirmation)
+            throw new Error(`confirmation must be exactly: ${expectedConfirmation}`);
+          const tagCommit = execFileSync('git', ['rev-list', '-n', '1', expectedTag], { encoding: 'utf8' }).trim();
+          const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+          if (tagCommit !== head) throw new Error(`${expectedTag} does not point at the checked-out commit`);
+          const main = execFileSync('git', ['rev-parse', 'refs/remotes/origin/main'], { encoding: 'utf8' }).trim();
+          if (head !== main) throw new Error(`${expectedTag} must point at the current main commit`);
+          if (process.env.GITHUB_REF !== 'refs/heads/main' || process.env.GITHUB_SHA !== head)
+            throw new Error('dispatch the workflow from current main so provenance identifies the artifact source');
+          NODE
+
+      - name: Require successful CI for the release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_sha=$(git rev-parse HEAD)
+          successful=$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$release_sha&status=success&per_page=20" \
+            --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")] | length')
+          test "$successful" -gt 0 || {
+            echo "No successful main/manual CI run exists for $release_sha"
+            exit 1
+          }
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level high
+      - run: pnpm lint
+      - run: pnpm build
+      - run: pnpm test
+
+      - name: Pack and smoke-test the exact artifact
+        id: pack
+        run: |
+          set -euo pipefail
+          pnpm --filter salidium exec npm pack --pack-destination "$RUNNER_TEMP"
+          package=$(find "$RUNNER_TEMP" -maxdepth 1 -name 'salidium-*.tgz' -type f -print -quit)
+          test -n "$package"
+          echo "package=$package" >> "$GITHUB_OUTPUT"
+          echo "package_sha256=$(sha256sum "$package" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+
+          mkdir -p "$RUNNER_TEMP/unpacked"
+          tar -xzf "$package" -C "$RUNNER_TEMP/unpacked" --strip-components=1
+          npm install --prefix "$RUNNER_TEMP/install" "$package" --ignore-scripts --no-audit --no-fund
+          node -e "const p=require('$RUNNER_TEMP/unpacked/package.json'); if (p.exports) throw new Error('CLI package must not advertise an import surface'); if (p.bin?.salidium !== 'bundle/salidium.mjs') throw new Error('wrong salidium bin')"
+          "$RUNNER_TEMP/install/node_modules/.bin/salidium" --version
+          "$RUNNER_TEMP/install/node_modules/.bin/salidium" help > /dev/null
+
+          export SALIDIUM_HOME="$RUNNER_TEMP/home"
+          export SALIDIUM_PORT=47950
+          export SALIDIUM_HISTORY_DAYS=0
+          "$RUNNER_TEMP/install/node_modules/.bin/salidium" daemon &
+          daemon_pid=$!
+          trap 'kill "$daemon_pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 40); do [ -f "$SALIDIUM_HOME/daemon.json" ] && break; sleep 0.5; done
+          test -f "$SALIDIUM_HOME/daemon.json" || { echo "daemon never wrote daemon.json"; exit 1; }
+
+          token=$(node -e "console.log(require(process.env.SALIDIUM_HOME + '/daemon.json').token)")
+          ui=$(curl -sf -o /dev/null -w '%{http_code}' "http://127.0.0.1:$SALIDIUM_PORT/")
+          open=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$SALIDIUM_PORT/api/info")
+          auth=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "http://127.0.0.1:$SALIDIUM_PORT/api/info")
+          echo "ui=$ui unauthenticated=$open authenticated=$auth"
+          [ "$ui" = 200 ] && [ "$open" = 401 ] && [ "$auth" = 200 ]
+          # Doctor intentionally exits 1 when it finds a provider that is present but not connected;
+          # a clean release runner may or may not have such a CLI. Exercise its runtime checks and
+          # assert the facts this smoke owns without treating an expected setup warning as a crash.
+          doctor_output=$("$RUNNER_TEMP/install/node_modules/.bin/salidium" doctor 2>&1 || true)
+          printf '%s\n' "$doctor_output" | grep -F 'Node 24'
+          printf '%s\n' "$doctor_output" | grep -F 'Interface build is available'
+          printf '%s\n' "$doctor_output" | grep -F "daemon running on $SALIDIUM_PORT"
+          "$RUNNER_TEMP/install/node_modules/.bin/salidium" stop
+          wait "$daemon_pid"
+          trap - EXIT
+
+      - name: Preserve the verified package for the isolated publisher
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: salidium-release-package
+          path: ${{ steps.pack.outputs.package }}
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm-release
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: salidium-release-package
+          path: ${{ runner.temp }}/release
+
+      - name: Verify the package crossing the job boundary
+        env:
+          EXPECTED_SHA256: ${{ needs.verify.outputs.package_sha256 }}
+        run: |
+          set -euo pipefail
+          package=$(find "$RUNNER_TEMP/release" -maxdepth 1 -name 'salidium-*.tgz' -type f -print -quit)
+          test -n "$package"
+          actual=$(sha256sum "$package" | cut -d ' ' -f 1)
+          [ "$actual" = "$EXPECTED_SHA256" ] || { echo "release package checksum mismatch"; exit 1; }
+
+      - name: Publish through the trusted publisher
+        if: inputs.authentication == 'trusted-publisher'
+        run: npm publish "$RUNNER_TEMP"/release/salidium-*.tgz --access public --provenance --tag "${{ inputs.npm_tag }}"
+
+      # npm cannot configure a trusted publisher until the package exists. This one-use path is
+      # protected by the same environment review and exact confirmation, and the secret should be
+      # deleted as soon as the initial version is verified.
+      - name: Bootstrap the first npm version with a short-lived token
+        if: inputs.authentication == 'bootstrap-token'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
+        run: |
+          test -n "$NODE_AUTH_TOKEN" || { echo "NPM_BOOTSTRAP_TOKEN is not configured"; exit 1; }
+          if npm view salidium version >/dev/null 2>&1; then
+            echo "salidium already exists; use trusted-publisher after configuring npm trust"
+            exit 1
+          fi
+          npm publish "$RUNNER_TEMP"/release/salidium-*.tgz --access public --provenance --tag "${{ inputs.npm_tag }}"

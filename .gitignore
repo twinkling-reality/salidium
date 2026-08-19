@@ -1,0 +1,24 @@
+node_modules/
+dist/
+dist-types/
+*.tsbuildinfo
+.DS_Store
+coverage/
+playwright-report/
+test-results/
+
+# Copied in at pack time from the repo root; the tracked copies live there.
+packages/cli/README.md
+packages/cli/LICENSE
+packages/cli/bundle/
+
+# Throwaway measurement harnesses run against the real store; not part of the build.
+.audit/
+
+# Private working material. Public technical decisions belong in docs/; handoffs,
+# audits, corpus measurements, and planning notes belong under .private/ instead.
+/.private/
+/HANDOFF.md
+/HANDOFF-*.md
+*.private.md
+*.internal.md

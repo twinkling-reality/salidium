@@ -1,0 +1,9 @@
+packages:
+  - packages/*
+  - packages/adapters/*
+
+# esbuild ships a platform binary and needs its install script to run. Approved explicitly because
+# pnpm blocks lifecycle scripts by default and an unapproved one fails `pnpm install` outright,
+# which would stop CI before it reached a single test.
+allowBuilds:
+  esbuild: true

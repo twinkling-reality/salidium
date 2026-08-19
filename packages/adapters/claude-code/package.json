@@ -1,0 +1,32 @@
+{
+  "name": "@salidium/adapter-claude-code",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./src/testing/syntheticTranscript.ts",
+      "development": "./src/testing/syntheticTranscript.ts",
+      "default": "./dist/testing/syntheticTranscript.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "test": "vitest run --root ../.."
+  },
+  "dependencies": {
+    "@salidium/protocol": "workspace:*",
+    "@salidium/adapter-kit": "workspace:*"
+  },
+  "devDependencies": {
+    "@salidium/core": "workspace:*"
+  }
+}

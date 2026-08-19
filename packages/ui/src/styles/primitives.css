@@ -1,0 +1,662 @@
+/*
+ * Salidium control primitives.
+ *
+ * This file is the only place a button, chip, option list, popover or scrollbar is described. Component
+ * stylesheets compose these classes; they do not redeclare a height, a corner radius, a hover fill
+ * or a transition of their own. That rule is the whole point of the file — the previous build had
+ * four button-ish things (`.btn`, `.icon-btn`, `.btn-quiet`, `.chip`) each with its own padding
+ * and its own idea of a hover, and a row of them never quite lined up.
+ *
+ * Everything here is built from the control and motion tokens in `tokens.css`:
+ *   --control-h --control-px --control-radius --control-gap --icon
+ *   --motion-fast --motion-base --ease
+ *
+ * Adding a control means adding it here. If a component needs a one-off, that is a signal the
+ * primitive is missing a variant, not that the component should grow its own.
+ */
+
+/*
+ * The hover ground, declared by the surface rather than by the thing being hovered.
+ *
+ * A row lights up one step up the grey ramp from whatever it is sitting on, and that was true
+ * already — it was just written down twice with two different tokens. Measured: the session list
+ * sits on #202020 and its rows hover to #2c2c2c; the page and the panels sit on #191919 and their
+ * rows hover to #202020. Both are one step. Naming the step means a fourth surface declares its
+ * ground once instead of every row rule learning a new token, and it is why the two values are not
+ * the inconsistency they look like.
+ *
+ * Discrete controls keep their own, stronger tint (`.btn` below): a button is a small object and
+ * needs more contrast to read as lit than a full-width row does.
+ */
+:root {
+  --hover-row: var(--bg-subtle);
+}
+
+/* ------------------------------------------------------------------ scrollbars */
+
+/*
+ * A thumb, and only while the pane is moving. A default scrollbar paints a track — a stripe of
+ * chrome down the side of every pane at rest — and styling `::-webkit-scrollbar` at all opts out
+ * of the platform's overlay scrollbars, which is what pinned it there permanently. `data-scrolling`
+ * comes from `useScrollState`; the bar fades back out ~900 ms after the last scroll event.
+ *
+ * The thumb is inset with a transparent border so it floats over the panel rather than sitting in
+ * a groove, and the track never paints at all.
+ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* The one corner outside the shared family: a thumb is a bar, and a bar's ends are round. */
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  background-clip: padding-box;
+  transition: background var(--motion-base) var(--ease);
+}
+
+[data-scrolling]::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  background-clip: padding-box;
+}
+
+[data-scrolling] {
+  scrollbar-color: var(--scroll-thumb) transparent;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scroll-thumb-hover);
+  background-clip: padding-box;
+}
+
+/* ------------------------------------------------------------------ scroll fade */
+
+/*
+ * The edge a scroller can still travel toward is faded, so a cut-off row reads as continuing
+ * rather than as ending. Driven by `useScrollState`, which sets `data-fade` to the edges that have
+ * content beyond them — a fade painted at both ends unconditionally dims the first row of a list
+ * already at its top, and keeps dimming the last row after you have reached the bottom.
+ *
+ * `mask-image` rather than an overlay: an overlay has to know the colour behind it, and these
+ * three panes sit on two different grounds across two themes.
+ */
+.scroll-fade {
+  --fade: 24px;
+}
+
+.scroll-fade[data-fade="top"] {
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--fade));
+}
+
+.scroll-fade[data-fade="bottom"] {
+  mask-image: linear-gradient(to top, transparent, #000 var(--fade));
+}
+
+.scroll-fade[data-fade="both"] {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    #000 var(--fade),
+    #000 calc(100% - var(--fade)),
+    transparent
+  );
+}
+
+/*
+ * For a pane whose top edge is already held by a sticky bar. Fading there would fade the bar
+ * itself, and the bar is opaque chrome — it is the boundary the fade would otherwise be drawing.
+ */
+.scroll-fade.at-bottom-only[data-fade="top"] {
+  mask-image: none;
+}
+
+.scroll-fade.at-bottom-only[data-fade="both"] {
+  mask-image: linear-gradient(to top, transparent, #000 var(--fade));
+}
+
+/* ------------------------------------------------------------------ arriving */
+
+/*
+ * Something that was not on screen a moment ago fades in and settles from the direction it came
+ * from. One gesture, composed by everything that appears: a popover hangs under its trigger and
+ * so comes down (`--rise` negative), the pane's bars stand at the foot and so come up.
+ *
+ * Transform and opacity only, and translate rather than scale, for a reason that is not taste.
+ * The page's clearance under the floating foot is measured from the foot's own box
+ * (`useFootSpace`), so anything that changes that box animates the document's bottom padding with
+ * it and fires a ResizeObserver on every frame. A translate leaves the box exactly where layout
+ * put it; a scale does not, because `getBoundingClientRect` reports the transformed rectangle.
+ *
+ * It is achromatic on purpose. Colour in this app means a verdict (app.css, rule 4), and a bar
+ * opening is not a verdict — an accent sweeping the border would be the one non-verdict thing on
+ * screen wearing the verdict palette. Motion and opacity carry the arrival instead.
+ *
+ * Reduced motion needs no counterpart here, unlike the loading orb, which holds three static
+ * weights because "in progress" is a state that persists and still has to be legible standing
+ * still. An arrival is over the moment it finishes; with `tokens.css` switching animation off,
+ * the bar is simply there, which is the whole of what the animation was going to say.
+ */
+@keyframes arrive {
+  from {
+    opacity: 0;
+    transform: translateY(var(--rise, -4px));
+  }
+}
+
+/* ---------------------------------------------------------------------- fields */
+
+/*
+ * A text field, built from the same four numbers as `.btn` so a field and a button standing beside
+ * each other are one row rather than two heights. The focus ring is inset, unlike the global one:
+ * a field is a box with a border already, and an outset ring around it draws a second box.
+ *
+ * `.gate-field` in app.css is the same object and predates this rule. It is left where it is for
+ * now because the gate's markup is being edited elsewhere; it should compose this class.
+ */
+.field {
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 var(--control-px);
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.field::placeholder {
+  color: var(--text-tertiary);
+}
+
+.field:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* --------------------------------------------------------------------- buttons */
+
+/*
+ * One button. Variants change its colour, never its box, so any two sit level on a toolbar.
+ *  (default)   quiet chrome: no border, fill on hover
+ *  .is-on      currently active, e.g. a panel this button opened
+ *  .btn-accent the one affirmative action in a dialog
+ *  .btn-icon   square, glyph only — for controls whose meaning is carried by the icon
+ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--control-gap);
+  height: var(--control-h);
+  padding: 0 var(--control-px);
+  border: 0;
+  border-radius: var(--control-radius);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1;
+  white-space: nowrap;
+  transition:
+    background var(--motion-fast) var(--ease),
+    color var(--motion-fast) var(--ease);
+}
+
+.btn:hover {
+  background: var(--bg-muted);
+  color: var(--text);
+}
+
+.btn.is-on {
+  background: var(--bg-muted);
+  color: var(--text);
+}
+
+.btn[aria-disabled="true"],
+.btn:disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.btn-icon {
+  width: var(--control-h);
+  padding: 0;
+}
+
+.btn-accent {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+/*
+ * A button that floats over the page rather than resting in a bar with it. It needs a ground of its
+ * own to stay legible over whatever it is laid across, and that ground is the same material as the
+ * panels it sits beside (`--float-bg`, `--float-blur`) so a floating control and a floating panel
+ * on one line read as one set of objects rather than two.
+ *
+ * It takes the foot height and the panel corner so a control flanking the scrubber reads as part of
+ * the same floating object.
+ */
+.btn-float {
+  width: var(--foot-h);
+  height: var(--foot-h);
+  padding: 0;
+  /*
+   * A floating control is normally dropped into a container that is transparent to the pointer, so
+   * that the page underneath stays usable in the space around it — and it inherits that
+   * transparency and stops taking clicks. It has to opt back in, or it is a button you can only
+   * press from a script. The disabled rule above out-specifies this and still wins.
+   */
+  pointer-events: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--float-bg);
+  box-shadow: var(--shadow-float-sm);
+  backdrop-filter: var(--float-blur);
+}
+
+.btn-float:hover {
+  background: var(--bg-muted);
+  color: var(--text);
+}
+
+.btn-accent:hover {
+  background: var(--accent);
+  color: var(--accent-fg);
+  filter: brightness(1.08);
+}
+
+/*
+ * The value a button reports, as a filled pill. A label and its value set as two plain words in a
+ * row read as one phrase that has gone wrong; the pill makes the second word obviously the state
+ * of the first.
+ */
+.btn-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-muted);
+  color: var(--text);
+  font-size: var(--text-xs);
+  line-height: 1;
+}
+
+.btn:hover .btn-pill,
+.btn.is-on .btn-pill {
+  background: var(--bg);
+}
+
+/* The icon slot. Sized once here so no component picks its own glyph size. */
+.ico {
+  display: block;
+  width: var(--icon);
+  height: var(--icon);
+  flex-shrink: 0;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+}
+
+/* ----------------------------------------------------------------------- chips */
+
+/* A filter or tag: shorter than a button, and toggled rather than pressed. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  transition: background var(--motion-fast) var(--ease);
+}
+
+.chip.is-on {
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+}
+
+/* ------------------------------------------------------------------------ tags */
+
+/*
+ * A tag states a fact; a button performs an action. They are deliberately different shapes — a tag
+ * is shorter, has no hover and never looks pressable — because a row of facts that reads as a row
+ * of controls invites clicks that do nothing.
+ *
+ * `data-tone` tints one when the fact carries a verdict. Everything else stays on the grey scale.
+ */
+.tag {
+  --tone: var(--border-strong);
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  max-width: 100%;
+  padding: 3px var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+
+.tag-strong {
+  color: var(--text);
+}
+
+/*
+ * What the value is. A bare `main` or `claude-opus-5` is only legible to someone who already knows
+ * the shape of the data; the key is the difference between a fact and a token.
+ */
+.tag-key {
+  font-size: var(--text-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.tag-note {
+  color: var(--text-tertiary);
+}
+
+/* An action inside a tag: bordered and carrying its icon, so it reads as a control rather than as
+   another word in the sentence. Underlined text alone disappeared into the caveat beside it. */
+.tag-ev {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px 1px 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  text-decoration: none;
+}
+
+.tag-ev:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.tag-ev .ico {
+  width: 11px;
+  height: 11px;
+}
+
+.tag[data-tone="pass"] {
+  --tone: var(--ok);
+}
+.tag[data-tone="fail"] {
+  --tone: var(--danger);
+}
+.tag[data-tone="attention"] {
+  --tone: var(--warn);
+}
+.tag[data-tone="working"] {
+  --tone: var(--accent);
+}
+
+/*
+ * A toned tag is filled, not barred. A colour bar down the leading edge was doing the work of a
+ * fill at a tenth of its legibility, and it is a tic rather than a device — the fill says the same
+ * thing at a glance and leaves the tag a single shape.
+ */
+.tag[data-tone="pass"] {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.tag[data-tone="fail"] {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.tag[data-tone="attention"] {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.tag[data-tone="working"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.tag[data-tone] .tag-strong {
+  color: inherit;
+  font-weight: 500;
+}
+
+/* Only the verdict itself is tinted. A whole sentence of caveat set in the tone colour reads as
+   more alarm than the caveat is, and is harder to read than the thing it qualifies. */
+.tag[data-tone] .tag-note,
+.tag[data-tone] .tag-ev {
+  color: var(--text-secondary);
+}
+
+/*
+ * Provider identity, the only brand colour in the app. A model name stays on the grey scale: it is
+ * a measured value like a path or a hash, and two tinted tags side by side would read as one.
+ */
+.tag.is-claude-code {
+  background: var(--brand-claude-soft);
+  color: var(--brand-claude);
+}
+
+.tag.is-codex {
+  background: var(--brand-codex-soft);
+  color: var(--brand-codex);
+}
+
+/* ----------------------------------------------------------------------- links */
+
+.link {
+  color: var(--text-tertiary);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 2px;
+  transition: color var(--motion-fast) var(--ease);
+}
+
+.link:hover {
+  color: var(--accent);
+}
+
+/* -------------------------------------------------------------------- popovers */
+
+/*
+ * A panel anchored under the control that opened it. Positioned by the wrapper so the trigger and
+ * the panel cannot drift apart, and raised on its own ground rather than the page's, because it
+ * floats above content that is already using the page's.
+ */
+.pop {
+  position: relative;
+  display: inline-flex;
+}
+
+/* Fits its content; a filter of seven short words does not need the width of a paragraph. */
+/*
+ * Opens upward, for a popover whose trigger is docked to the bottom of the window. Dropping the
+ * usual way puts the whole panel below the viewport, where it is not a panel at all.
+ */
+.pop-panel.is-up {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
+.pop-panel.is-narrow {
+  min-width: 0;
+}
+
+.pop-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  width: max-content;
+  max-width: 320px;
+  min-width: 236px;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  box-shadow:
+    0 4px 16px rgb(0 0 0 / 12%),
+    0 1px 3px rgb(0 0 0 / 8%);
+  animation: arrive var(--motion-base) var(--ease);
+}
+
+/* Title row, tight to the top: a popover this small has no room for a margin above its heading. */
+.pop-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px var(--space-2) var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.pop-help {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-left: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1;
+  transition:
+    background var(--motion-fast) var(--ease),
+    color var(--motion-fast) var(--ease);
+}
+
+.pop-help:hover,
+.pop-help.is-on {
+  background: var(--bg-muted);
+  color: var(--text);
+}
+
+.pop-help .ico {
+  width: 12px;
+  height: 12px;
+}
+
+.pop-note {
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+/* ---------------------------------------------------------------------- options */
+
+/*
+ * A radio group that looks like a menu. Each row states what it adds, which is the whole reason
+ * this replaced a slider: the choice explains itself at the moment it is made, instead of being
+ * two words at the ends of a track.
+ */
+.opts {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.opt {
+  display: flex;
+  cursor: pointer;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--control-radius);
+  text-align: left;
+  transition: background var(--motion-fast) var(--ease);
+}
+
+.opt:hover {
+  background: var(--bg-muted);
+}
+
+.opt:has(:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.opt-mark {
+  width: 12px;
+  height: 12px;
+  margin-top: 2px;
+  flex-shrink: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  transition:
+    border-color var(--motion-fast) var(--ease),
+    box-shadow var(--motion-fast) var(--ease);
+}
+
+.opt.is-on .opt-mark {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 3px var(--accent);
+}
+
+.opt-text {
+  display: block;
+  min-width: 0;
+}
+
+.opt-name {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.opt.is-on .opt-name {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.opt-adds {
+  display: block;
+  margin-top: 1px;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--text-tertiary);
+}
+
+/* ------------------------------------------------------------------ toolbars */
+
+/* A run of controls that reads as one object: no dividers, just consistent spacing. */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.toolbar-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 var(--space-2);
+  background: var(--border);
+}

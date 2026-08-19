@@ -1,0 +1,51 @@
+{
+  "name": "salidium",
+  "version": "0.1.0",
+  "type": "module",
+  "files": [
+    "bundle"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "bundle": "node build.mjs",
+    "prepack": "node build.mjs",
+    "test": "vitest run --root ../.."
+  },
+  "bin": {
+    "salidium": "bundle/salidium.mjs"
+  },
+  "description": "See what your coding agent did, why, how, what is verified, what is left, and what needs you. Local-first, no telemetry.",
+  "license": "MIT",
+  "author": "Glendon Chin",
+  "homepage": "https://github.com/twinkling-reality/salidium#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/twinkling-reality/salidium.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/twinkling-reality/salidium/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "coding-agent",
+    "observability",
+    "cli",
+    "local-first"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@salidium/adapter-kit": "workspace:*",
+    "@salidium/daemon": "workspace:*",
+    "@salidium/protocol": "workspace:*",
+    "@salidium/adapter-claude-code": "workspace:*",
+    "@salidium/adapter-codex": "workspace:*",
+    "@salidium/core": "workspace:*"
+  }
+}

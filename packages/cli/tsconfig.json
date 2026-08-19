@@ -1,0 +1,30 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "types": ["node"]
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts", "src/**/__fixtures__/**"],
+  "references": [
+    {
+      "path": "../adapter-kit"
+    },
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../daemon"
+    },
+    {
+      "path": "../protocol"
+    },
+    {
+      "path": "../adapters/claude-code"
+    },
+    {
+      "path": "../adapters/codex"
+    }
+  ]
+}

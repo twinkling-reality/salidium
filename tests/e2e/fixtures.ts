@@ -1,0 +1,95 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { test as base, expect } from '@playwright/test';
+import { EventBuilder } from '../../packages/core/dist/testing/eventBuilders.js';
+import { type DaemonHandle, startDaemon } from '../../packages/daemon/dist/index.js';
+import type { CanonicalEvent } from '../../packages/protocol/dist/index.js';
+
+const PRIMARY_SESSION = 'claude-code:e2e-primary';
+
+export interface BrowserDaemon {
+  url: string;
+  token: string;
+  primarySession: string;
+  appendEdit(path: string): void;
+}
+
+type WorkerFixtures = { daemon: BrowserDaemon };
+
+function titled(event: CanonicalEvent, title: string): CanonicalEvent {
+  if (event.kind !== 'session.started') return event;
+  return { ...event, title };
+}
+
+export const test = base.extend<Record<string, never>, WorkerFixtures>({
+  daemon: [
+    async ({ browserName: _browserName }, use) => {
+      const temporary = await mkdtemp(join(tmpdir(), 'salidium-browser-e2e-'));
+      let handle: DaemonHandle | undefined;
+      try {
+        handle = await startDaemon({
+          home: join(temporary, 'salidium'),
+          userHome: join(temporary, 'providers'),
+          port: 0,
+          historyDays: 0,
+          gitEnrichment: false,
+          providers: [],
+          logLevel: 'silent',
+          uiDist: fileURLToPath(new URL('../../packages/ui/dist', import.meta.url)),
+        });
+
+        const primary = new EventBuilder(PRIMARY_SESSION, '2026-08-19T14:00:00.000Z');
+        const first: CanonicalEvent[] = [
+          titled(primary.sessionStarted('/repo/checkout'), 'Improve checkout safeguards'),
+          primary.turnStarted('Improve checkout safeguards'),
+          primary.message('I am tightening the checkout validation and will verify the result.'),
+          ...primary.edit('edit-cart', '/repo/checkout/src/cart.ts', 8, 2),
+          ...primary.command('test-cart', 'pnpm test', 'Tests  12 passed (12)', { exitCode: 0 }),
+        ];
+        handle.registry.ingest(PRIMARY_SESSION, first, { cwd: '/repo/checkout' });
+        handle.registry.flush(PRIMARY_SESSION);
+
+        const empty = new EventBuilder('claude-code:empty-session', '2026-08-19T12:00:00.000Z');
+        handle.registry.ingest(
+          empty.sessionId,
+          [titled(empty.sessionStarted('/repo/empty'), 'Empty transcript')],
+          { cwd: '/repo/empty' },
+        );
+        handle.registry.flush(empty.sessionId);
+
+        let nextEdit = 0;
+        await use({
+          url: `http://127.0.0.1:${handle.port}`,
+          token: handle.token,
+          primarySession: PRIMARY_SESSION,
+          appendEdit(path: string) {
+            nextEdit += 1;
+            handle?.registry.ingest(
+              PRIMARY_SESSION,
+              primary.edit(`live-edit-${nextEdit}`, path, 3, 1),
+            );
+            handle?.registry.flush(PRIMARY_SESSION);
+          },
+        });
+      } finally {
+        await handle?.stop();
+        await rm(temporary, { recursive: true, force: true });
+      }
+    },
+    { scope: 'worker' },
+  ],
+});
+
+export { expect };
+
+export async function openSalidium(
+  page: import('@playwright/test').Page,
+  daemon: BrowserDaemon,
+): Promise<void> {
+  await page.goto(`${daemon.url}/#token=${daemon.token}`);
+  // On a narrow viewport the session list intentionally makes the document inert/aria-hidden.
+  // Its heading remains visibly painted behind the modal, but is correctly absent from role queries.
+  await expect(page.locator('h1.masthead-title')).toHaveText('Improve checkout safeguards');
+}

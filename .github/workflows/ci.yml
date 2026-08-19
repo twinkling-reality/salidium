@@ -1,0 +1,187 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 7 * * *"
+
+# A second push to the same branch supersedes the first; there is nothing to learn from a run
+# against a commit that is already stale.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      # Node 24 is a hard requirement, not a preference: the daemon uses the built-in `node:sqlite`.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm audit --audit-level high
+
+      - run: pnpm lint
+
+      - run: pnpm build
+
+      - run: pnpm test
+
+      # The published artifact is a bundle, not the workspace, and the two resolve paths
+      # differently: the UI once loaded only because a sibling package happened to sit where the
+      # daemon looked, which works in a checkout and 404s for every real installation. So the
+      # tarball is built, unpacked somewhere with no workspace above it, and actually run.
+      - name: Pack and run the published artifact
+        run: |
+          set -euo pipefail
+          pnpm --filter salidium exec npm pack --pack-destination "$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/install"
+          tar -xzf "$RUNNER_TEMP"/salidium-*.tgz -C "$RUNNER_TEMP/install" --strip-components=1
+          cd "$RUNNER_TEMP"
+          node -e "const p=require('$RUNNER_TEMP/install/package.json'); if (p.exports) throw new Error('CLI package must not advertise an import surface'); if (p.bin?.salidium !== 'bundle/salidium.mjs') throw new Error('wrong salidium bin')"
+          node "$RUNNER_TEMP/install/bundle/salidium.mjs" help > /dev/null
+
+          # Exercise npm's real installed bin shim as well as the unpacked script. The package is a
+          # CLI only; it deliberately has no `exports` entry pointing at workspace-only source.
+          npm install --prefix "$RUNNER_TEMP/npm-install" "$RUNNER_TEMP"/salidium-*.tgz --ignore-scripts --no-audit --no-fund
+          "$RUNNER_TEMP/npm-install/node_modules/.bin/salidium" help > /dev/null
+
+          export SALIDIUM_HOME="$RUNNER_TEMP/home"
+          export SALIDIUM_PORT=47950
+          export SALIDIUM_HISTORY_DAYS=0
+          node "$RUNNER_TEMP/install/bundle/salidium.mjs" daemon &
+          for _ in $(seq 1 40); do [ -f "$SALIDIUM_HOME/daemon.json" ] && break; sleep 0.5; done
+          test -f "$SALIDIUM_HOME/daemon.json" || { echo "daemon never wrote daemon.json"; exit 1; }
+
+          token=$(node -e "console.log(require(process.env.SALIDIUM_HOME + '/daemon.json').token)")
+          # The UI has to come from the bundle, and the API has to refuse an unauthenticated call.
+          ui=$(curl -sf -o /dev/null -w '%{http_code}' "http://127.0.0.1:$SALIDIUM_PORT/")
+          open=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$SALIDIUM_PORT/api/info")
+          auth=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "http://127.0.0.1:$SALIDIUM_PORT/api/info")
+          echo "ui=$ui unauthenticated=$open authenticated=$auth"
+          [ "$ui" = 200 ] && [ "$open" = 401 ] && [ "$auth" = 200 ]
+
+          node "$RUNNER_TEMP/install/bundle/salidium.mjs" stop
+
+  platform-smoke:
+    name: Platform smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # These are the platform-sensitive seams: native provider paths, OS launch behavior, config
+      # parsing, and display paths. The Linux job above remains the exhaustive suite.
+      - name: Run platform-focused tests
+        run: >-
+          pnpm exec vitest run
+          packages/adapters/claude-code/src/transcriptParser.test.ts
+          packages/adapters/codex/src/rolloutParser.test.ts
+          packages/cli/src/runtime.test.ts
+          packages/cli/src/integrations.test.ts
+          packages/daemon/src/config/daemonConfig.test.ts
+          packages/core/src/state/changeLog.test.ts
+          packages/ui/src/lib/format.test.ts
+
+      - run: pnpm build
+
+      - name: Check the publishable package shape
+        run: pnpm --filter salidium exec npm pack --dry-run
+
+  browser-e2e:
+    name: Browser E2E and accessibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Pull requests get both desktop and narrow Chromium. Main, manual, and nightly runs add the
+      # other rendering engines so portability does not make every contribution wait on downloads.
+      - name: Install browsers
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            pnpm exec playwright install --with-deps chromium
+          else
+            pnpm exec playwright install --with-deps chromium firefox webkit
+          fi
+
+      - name: Run real-daemon browser tests
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            pnpm test:e2e
+          else
+            PLAYWRIGHT_FULL_BROWSERS=1 pnpm test:e2e
+          fi
+
+      - name: Upload browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-${{ github.run_id }}
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/site
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/site/package-lock.json
+
+      - run: npm ci
+
+      - run: npm audit --audit-level=high
+
+      - run: npm run lint
+
+      - run: npm test
+
+      - run: npx wrangler deploy --dry-run
