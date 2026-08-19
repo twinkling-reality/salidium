@@ -64,7 +64,8 @@ export interface CaptureDecisionInput {
   rationale: string;
   status?: DecisionItem['status'];
   alternatives: DecisionItem['alternatives'];
-  evidence?: LocalEvidenceInput[];
+  /** At least one reference. The producer never substitutes an authority the caller did not give. */
+  evidence: LocalEvidenceInput[];
 }
 
 export interface ReviseDecisionInput extends Omit<CaptureDecisionInput, 'grant'> {
@@ -230,7 +231,7 @@ export class SqliteSyncOutbox {
     return this.transaction(() => {
       const stream = this.stream(streamId);
       const grant = this.authorizingGrant(streamId, input.grant, input.capturedAt);
-      const evidence = this.recordEvidence(input.evidence ?? [], input.capturedAt);
+      const evidence = this.recordEvidence(input.evidence, input.capturedAt);
       const minimized = this.minimizeDecisionFields(input);
       const item = DecisionItemSchema.parse({
         contract: 'salidium.intelligence-item',
@@ -282,7 +283,7 @@ export class SqliteSyncOutbox {
       const current = this.currentItem(streamId, itemId);
       if (current?.kind !== 'decision') throw new Error('unknown decision item');
       const grant = this.authorizingGrant(streamId, current.consent, input.capturedAt);
-      const evidence = this.recordEvidence(input.evidence ?? [], input.capturedAt);
+      const evidence = this.recordEvidence(input.evidence, input.capturedAt);
       const minimized = this.minimizeDecisionFields(input);
       const relation = input.relation;
       const item = DecisionItemSchema.parse({
@@ -579,11 +580,15 @@ export class SqliteSyncOutbox {
       );
   }
 
-  private recordEvidence(inputs: LocalEvidenceInput[], capturedAt: string): EvidenceReference[] {
-    const sourceInputs = inputs.length
-      ? inputs
-      : [{ authority: 'user-explicit' as const, role: 'supports' as const, capturedAt }];
-    return sourceInputs.map((input) => {
+  /**
+   * Evidence is supplied, never invented. Defaulting an empty list to a synthetic `user-explicit`
+   * reference manufactured the exact authority the contract requires a decision to have, so any
+   * caller that omitted evidence produced a record attributing a choice to a person who had not
+   * made one. A decision with nothing behind it is not a decision.
+   */
+  private recordEvidence(inputs: LocalEvidenceInput[], _capturedAt: string): EvidenceReference[] {
+    if (!inputs.length) throw new Error('a decision requires at least one explicit evidence input');
+    return inputs.map((input) => {
       const evidenceId = randomUUID();
       const independenceId = input.independenceId ?? randomUUID();
       const descriptor = {

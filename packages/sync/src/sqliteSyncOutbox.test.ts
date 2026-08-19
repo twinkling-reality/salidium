@@ -71,16 +71,18 @@ function capture(outbox: SqliteSyncOutbox, streamId: string) {
         rationale: 'They contain prompts, paths, commands, diffs, and output.',
       },
     ],
-    evidence: [
-      {
-        authority: 'user-explicit',
-        capturedAt: AT,
-        sessionId: 'CANARY-SESSION-/Users/private/repo',
-        eventId: 'CANARY-EVENT-provider-record',
-      },
-    ],
+    evidence: EVIDENCE,
   });
 }
+
+const EVIDENCE = [
+  {
+    authority: 'user-explicit' as const,
+    capturedAt: AT,
+    sessionId: 'CANARY-SESSION-/Users/private/repo',
+    eventId: 'CANARY-EVENT-provider-record',
+  },
+];
 
 function required<T>(value: T | undefined, message: string): T {
   if (value === undefined) throw new Error(message);
@@ -240,6 +242,7 @@ describe('durable minimized sync outbox', () => {
       capturedAt: '2026-08-20T12:00:00.000Z',
       retentionExpiresAt: EXPIRES,
       sensitivity: 'internal',
+      evidence: EVIDENCE,
       selected: 'Use a minimized public contract and durable local outbox.',
       rationale: 'This distinguishes the interface from its private sender implementation.',
       alternatives: [
@@ -288,6 +291,38 @@ describe('durable minimized sync outbox', () => {
     outbox.close();
   });
 
+  it('refuses to invent the user attribution a decision needs', () => {
+    const { outbox, stream } = open();
+    outbox.grantConsent(stream.streamId, grant());
+    expect(() =>
+      outbox.captureDecision(stream.streamId, {
+        grant: { grantId: GRANT, revision: 1 },
+        capturedAt: AT,
+        retentionExpiresAt: EXPIRES,
+        sensitivity: 'internal',
+        selected: 'A choice nobody made.',
+        rationale: 'No evidence was supplied.',
+        alternatives: [{ label: 'Alt', disposition: 'rejected', rationale: 'Fixture.' }],
+        evidence: [],
+      }),
+    ).toThrow(/explicit evidence/);
+    // The contract requires user-explicit evidence, so an agent-only decision cannot be laundered
+    // into one by omitting the field and letting the producer fill it in.
+    expect(() =>
+      outbox.captureDecision(stream.streamId, {
+        grant: { grantId: GRANT, revision: 1 },
+        capturedAt: AT,
+        retentionExpiresAt: EXPIRES,
+        sensitivity: 'internal',
+        selected: 'The agent decided.',
+        rationale: 'Model output only.',
+        alternatives: [{ label: 'Alt', disposition: 'rejected', rationale: 'Fixture.' }],
+        evidence: [{ authority: 'model', capturedAt: AT }],
+      }),
+    ).toThrow();
+    outbox.close();
+  });
+
   it('enforces sensitivity, retention, and the decision-only Phase 0 consent boundary', () => {
     const { outbox, stream } = open();
     expect(() =>
@@ -303,6 +338,7 @@ describe('durable minimized sync outbox', () => {
         selected: 'Unsafe',
         rationale: 'Outside consent.',
         alternatives: [{ label: 'Safe', disposition: 'rejected', rationale: 'Fixture.' }],
+        evidence: EVIDENCE,
       }),
     ).toThrow(/sensitivity|retention/);
     outbox.close();
