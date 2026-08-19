@@ -291,6 +291,89 @@ describe('durable minimized sync outbox', () => {
     outbox.close();
   });
 
+  it('steps over a permanently refused data operation but never a control one', () => {
+    const { outbox, stream } = open();
+    outbox.grantConsent(stream.streamId, grant());
+    capture(outbox, stream.streamId);
+    capture(outbox, stream.streamId);
+
+    const refusal = outbox.acknowledge({
+      contract: 'salidium.sync-ack',
+      contractVersion: 1,
+      streamId: stream.streamId,
+      lane: 'data',
+      acceptedThrough: -1,
+      rejection: { position: 0, code: 'invalid-record', retryable: false },
+    });
+    expect(refusal.refused).toEqual({ position: 0, code: 'invalid-record', blocking: false });
+    expect(refusal.skipped).toBe(true);
+    // The lane drains instead of resending a record the destination will never accept.
+    expect(refusal.acknowledgedThrough).toBe(0);
+    expect(outbox.nextBatch(stream.streamId, 'data')?.operations.map((op) => op.position)).toEqual([
+      1,
+    ]);
+
+    // A destination that could tell a client to skip a control operation could suppress consent
+    // revocation and deletion, so that direction is refused however the destination phrases it.
+    const blocked = outbox.acknowledge({
+      contract: 'salidium.sync-ack',
+      contractVersion: 1,
+      streamId: stream.streamId,
+      lane: 'control',
+      acceptedThrough: -1,
+      rejection: { position: 0, code: 'scope-denied', retryable: false },
+    });
+    expect(blocked.refused).toEqual({ position: 0, code: 'scope-denied', blocking: true });
+    expect(blocked.skipped).toBeUndefined();
+    expect(blocked.acknowledgedThrough).toBe(-1);
+    expect(outbox.nextBatch(stream.streamId, 'control')?.operations[0]?.position).toBe(0);
+    outbox.close();
+  });
+
+  it('reports a destination that walks its cursor backwards instead of following it', () => {
+    const { outbox, stream } = open();
+    outbox.grantConsent(stream.streamId, grant());
+    capture(outbox, stream.streamId);
+    capture(outbox, stream.streamId);
+    const ack = (acceptedThrough: number, extra: Record<string, unknown> = {}) =>
+      outbox.acknowledge({
+        contract: 'salidium.sync-ack',
+        contractVersion: 1,
+        streamId: stream.streamId,
+        lane: 'data',
+        acceptedThrough,
+        ...extra,
+      });
+
+    expect(ack(1).acknowledgedThrough).toBe(1);
+    // A server-side rollback must not silently discard records this replica already sent.
+    const regression = ack(0, {
+      reconciliationRequired: 'inventory-mismatch',
+      retryAfterMs: 5_000,
+    });
+    expect(regression.regressed).toBe(true);
+    expect(regression.acknowledgedThrough).toBe(1);
+    expect(regression.reconciliationRequired).toBe('inventory-mismatch');
+    expect(regression.retryAfterMs).toBe(5_000);
+    outbox.close();
+  });
+
+  it('refuses a rejection naming a position it never produced', () => {
+    const { outbox, stream } = open();
+    outbox.grantConsent(stream.streamId, grant());
+    expect(() =>
+      outbox.acknowledge({
+        contract: 'salidium.sync-ack',
+        contractVersion: 1,
+        streamId: stream.streamId,
+        lane: 'control',
+        acceptedThrough: -1,
+        rejection: { position: 7, code: 'invalid-record', retryable: false },
+      }),
+    ).toThrow(/never produced/);
+    outbox.close();
+  });
+
   it('fences a scope deletion against the data it was asked to cover', () => {
     const { outbox, stream } = open();
     outbox.grantConsent(stream.streamId, grant());

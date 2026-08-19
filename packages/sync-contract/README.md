@@ -54,6 +54,15 @@ skips them is not interoperable and, in several cases, is not safe.
   so the receiver cannot check it. Version 1 deliberately does not carry producer-asserted copies of
   those properties, because a field a receiver cannot verify reads as a checked constraint and is
   not one. Enforce the rule where the evidence actually is, and record derived scope as asserted.
+- **Refusal is lane-asymmetric.** A `rejection` with `retryable: false` tells a producer the
+  operation will never be accepted. On the data lane the producer may step past it so the lane
+  drains. On the control lane it may not, and the lane stops until a person resolves it: control
+  carries consent revocation, item deletion, and scope fences, so a destination able to say "skip
+  that one" could suppress exactly the operations a user relies on. Never send a non-retryable
+  control-lane rejection expecting it to be skipped.
+- **Never move a producer's cursor backwards.** An `acceptedThrough` lower than one already
+  confirmed does not un-confirm anything. Pair a genuine rollback with `reconciliationRequired` and
+  reconcile; a bare regression is ignored by a correct producer.
 - **An acknowledgement means durable transport acceptance and nothing else.** It does not mean the
   record was projected, indexed, retrievable, or deleted. Deletion completion is a separate receipt
   covering every named sink.

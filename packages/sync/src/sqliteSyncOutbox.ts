@@ -98,6 +98,22 @@ export interface ReviseDecisionInput extends Omit<CaptureDecisionInput, 'grant'>
   relation: 'corrects' | 'supersedes';
 }
 
+export interface AcknowledgementResult {
+  /** Local cursor after applying the acknowledgement. */
+  acknowledgedThrough: number;
+  /**
+   * A permanently refused operation. `blocking` marks a control-lane refusal, which stops the lane
+   * until a person resolves it rather than being stepped over.
+   */
+  refused?: { position: number; code: string; blocking: boolean };
+  /** True when a refused data-lane operation was stepped over so the lane could drain. */
+  skipped?: boolean;
+  /** The destination reported a cursor behind one it had already confirmed. */
+  regressed?: boolean;
+  reconciliationRequired?: 'cursor-ahead' | 'history-gap' | 'inventory-mismatch';
+  retryAfterMs?: number;
+}
+
 type DeletionReceipt = z.infer<typeof DeletionReceiptV1Schema>;
 
 /**
@@ -519,38 +535,87 @@ export class SqliteSyncOutbox {
     });
   }
 
-  acknowledge(value: SyncAckV1, acknowledgedAt = new Date()): void {
+  /**
+   * Applies a destination's acknowledgement and reports everything it said, rather than only the
+   * part that advances the cursor. A refusal, a reconciliation demand, and a cursor that moved
+   * backwards were all previously parsed and discarded, which left a permanently refused operation
+   * blocking its lane with no way to observe why.
+   *
+   * Skipping past a refusal is allowed on the data lane and never on the control lane. Control
+   * carries consent revocation, item deletion, and scope fences, so a destination that could tell a
+   * client to move past them could suppress exactly the operations a user relies on. A control-lane
+   * refusal therefore stops the lane and has to be resolved by a person.
+   */
+  acknowledge(value: SyncAckV1, acknowledgedAt = new Date()): AcknowledgementResult {
     const ack = SyncAckV1Schema.parse(value);
-    this.transaction(() => {
+    return this.transaction(() => {
       const stream = this.stream(ack.streamId);
       const current = stream.acknowledged[ack.lane];
-      if (ack.acceptedThrough <= current) return;
+      const at = acknowledgedAt.toISOString();
+      const result: AcknowledgementResult = { acknowledgedThrough: current };
+      if (ack.retryAfterMs !== undefined) result.retryAfterMs = ack.retryAfterMs;
+      if (ack.reconciliationRequired) result.reconciliationRequired = ack.reconciliationRequired;
+
       const positionColumn =
         ack.lane === 'control' ? 'next_control_position' : 'next_data_position';
+      const acknowledgedColumn =
+        ack.lane === 'control' ? 'acknowledged_control_position' : 'acknowledged_data_position';
       const next = this.db
         .prepare(`SELECT ${positionColumn} AS next_position FROM sync_streams WHERE stream_id=?`)
         .get(ack.streamId) as { next_position: number };
       if (ack.acceptedThrough >= next.next_position)
         throw new Error('acknowledgement is ahead of the local outbox');
-      const count = this.db
-        .prepare(
-          `SELECT COUNT(*) AS count FROM sync_outbox
-            WHERE stream_id=? AND lane=? AND position>? AND position<=?`,
-        )
-        .get(ack.streamId, ack.lane, current, ack.acceptedThrough) as { count: number };
-      if (count.count !== ack.acceptedThrough - current)
-        throw new Error('acknowledgement crosses a local history gap');
-      const acknowledged = acknowledgedAt.toISOString();
-      this.db
-        .prepare(
-          'UPDATE sync_outbox SET acknowledged_at=? WHERE stream_id=? AND lane=? AND position<=?',
-        )
-        .run(acknowledged, ack.streamId, ack.lane, ack.acceptedThrough);
-      const acknowledgedColumn =
-        ack.lane === 'control' ? 'acknowledged_control_position' : 'acknowledged_data_position';
-      this.db
-        .prepare(`UPDATE sync_streams SET ${acknowledgedColumn}=? WHERE stream_id=?`)
-        .run(ack.acceptedThrough, ack.streamId);
+
+      if (ack.acceptedThrough < current) {
+        // The destination confirmed less than it already had. Never move the cursor backwards on
+        // its say-so; report it so a rollback there cannot silently become data loss here.
+        result.regressed = true;
+      } else if (ack.acceptedThrough > current) {
+        const count = this.db
+          .prepare(
+            `SELECT COUNT(*) AS count FROM sync_outbox
+              WHERE stream_id=? AND lane=? AND position>? AND position<=?`,
+          )
+          .get(ack.streamId, ack.lane, current, ack.acceptedThrough) as { count: number };
+        if (count.count !== ack.acceptedThrough - current)
+          throw new Error('acknowledgement crosses a local history gap');
+        this.db
+          .prepare(
+            'UPDATE sync_outbox SET acknowledged_at=? WHERE stream_id=? AND lane=? AND position<=?',
+          )
+          .run(at, ack.streamId, ack.lane, ack.acceptedThrough);
+        this.db
+          .prepare(`UPDATE sync_streams SET ${acknowledgedColumn}=? WHERE stream_id=?`)
+          .run(ack.acceptedThrough, ack.streamId);
+        result.acknowledgedThrough = ack.acceptedThrough;
+      }
+
+      if (ack.rejection && !ack.rejection.retryable) {
+        const { position, code } = ack.rejection;
+        const row = this.db
+          .prepare(
+            'SELECT operation_id FROM sync_outbox WHERE stream_id=? AND lane=? AND position=?',
+          )
+          .get(ack.streamId, ack.lane, position) as { operation_id: string } | undefined;
+        if (!row) throw new Error('rejection names a position this replica never produced');
+        this.db
+          .prepare(
+            'UPDATE sync_outbox SET refused_at=?, refusal_code=? WHERE stream_id=? AND lane=? AND position=?',
+          )
+          .run(at, code, ack.streamId, ack.lane, position);
+        const blocking = ack.lane === 'control';
+        result.refused = { position, code, blocking };
+        // Only a data-lane refusal of the very next operation can be stepped over. A hole further
+        // ahead is not skippable either, because the operations before it were never confirmed.
+        if (!blocking && position === result.acknowledgedThrough + 1) {
+          this.db
+            .prepare(`UPDATE sync_streams SET ${acknowledgedColumn}=? WHERE stream_id=?`)
+            .run(position, ack.streamId);
+          result.acknowledgedThrough = position;
+          result.skipped = true;
+        }
+      }
+      return result;
     });
   }
 

@@ -270,6 +270,10 @@ CREATE TABLE IF NOT EXISTS sync_outbox (
   attempts INTEGER NOT NULL DEFAULT 0,
   next_attempt_at TEXT,
   acknowledged_at TEXT,
+  -- A destination can refuse an operation permanently. That is a distinct outcome from durable
+  -- acceptance and must never be recorded as one, or a refused record would read as delivered.
+  refused_at TEXT,
+  refusal_code TEXT,
   PRIMARY KEY (stream_id, lane, position),
   FOREIGN KEY (stream_id) REFERENCES sync_streams(stream_id)
 );
