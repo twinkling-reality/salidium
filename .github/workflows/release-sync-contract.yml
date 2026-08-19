@@ -101,60 +101,7 @@ jobs:
           mkdir "$RUNNER_TEMP/consumer"
           npm install --prefix "$RUNNER_TEMP/consumer" "$package" --ignore-scripts --no-audit --no-fund
           cd "$RUNNER_TEMP/consumer"
-          cat > check.mjs <<'NODE'
-          import { existsSync, readdirSync, readFileSync } from 'node:fs';
-          import {
-            assertSendableBatch,
-            DeletionReceiptV1Schema,
-            ReconciliationInventoryV1Schema,
-            SyncAckV1Schema,
-            verifySyncOperationDigest,
-          } from '@salidium/sync-contract';
-          const root = './node_modules/@salidium/sync-contract';
-          const pkg = JSON.parse(readFileSync(`${root}/package.json`, 'utf8'));
-          if (JSON.stringify(pkg).includes('workspace:'))
-            throw new Error('published manifest contains workspace dependency');
-
-          // Every export condition must resolve to a file the tarball actually shipped. A condition
-          // pointing outside `files` installs cleanly and then fails only for the consumer that
-          // happens to request it, which a single default-condition import never reaches.
-          const targets = [];
-          const walk = (node) => {
-            if (typeof node === 'string') targets.push(node);
-            else if (node && typeof node === 'object') Object.values(node).forEach(walk);
-          };
-          walk(pkg.exports);
-          for (const target of targets) {
-            if (!existsSync(new URL(target, new URL(`${root}/`, import.meta.url))))
-              throw new Error(`exports target ${target} is not in the published package`);
-          }
-
-          // Validate the whole retained corpus, not one file. These fixtures are the compatibility
-          // evidence for this wire version and cannot be authored after it ships.
-          const dir = `${root}/fixtures/v1`;
-          const names = readdirSync(dir).sort();
-          if (names.length === 0) throw new Error('no retained fixtures shipped');
-          const seen = new Set();
-          for (const name of names) {
-            const value = JSON.parse(readFileSync(`${dir}/${name}`, 'utf8'));
-            if (value.contract === 'salidium.sync-batch') {
-              for (const operation of assertSendableBatch(value).operations) {
-                if (!verifySyncOperationDigest(operation))
-                  throw new Error(`${name}: digest does not verify`);
-                seen.add(operation.type);
-              }
-            } else if (value.contract === 'salidium.sync-ack') SyncAckV1Schema.parse(value);
-            else if (value.contract === 'salidium.deletion-receipt') DeletionReceiptV1Schema.parse(value);
-            else if (value.contract === 'salidium.reconciliation-inventory')
-              ReconciliationInventoryV1Schema.parse(value);
-            else throw new Error(`${name}: unrecognized fixture contract ${value.contract}`);
-          }
-          for (const type of ['consent.put', 'consent.revoke', 'item.put', 'item.delete', 'scope.delete']) {
-            if (!seen.has(type)) throw new Error(`no retained fixture covers ${type}`);
-          }
-          console.log(`verified ${names.length} retained fixtures covering ${seen.size} operation types`);
-          NODE
-          # Both resolution paths, so a condition that is broken for half the ecosystem fails here.
+          cp "$GITHUB_WORKSPACE/scripts/verify-sync-contract-package.mjs" check.mjs
           node check.mjs
           node --conditions=development check.mjs
 
