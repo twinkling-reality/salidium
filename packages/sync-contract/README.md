@@ -44,6 +44,12 @@ skips them is not interoperable and, in several cases, is not safe.
 - **Recheck consent at ingest, not only at capture.** An operation cites the grant revision that was
   current when it was produced. An offline device can present operations authorized by a grant that
   has since been revoked, and the receiver, not the producer, is the authority on that.
+- **Treat a derivation's scope as producer-asserted, not receiver-verified.** The rule a derived
+  record inherits the intersection of its evidence scopes, the maximum sensitivity, and the earliest
+  expiry is real, but an evidence reference is an opaque handle to material the receiver never holds,
+  so the receiver cannot check it. Version 1 deliberately does not carry producer-asserted copies of
+  those properties, because a field a receiver cannot verify reads as a checked constraint and is
+  not one. Enforce the rule where the evidence actually is, and record derived scope as asserted.
 - **An acknowledgement means durable transport acceptance and nothing else.** It does not mean the
   record was projected, indexed, retrievable, or deleted. Deletion completion is a separate receipt
   covering every named sink.

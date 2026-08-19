@@ -66,7 +66,6 @@ function common(kind: string) {
         authority: 'user-explicit',
         capturedAt: AT,
         independenceId: IDS.independence,
-        exportDigest: `sha256:${'a'.repeat(64)}`,
       },
     ],
     links: [],

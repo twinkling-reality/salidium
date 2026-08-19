@@ -81,14 +81,26 @@ export const AssessmentSchema = z.discriminatedUnion('mode', [
 ]);
 export type Assessment = z.infer<typeof AssessmentSchema>;
 
+/**
+ * An opaque handle to evidence the receiver cannot see, plus the few properties it must reason
+ * about: who is behind it, what it does for the item, when it was captured, and which other
+ * references share a source so repetition cannot read as corroboration.
+ *
+ * There is deliberately no digest here. An earlier revision carried one, computed over exactly the
+ * other fields of this object, so any receiver could recompute it from the record it accompanied.
+ * It authenticated nothing and verified nothing, while looking like it did both, and the operation's
+ * own `contentDigest` already covers these fields against tampering in transit.
+ *
+ * There is also deliberately no scope, sensitivity, or expiry. A receiver cannot verify a claim
+ * about evidence it will never hold, so carrying producer-asserted copies would turn an
+ * unverifiable assertion into something that reads as a checked constraint.
+ */
 export const EvidenceReferenceSchema = z.strictObject({
   evidenceId: OpaqueIdSchema,
   role: z.enum(['supports', 'contradicts', 'corrects', 'outcome']),
   authority: z.enum(['user-explicit', 'provider-record', 'salidium-rule', 'model']),
   capturedAt: CanonicalTimestampSchema,
   independenceId: OpaqueIdSchema,
-  /** Digest of the minimized evidence descriptor, never of a private provider record. */
-  exportDigest: Sha256DigestSchema,
 });
 export type EvidenceReference = z.infer<typeof EvidenceReferenceSchema>;
 

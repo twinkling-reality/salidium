@@ -639,7 +639,13 @@ export class SqliteSyncOutbox {
         capturedAt: input.capturedAt,
         independenceId,
       };
-      const exportDigest = digestCanonical(descriptor);
+      /*
+       * Local only. This binds the private map row to the descriptor that was exported, so a later
+       * lookup can tell that the row still describes the reference it was written for. It is not a
+       * wire field: a digest a receiver can recompute from the record it accompanies proves nothing
+       * to that receiver, and shipping one invited it to be mistaken for evidence integrity.
+       */
+      const descriptorDigest = digestCanonical(descriptor);
       this.db
         .prepare(
           `INSERT INTO intelligence_evidence_map
@@ -655,10 +661,10 @@ export class SqliteSyncOutbox {
           descriptor.authority,
           descriptor.role,
           descriptor.capturedAt,
-          exportDigest,
+          descriptorDigest,
           new Date().toISOString(),
         );
-      return { ...descriptor, exportDigest };
+      return descriptor;
     });
   }
 

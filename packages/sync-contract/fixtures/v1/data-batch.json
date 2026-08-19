@@ -15,7 +15,7 @@
       "position": 0,
       "operationId": "30000000-0000-4000-8000-000000000020",
       "occurredAt": "2026-08-19T12:00:00.000Z",
-      "contentDigest": "sha256:d3e10d38dd39d6215b72a658e53ce1fd4fa8f386e74b6cc0580e8131752f0ffc",
+      "contentDigest": "sha256:6b9662b324d8e1d4199a93a900f5474506058b1a99ceeb13fc9ed2352c2ff79f",
       "type": "item.put",
       "grant": {
         "grantId": "30000000-0000-4000-8000-000000000001",
@@ -64,24 +64,21 @@
             "role": "supports",
             "authority": "user-explicit",
             "capturedAt": "2026-08-19T12:00:00.000Z",
-            "independenceId": "30000000-0000-4000-8000-000000000014",
-            "exportDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            "independenceId": "30000000-0000-4000-8000-000000000014"
           },
           {
             "evidenceId": "30000000-0000-4000-8000-000000000013",
             "role": "supports",
             "authority": "provider-record",
             "capturedAt": "2026-08-19T12:00:00.000Z",
-            "independenceId": "30000000-0000-4000-8000-000000000014",
-            "exportDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+            "independenceId": "30000000-0000-4000-8000-000000000014"
           },
           {
             "evidenceId": "30000000-0000-4000-8000-000000000016",
             "role": "contradicts",
             "authority": "model",
             "capturedAt": "2026-08-19T12:00:00.000Z",
-            "independenceId": "30000000-0000-4000-8000-000000000015",
-            "exportDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+            "independenceId": "30000000-0000-4000-8000-000000000015"
           }
         ],
         "links": [
