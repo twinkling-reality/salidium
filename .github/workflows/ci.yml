@@ -151,24 +151,31 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # The full engine matrix costs several minutes of downloads whose duration is set by the
-      # network, not by this repository, and a push to `main` is what the release workflow reads to
-      # decide whether a commit is publishable. Letting a webkit download stall that gate is the
-      # wrong trade, so every push and pull request runs Chromium and the nightly schedule carries
-      # cross-engine coverage. A manual dispatch can ask for the full set on demand.
-      - name: Choose the engine set
+      # `--with-deps` runs apt-get, and apt is what actually broke this job: three consecutive runs
+      # died mid-download from azure.archive.ubuntu.com, where a 3 MB font package took eight
+      # minutes and a 7.5 MB one never finished. The runner image already ships Playwright's system
+      # libraries, so the gating path installs browser bundles from Playwright's own CDN and never
+      # touches an Ubuntu mirror. The nightly run keeps `--with-deps` because it is the one place a
+      # genuinely missing library should be caught, and a slow mirror there only delays a cron job.
+      #
+      # Engine count is the second lever, not the first. A push to `main` is what the release
+      # workflow reads to decide whether a commit is publishable, so pushes and pull requests run
+      # Chromium and the schedule carries cross-engine coverage.
+      - name: Choose the browser install
         id: engines
         run: |
           if [ "$GITHUB_EVENT_NAME" = "schedule" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             echo "list=chromium firefox webkit" >> "$GITHUB_OUTPUT"
+            echo "deps=--with-deps" >> "$GITHUB_OUTPUT"
             echo "full=1" >> "$GITHUB_OUTPUT"
           else
             echo "list=chromium" >> "$GITHUB_OUTPUT"
+            echo "deps=" >> "$GITHUB_OUTPUT"
             echo "full=" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Install browsers
-        run: pnpm exec playwright install --with-deps ${{ steps.engines.outputs.list }}
+        run: pnpm exec playwright install ${{ steps.engines.outputs.deps }} ${{ steps.engines.outputs.list }}
 
       - name: Run real-daemon browser tests
         env:
