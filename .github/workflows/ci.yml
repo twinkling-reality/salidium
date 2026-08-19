@@ -135,7 +135,10 @@ jobs:
   browser-e2e:
     name: Browser E2E and accessibility
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Downloading three engines has twice run past 20 minutes on a slow runner and killed the job
+    # mid-download. Chromium alone finishes in about a minute, so this ceiling now only has to cover
+    # the nightly full-matrix run.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
 
@@ -148,23 +151,29 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Pull requests get both desktop and narrow Chromium. Main, manual, and nightly runs add the
-      # other rendering engines so portability does not make every contribution wait on downloads.
-      - name: Install browsers
+      # The full engine matrix costs several minutes of downloads whose duration is set by the
+      # network, not by this repository, and a push to `main` is what the release workflow reads to
+      # decide whether a commit is publishable. Letting a webkit download stall that gate is the
+      # wrong trade, so every push and pull request runs Chromium and the nightly schedule carries
+      # cross-engine coverage. A manual dispatch can ask for the full set on demand.
+      - name: Choose the engine set
+        id: engines
         run: |
-          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-            pnpm exec playwright install --with-deps chromium
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "list=chromium firefox webkit" >> "$GITHUB_OUTPUT"
+            echo "full=1" >> "$GITHUB_OUTPUT"
           else
-            pnpm exec playwright install --with-deps chromium firefox webkit
+            echo "list=chromium" >> "$GITHUB_OUTPUT"
+            echo "full=" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Install browsers
+        run: pnpm exec playwright install --with-deps ${{ steps.engines.outputs.list }}
+
       - name: Run real-daemon browser tests
-        run: |
-          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-            pnpm test:e2e
-          else
-            PLAYWRIGHT_FULL_BROWSERS=1 pnpm test:e2e
-          fi
+        env:
+          PLAYWRIGHT_FULL_BROWSERS: ${{ steps.engines.outputs.full }}
+        run: pnpm test:e2e
 
       - name: Upload browser diagnostics
         if: failure()
