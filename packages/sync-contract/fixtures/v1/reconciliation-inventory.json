@@ -1,0 +1,19 @@
+{
+  "contract": "salidium.reconciliation-inventory",
+  "contractVersion": 1,
+  "streamId": "30000000-0000-4000-8000-000000000004",
+  "cursor": "30000000-0000-4000-8000-000000000010",
+  "complete": false,
+  "live": [
+    {
+      "itemId": "30000000-0000-4000-8000-000000000011",
+      "revision": 1
+    }
+  ],
+  "tombstones": [
+    {
+      "itemId": "30000000-0000-4000-8000-000000000010",
+      "deleteThroughRevision": 2
+    }
+  ]
+}

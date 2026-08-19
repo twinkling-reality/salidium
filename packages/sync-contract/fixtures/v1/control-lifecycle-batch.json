@@ -1,0 +1,132 @@
+{
+  "contract": "salidium.sync-batch",
+  "contractVersion": 1,
+  "streamId": "30000000-0000-4000-8000-000000000004",
+  "replicaId": "30000000-0000-4000-8000-000000000005",
+  "lane": "control",
+  "afterPosition": -1,
+  "operations": [
+    {
+      "contract": "salidium.sync-operation",
+      "contractVersion": 1,
+      "streamId": "30000000-0000-4000-8000-000000000004",
+      "replicaId": "30000000-0000-4000-8000-000000000005",
+      "lane": "control",
+      "position": 0,
+      "operationId": "30000000-0000-4000-8000-000000000020",
+      "occurredAt": "2026-08-19T12:00:00.000Z",
+      "contentDigest": "sha256:06b37f0e804028e4149cef8330457d01978490336a7d22cfcf5ac4d6f307ff5b",
+      "type": "consent.put",
+      "grant": {
+        "contract": "salidium.consent-grant",
+        "contractVersion": 1,
+        "grantId": "30000000-0000-4000-8000-000000000001",
+        "revision": 1,
+        "destinationId": "30000000-0000-4000-8000-000000000002",
+        "scope": {
+          "kind": "project",
+          "projectId": "30000000-0000-4000-8000-000000000003"
+        },
+        "purpose": "personal-continuity",
+        "allowedKinds": [
+          "decision"
+        ],
+        "maximumSensitivity": "internal",
+        "issuedAt": "2026-08-19T12:00:00.000Z",
+        "effectiveAt": "2026-08-19T12:00:00.000Z",
+        "expiresAt": "2026-09-18T12:00:00.000Z",
+        "retentionMaximumDays": 30,
+        "redactionPolicyVersion": "secrets-v1",
+        "minimizationPolicyVersion": "decision-v1",
+        "rawEvidence": false,
+        "status": "active"
+      }
+    },
+    {
+      "contract": "salidium.sync-operation",
+      "contractVersion": 1,
+      "streamId": "30000000-0000-4000-8000-000000000004",
+      "replicaId": "30000000-0000-4000-8000-000000000005",
+      "lane": "control",
+      "position": 1,
+      "operationId": "30000000-0000-4000-8000-000000000021",
+      "previousOperationId": "30000000-0000-4000-8000-000000000020",
+      "occurredAt": "2026-08-19T12:00:00.000Z",
+      "contentDigest": "sha256:d1fbb1c23afbe38b8a341f006c9123fea48cd1501f362970c84e0fd393aede7c",
+      "type": "item.delete",
+      "grant": {
+        "grantId": "30000000-0000-4000-8000-000000000001",
+        "revision": 1
+      },
+      "scope": {
+        "kind": "project",
+        "projectId": "30000000-0000-4000-8000-000000000003"
+      },
+      "itemId": "30000000-0000-4000-8000-000000000010",
+      "deleteThroughRevision": 2,
+      "reason": "user-request",
+      "requestedAt": "2026-08-19T12:00:00.000Z"
+    },
+    {
+      "contract": "salidium.sync-operation",
+      "contractVersion": 1,
+      "streamId": "30000000-0000-4000-8000-000000000004",
+      "replicaId": "30000000-0000-4000-8000-000000000005",
+      "lane": "control",
+      "position": 2,
+      "operationId": "30000000-0000-4000-8000-000000000022",
+      "previousOperationId": "30000000-0000-4000-8000-000000000021",
+      "occurredAt": "2026-08-19T12:00:00.000Z",
+      "contentDigest": "sha256:34181cebd6244c28b1553bba77146d6242bdc2a05e99337e7310e69ea4aa7def",
+      "type": "consent.revoke",
+      "grant": {
+        "contract": "salidium.consent-grant",
+        "contractVersion": 1,
+        "grantId": "30000000-0000-4000-8000-000000000001",
+        "revision": 2,
+        "destinationId": "30000000-0000-4000-8000-000000000002",
+        "scope": {
+          "kind": "project",
+          "projectId": "30000000-0000-4000-8000-000000000003"
+        },
+        "purpose": "personal-continuity",
+        "allowedKinds": [
+          "decision"
+        ],
+        "maximumSensitivity": "internal",
+        "issuedAt": "2026-08-19T12:00:00.000Z",
+        "effectiveAt": "2026-08-19T12:00:00.000Z",
+        "expiresAt": "2026-09-18T12:00:00.000Z",
+        "retentionMaximumDays": 30,
+        "redactionPolicyVersion": "secrets-v1",
+        "minimizationPolicyVersion": "decision-v1",
+        "rawEvidence": false,
+        "status": "revoked",
+        "revokedAt": "2026-08-19T12:00:00.000Z"
+      }
+    },
+    {
+      "contract": "salidium.sync-operation",
+      "contractVersion": 1,
+      "streamId": "30000000-0000-4000-8000-000000000004",
+      "replicaId": "30000000-0000-4000-8000-000000000005",
+      "lane": "control",
+      "position": 3,
+      "operationId": "30000000-0000-4000-8000-000000000023",
+      "previousOperationId": "30000000-0000-4000-8000-000000000022",
+      "occurredAt": "2026-08-19T12:00:00.000Z",
+      "contentDigest": "sha256:22bf1cfe739abe1b909b77871809f8d68711cd99aaaa6d4fe84608724a66e768",
+      "type": "scope.delete",
+      "grant": {
+        "grantId": "30000000-0000-4000-8000-000000000001",
+        "revision": 2
+      },
+      "scope": {
+        "kind": "project",
+        "projectId": "30000000-0000-4000-8000-000000000003"
+      },
+      "reason": "consent-withdrawn",
+      "requestedAt": "2026-08-19T12:00:00.000Z"
+    }
+  ]
+}

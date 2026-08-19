@@ -53,9 +53,19 @@ The contract has an independent `0.x` version and tag `sync-contract-v<version>`
 review schema compatibility, retain old fixtures, and run the full suite. Dispatch **Release sync
 contract** from current `main` with `next` while the API is experimental and type
 `publish @salidium/sync-contract@<version>` exactly. Its verification job packs the library, installs
-it into a directory outside the monorepo, rejects workspace dependencies, imports the public runtime
-surface, and validates the retained v1 fixture before a protected publisher receives the checksummed
-tarball.
+it into a directory outside the monorepo, rejects workspace dependencies, checks that every
+`exports` condition resolves to a file the tarball actually contains, imports the public runtime
+surface under both the default and `development` resolution paths, and validates every retained
+fixture and every sync operation type before a protected publisher receives the checksummed tarball.
+
+Both resolution paths matter because the failure they catch is invisible to a single import: a
+condition whose target is missing from `files` installs cleanly and breaks only for the consumer
+that requests that condition.
+
+Fixtures under `packages/sync-contract/fixtures/<wire version>/` are write-once. They record what a
+released wire version accepted, so they are added while that version is being prepared and are never
+edited or regenerated afterwards. A fixture produced by the code under test proves only that the
+code agrees with itself, and a fixture written after publication cannot testify about what shipped.
 
 For the first scoped package version, use the same short-lived bootstrap process and exact
 confirmation `bootstrap @salidium/sync-contract@<version>`, then configure npm trusted publishing

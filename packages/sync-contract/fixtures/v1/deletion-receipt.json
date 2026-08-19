@@ -1,0 +1,21 @@
+{
+  "contract": "salidium.deletion-receipt",
+  "contractVersion": 1,
+  "receiptId": "30000000-0000-4000-8000-000000000030",
+  "destinationId": "30000000-0000-4000-8000-000000000002",
+  "operationId": "30000000-0000-4000-8000-000000000021",
+  "target": {
+    "kind": "item",
+    "itemId": "30000000-0000-4000-8000-000000000010",
+    "deleteThroughRevision": 2
+  },
+  "completedAt": "2026-08-20T12:00:00.000Z",
+  "sinks": [
+    "ledger",
+    "projection",
+    "search",
+    "embedding",
+    "cache",
+    "backup-fence"
+  ]
+}

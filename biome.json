@@ -12,7 +12,8 @@
       "!**/dist",
       "!**/dist-types",
       "!**/node_modules",
-      "!fixtures/**/*.jsonl"
+      "!fixtures/**/*.jsonl",
+      "!packages/sync-contract/fixtures"
     ]
   },
   "formatter": {
