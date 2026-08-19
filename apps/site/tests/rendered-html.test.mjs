@@ -22,31 +22,25 @@ test("server-renders the Salidium landing page", async () => {
   const html = await response.text();
   assert.match(html, /<title>Salidium: Agent output, turned into a visual report<\/title>/i);
   assert.match(html, /Agent output, turned into a visual report\./);
-  assert.match(html, /what it is doing, why,[\s\S]*how, and what still needs attention/);
+  assert.match(html, /Know what changed, why, what passed, and what needs you/);
   assert.match(html, /npx salidium/);
   assert.match(html, /aria-pressed="false">pnpm</);
   assert.match(html, />Theme \/ Light<\/button>/);
   assert.match(html, /href="\/docs">Docs<\/a>/);
-  assert.match(html, /The whole report, not just a summary/);
-  assert.match(html, /Approach changed[\s\S]*Verified[\s\S]*Left[\s\S]*Review[\s\S]*Evidence/);
-  assert.match(html, /Rewind shows the report at an earlier moment[\s\S]*Quantities shows the scale[\s\S]*History/);
-  assert.match(html, /<h2 id="setup-title">Setup<\/h2>/);
-  assert.match(html, /Run Salidium once[\s\S]*shows what it wants to connect[\s\S]*asks[\s\S]*first/);
-  assert.match(html, /Codex needs one approval in/);
-  assert.match(html, /native Windows[\s\S]*transcript history[\s\S]*POSIX live-hook relay/);
-  assert.match(
-    html,
-    /generated explanations send a bounded, redacted excerpt[\s\S]*plan or API allowance[\s\S]*turn them[\s\S]*off/i,
-  );
+  assert.match(html, /One agent run\. Two ways to read it/);
+  assert.equal(html.match(/id="demo-title"/g)?.length, 1);
+  assert.match(html, /Live session recovery[\s\S]*Agent response[\s\S]*Salidium report/);
+  assert.match(html, /Implemented safe recovery for live sessions[\s\S]*Stale sessions now resnapshot[\s\S]*Stream tests, full suite/);
+  assert.doesNotMatch(html, /What do you need to know\?|Long update/);
+  assert.doesNotMatch(html, /Try it on your own agent|Runs locally|Setup guide/);
+  assert.match(html, /rel="canonical" href="https:\/\/salidium\.com\/?"/);
+  assert.match(html, /property="og:url" content="https:\/\/salidium\.com\/?"/);
   assert.doesNotMatch(html, /salidium install-hooks|salidium doctor/);
   assert.doesNotMatch(html, /<h2 id="install-title">Install<\/h2>|<span>Start<\/span>/);
   assert.match(html, /data-theme="light"/);
   assert.match(html, /localStorage\.getItem\("salidium-site-theme"\)/);
-  assert.match(html, /highlights evidence in a verbose agent response and maps it into Why and How/i);
-  assert.match(html, /See the cause and the fix without reading every line/);
-  assert.match(html, /I traced the missing session state through SessionCoordinator and transcriptTailer/);
-  assert.match(html, /Evidence was lost because the cursor advanced before storage was durable/);
-  assert.match(html, /Queue the record\. Flush storage\. Then advance the cursor\./);
+  assert.doesNotMatch(html, /cursorOffset|SessionCoordinator|transcriptTailer|durable storage/i);
+  assert.doesNotMatch(html, /The whole report, not just a summary|See the cause and the fix|What do you need to know/);
   assert.doesNotMatch(html, /translation-arrow|translation-flow|Before · Agent record|After · Salidium/);
   assert.doesNotMatch(html, /og-v3\.png|Checks passed|47 records/);
   assert.doesNotMatch(html, /salidium-demo\.mp4|<video/i);

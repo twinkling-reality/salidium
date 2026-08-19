@@ -29,9 +29,7 @@ function subscribeToTheme(onStoreChange: () => void) {
 
 const homeLinks = [
   ["Overview", "/"],
-  ["Demo", "/#demo"],
-  ["Report", "/#report"],
-  ["Setup", "/#setup"],
+  ["How it works", "/#demo"],
   ["Docs", "/docs"],
 ] as const;
 

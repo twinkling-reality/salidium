@@ -8,7 +8,8 @@ const description =
 export const metadata: Metadata = {
   title,
   description,
-  openGraph: { title, description, images: [] },
+  alternates: { canonical: "/docs" },
+  openGraph: { title, description, url: "/docs", images: [] },
   twitter: { card: "summary", title, description, images: [] },
 };
 
