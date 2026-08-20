@@ -69,6 +69,36 @@ try {
     console.log(`wrote ${file}`);
     await context.close();
   }
+
+  /*
+   * The link card, at the size a link card is rendered: 1200x630, which nothing else on this site
+   * is. It is the same daemon and the same interface, photographed at a different window, because
+   * a card drawn for the purpose would be the one image on the site that is not the product.
+   *
+   * The session list is folded away first. At 1200 wide it takes 500 of them, leaving the report
+   * column under the 860px container query where the flow diagram stacks into a single column and
+   * stops being the thing worth showing. Folded, the report gets the whole window.
+   */
+  const cardContext = await browser.newContext({
+    viewport: { width: 1200, height: 630 },
+    deviceScaleFactor: 2,
+    colorScheme: 'light',
+  });
+  const cardPage = await cardContext.newPage();
+  await cardPage.goto(demo.url, { waitUntil: 'domcontentloaded' });
+  await cardPage.getByText('4 files changed, unverified').waitFor({ timeout: 15_000 });
+  await cardPage.keyboard.press('[');
+  await cardPage.locator('.side').waitFor({ state: 'hidden', timeout: 5_000 });
+  /*
+   * Scoped to the report rather than matched by text. The session title is also a row in the list,
+   * and once the list is folded that row is `hidden` — so a text match resolved to an element that
+   * was never going to become visible and the wait ran out on a page that had already rendered.
+   */
+  await cardPage.locator('.masthead h1').waitFor({ timeout: 15_000 });
+  const card = `${OUT}card.png`;
+  await cardPage.screenshot({ path: card });
+  console.log(`wrote ${card}`);
+  await cardContext.close();
 } finally {
   await browser.close();
   await demo.stop();

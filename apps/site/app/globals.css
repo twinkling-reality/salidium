@@ -127,9 +127,12 @@ code {
 }
 
 /* Radius belongs to the shape, not to the focus state. Putting it here made the copy button's
- * corners snap from 14px to 5px the moment it was tabbed to. */
-a:focus-visible,
-button:focus-visible {
+ * corners snap from 14px to 5px the moment it was tabbed to.
+ *
+ * Everything focusable, not just links and buttons. Scoped to those two it was correct only for as
+ * long as they were the only tab stops on the site, and the moment a scrollable figure took one it
+ * would have taken it invisibly. */
+:focus-visible {
   outline: 2px solid var(--text);
   outline-offset: 3px;
 }
@@ -1764,4 +1767,59 @@ kbd {
      */
     animation-delay: 0s !important;
   }
+}
+
+/* ------------------------------------------------------------------ not found */
+
+/*
+ * One screen, centred, on the same ground the home page uses. The lockup is the largest thing on
+ * it because the one question this page has to answer first is which site you are on: the page it
+ * replaces answered that with the home page's title and nothing else.
+ */
+.notfound {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  padding: var(--space-6);
+  background: var(--bg-subtle);
+}
+
+.notfound-inner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  align-items: flex-start;
+}
+
+.notfound-brand {
+  color: var(--text);
+  transition: color var(--motion-fast) var(--ease);
+}
+
+.notfound-line {
+  margin: 0;
+  max-width: 24ch;
+  font-size: var(--text-xl);
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  line-height: 1.35;
+  color: var(--text-secondary);
+}
+
+.notfound-back {
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+  transition: color var(--motion-fast) var(--ease);
+}
+
+.notfound-back:hover {
+  color: var(--text);
+}
+
+/* The capture is a tab stop now, so its ring needs to sit outside the picture rather than on it. */
+.doc-shot:focus-visible {
+  outline-offset: 2px;
 }

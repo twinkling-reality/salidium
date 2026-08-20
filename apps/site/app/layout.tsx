@@ -5,14 +5,35 @@ const title = "Salidium: Agent output, turned into a visual report";
 const description =
   "Salidium reads a Claude Code or Codex run and tells you what changed, why, which checks passed, and what needs you. Runs on your machine.";
 
+/*
+ * The link card. It is a capture of the running interface at 1200x630, written by
+ * `scripts/capture-demo.mjs` from the same seeded daemon every other image on this site comes
+ * from, so it cannot show a product that does not exist. Shared anywhere, this page used to render
+ * as a bare text card: the one thing worth showing about a visual report was the thing a link
+ * to it did not carry.
+ */
+const card = {
+  url: "/card.png",
+  width: 2400,
+  height: 1260,
+  alt: "A Salidium report for Fix double charges on checkout retry. The verdict reads 4 files changed, unverified, with two files changed after the last passing check, and two things to review.",
+};
+
 export const metadata: Metadata = {
   metadataBase: new URL("https://salidium.com"),
   title,
   description,
-  alternates: { canonical: "/" },
+  alternates: {
+    canonical: "/",
+    /*
+     * The documentation as plain text, said in the head rather than left to a convention an agent
+     * has to already know. `/llms.txt` was reachable and advertised from nowhere at all.
+     */
+    types: { "text/plain": "/llms.txt" },
+  },
   icons: { icon: "/favicon-v2.svg", shortcut: "/favicon-v2.svg" },
-  openGraph: { type: "website", url: "/", title, description },
-  twitter: { card: "summary", title, description },
+  openGraph: { type: "website", url: "/", title, description, images: [card] },
+  twitter: { card: "summary_large_image", title, description, images: [card] },
 };
 
 export default function RootLayout({
