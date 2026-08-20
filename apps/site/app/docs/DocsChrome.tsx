@@ -127,8 +127,7 @@ function AgentMenu({ markdown, mdPath }: { markdown: string; mdPath: string }) {
        * and a roving tabindex, and announcing a widget that does not behave like one leaves a
        * screen reader user pressing keys that do nothing.
        */}
-      {open && (
-        <div className="doc-agent-menu" id="doc-agent-menu">
+      <div className={`doc-agent-menu arrives ${open ? "is-open" : ""}`} id="doc-agent-menu">
           <a href={mdPath} onClick={() => setOpen(false)}>
             View as Markdown
           </a>
@@ -141,8 +140,7 @@ function AgentMenu({ markdown, mdPath }: { markdown: string; mdPath: string }) {
           <button type="button" onClick={ask("https://chatgpt.com/?q=")}>
             Open in ChatGPT
           </button>
-        </div>
-      )}
+      </div>
 
       <span className="sr-only" aria-live="polite">
         {state === "copied" ? "Page copied as Markdown" : state === "failed" ? "Copy failed." : ""}

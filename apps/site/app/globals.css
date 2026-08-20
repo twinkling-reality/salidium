@@ -169,11 +169,16 @@ code {
  * and the capture land on the same beat, because the sentence and the thing that proves it are one
  * statement and arriving apart would make the picture look like decoration that followed.
  *
- * It is the product's own gesture, restated because the site imports `scale.css` and not
- * `primitives.css`, which is the control library. `primitives.css` sets out why it is this and not
- * something else: opacity and translate only, never scale, because a scale moves the box and
- * `getBoundingClientRect` then reports the moved one; and achromatic, because colour in the app
- * means a verdict and an arrival is not a verdict.
+ * It is the product's own gesture, and it stays a keyframe here while everything else that
+ * arrives has become a transition (`.arrives`, scale.css). The rule those follow is that a state
+ * which arrives with motion leaves with the same motion reversed, and this one has no leaving to
+ * describe: the page composes once, on load, and the cards are still there afterwards. A
+ * transition cannot express that at all, because there is no state change to transition from.
+ *
+ * It used to have a second job. The docs menu ran these same keyframes at 120ms with a negative
+ * rise, which made it the product's popover under another name and at another speed, and gave the
+ * repository two entrance gestures to keep in step. That one is now `.arrives` like its
+ * counterpart in the application, and this is left with the one thing it was always right for.
  *
  * Pure CSS, and one-shot. There is no JavaScript in it, so a visitor without it sees the same page
  * compose in the same order rather than an empty card waiting for a class that never lands.
@@ -1035,8 +1040,13 @@ h1 {
   background: var(--bg);
   box-shadow: var(--shadow-float);
   padding: var(--space-1);
-  animation: enter var(--motion-fast) var(--ease) backwards;
-  --enter-rise: -4px;
+  /*
+   * Hangs under its trigger, so it comes down from it and goes back up into it. `.arrives`
+   * (scale.css) carries both directions, and taking it settles two things this rule used to get
+   * wrong on its own: it opened over 120ms while the identical panel in the product opened over
+   * 180ms, and it closed in a single frame because a keyframe has no way to describe leaving.
+   */
+  --rise: -4px;
 }
 
 .doc-agent-menu > * {
