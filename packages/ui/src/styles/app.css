@@ -2919,6 +2919,9 @@
 .rp-plan-item,
 .rp-status li {
   display: flex;
+  /* A row carries a scope tag and a caveat sentence as well as its method, so it wraps rather
+     than pushing the last of them off the panel. */
+  flex-wrap: wrap;
   gap: var(--space-2);
   align-items: baseline;
   padding: 2px 0;
@@ -2967,6 +2970,17 @@
   font-size: var(--text-xs);
   color: var(--text-tertiary);
   border-bottom: 1px dashed var(--border-strong);
+}
+
+/*
+ * Scope, and which reading the outcome came from. Both qualify what the row means without
+ * contradicting it, so they sit quiet beside it rather than taking the warning colour `not the
+ * latest run` has: that one says the reading is out of date, these say what it covered.
+ */
+.rp-subset,
+.rp-caveat {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
 }
 
 /*

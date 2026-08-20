@@ -317,6 +317,47 @@ export function StatusColumn({
   return <StatusBlock view={view} detail={2} onRef={onRef} only={which} />;
 }
 
+/*
+ * The four outcomes, as a mark and as a word.
+ *
+ * `partial` had no mark of its own here and fell through to `?`, which is also `unknown` — so the
+ * one outcome that means "the output and the exit code disagree" was drawn identically to the one
+ * that means "nothing came back". The word exists because the mark is `aria-hidden` and the colour
+ * is a class: without it the outcome reached nobody using a screen reader.
+ */
+const OUTCOME_GLYPH: Record<string, string> = {
+  pass: '✓',
+  fail: '✕',
+  partial: '◐',
+  unknown: '?',
+};
+
+const OUTCOME_WORD: Record<string, string> = {
+  pass: 'passed',
+  fail: 'failed',
+  partial: 'partial',
+  unknown: 'unknown',
+};
+
+/*
+ * Caveats are recorded as slugs so the rules stay greppable, but a slug is not a sentence. Scope is
+ * left out because it is drawn as its own tag beside the row; anything unmapped falls through as
+ * the slug rather than being dropped, because a caveat nobody worded is still a caveat.
+ */
+const CAVEAT_TEXT: Record<string, string> = {
+  'exit-inferred': 'exit code not reported, read from the output',
+  'exit-masked': 'exit code hidden by a pipe',
+  'output-truncated': 'output was truncated',
+  'no-summary-parsed': 'no summary line found in the output',
+};
+
+function caveatText(caveats: string[]): string {
+  return caveats
+    .filter((c) => c !== 'scope-partial')
+    .map((c) => CAVEAT_TEXT[c] ?? c)
+    .join(' · ');
+}
+
 /**
  * A long-running session accumulates dozens of flagged commands and unfinished items. Printed in
  * full they turn one column of a three-column row into a wall while the other two end after a
@@ -353,37 +394,64 @@ function StatusBlock({
             <p className="rp-none">No checks observed.</p>
           ) : (
             <ul className="rp-status">
-              {summary.map((v) => (
-                <li key={v.id} className={`v-${v.outcome}`}>
-                  <span className="rp-mark" aria-hidden="true">
-                    {v.outcome === 'pass' ? '✓' : v.outcome === 'fail' ? '✕' : '?'}
-                  </span>
-                  <button type="button" className="rp-status-label" onClick={() => onRef(v.callId)}>
-                    {v.method}
-                    {v.counts?.total !== undefined && (
-                      <span className="mono rp-counts">
-                        {v.counts.passed ?? 0}/{v.counts.total}
+              {summary.map((v) => {
+                const caveat = caveatText(v.caveats);
+                return (
+                  <li key={v.id} className={`v-${v.outcome}`}>
+                    <span className="rp-mark" aria-hidden="true">
+                      {OUTCOME_GLYPH[v.outcome] ?? '?'}
+                    </span>
+                    <button
+                      type="button"
+                      className="rp-status-label"
+                      onClick={() => onRef(v.callId)}
+                    >
+                      {v.method}
+                      {/*
+                       * The outcome is carried by a glyph that is `aria-hidden`, a colour, and a
+                       * class. All three are invisible to a screen reader, which read "vitest
+                       * 3/12" for a failure and "vitest 12/12" for a pass, in the same words. The
+                       * word goes inside the button so the control that opens the record says
+                       * what it is about.
+                       */}
+                      <span className="sr-only">{OUTCOME_WORD[v.outcome] ?? v.outcome}</span>
+                      {v.counts?.total !== undefined && (
+                        <span className="mono rp-counts">
+                          {v.counts.passed ?? 0}/{v.counts.total}
+                        </span>
+                      )}
+                    </button>
+                    {/*
+                     * Scope is not outcome. A run narrowed to a path or a filter passed on what it
+                     * ran and says nothing about the rest, and the command it was read from is not
+                     * on this row for a reader to judge that for themselves.
+                     */}
+                    {v.scope === 'partial' && <span className="rp-subset">subset</span>}
+                    {/*
+                     * An outcome that is not the newest one has to say so, right beside itself. This
+                     * row exists because a later run said nothing, and a reader who takes it for the
+                     * latest state is worse off than one who was told nothing at all.
+                     */}
+                    {v.laterUnreadable > 0 && (
+                      <span
+                        className="rp-stale"
+                        title={`${v.laterUnreadable} later ${v.laterUnreadable === 1 ? 'run' : 'runs'} of ${v.method} produced no readable outcome`}
+                      >
+                        not the latest run
                       </span>
                     )}
-                  </button>
-                  {/*
-                   * An outcome that is not the newest one has to say so, right beside itself. This
-                   * row exists because a later run said nothing, and a reader who takes it for the
-                   * latest state is worse off than one who was told nothing at all.
-                   */}
-                  {v.laterUnreadable > 0 && (
-                    <span
-                      className="rp-stale"
-                      title={`${v.laterUnreadable} later ${v.laterUnreadable === 1 ? 'run' : 'runs'} of ${v.method} produced no readable outcome`}
-                    >
-                      not the latest run
-                    </span>
-                  )}
-                  {detail > 1 && v.epistemic === 'inferred' && (
-                    <span className="rp-derived">derived</span>
-                  )}
-                </li>
-              ))}
+                    {/*
+                     * Which of the two readings was actually available. A pass read out of a
+                     * summary line and a pass read from an exit code are different facts, and this
+                     * panel printed the same word for both.
+                     */}
+                    {caveat && <span className="rp-caveat">{caveat}</span>}
+                    {detail > 1 && v.epistemic === 'inferred' && (
+                      <span className="rp-derived">derived</span>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
