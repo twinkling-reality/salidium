@@ -319,9 +319,18 @@ body:has(.home) {
 }
 
 /*
- * The name carries the top of the panel at display size, but at the weight the product uses. The
- * app is set in 400 and 500 throughout; a 600 here read as a different typeface wearing the same
- * letters, and size alone is enough to make it the first thing seen.
+ * The name carries the top of the panel at display size, but at the weight the product uses.
+ *
+ * Not 600: the application reserves that for four small marks that have to hold up at 11 to 13px
+ * (a check verdict, a panel title, the selected rail item, a check's method), and borrowing a
+ * small-type weight for display type read as a different typeface wearing the same letters. Size
+ * alone is enough to make this the first thing seen.
+ *
+ * Tracking is one of the product's two negative values, not a third invented here. The whole
+ * vocabulary is `-0.02em` at display size, which is what `.masthead-title` is set in, and
+ * `-0.01em` for every other heading, which is what `tokens.css` gives `h1`, `h2` and `h3`. This
+ * rule and the three others on this page that had drifted to `-0.025`, `-0.014`, `-0.022` and
+ * `-0.018` now pick whichever of the two their size belongs to.
  */
 .card-brand {
   display: flex;
@@ -329,15 +338,22 @@ body:has(.home) {
   gap: var(--space-3);
   font-size: clamp(var(--text-xl), 1rem + 0.7vw, var(--text-display));
   font-weight: 500;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.02em;
 }
 
-/* The only icon-only control on the page, because it is the only thing here that is not a place. */
+/*
+ * The only icon-only control on the page, because it is the only thing here that is not a place.
+ *
+ * 32, not 34. The grid this whole system is spaced on is 4px and 34 is not on it; the application
+ * fixes every control at `--control-h`, 28px, which is right for a 13px shell and small under a
+ * 16px document. 32 is the rung of the grid nearest what this already was, so it lands on the
+ * system without changing what the panel looks like.
+ */
 .theme-toggle {
   display: grid;
   flex-shrink: 0;
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   place-items: center;
   border-radius: var(--radius-sm);
   color: var(--text-tertiary);
@@ -351,7 +367,23 @@ body:has(.home) {
   color: var(--text);
 }
 
-/* The claim sits at the foot, where the reference puts its supporting line. */
+/*
+ * The claim sits at the foot, where the reference puts its supporting line.
+ *
+ * Fluid, like the name above it, and both clamps travel between two rungs of the ramp rather than
+ * away from it: the floor is `--text-xl` and the ceiling is `--text-display`, so neither can
+ * resolve to anything larger or smaller than the scale already contains. The application does not
+ * need this because it is a fixed shell at a fixed base; a document is read from 320px to 2560px
+ * and a headline pinned at 30px is too heavy on a phone and too slight on a wide screen.
+ *
+ * What the two do not share is a rate, and that is worth stating rather than leaving to be
+ * discovered. The name grows at 0.7vw from 1rem and the claim at 0.9vw from 0.95rem, so they are
+ * the same size at 400px, the claim is the larger between there and 1644px where it reaches the
+ * ceiling, and they are level again past 2000px once the name reaches it too. The hierarchy the
+ * middle band draws, with the claim outranking the wordmark, therefore exists only in that band.
+ * Nothing derives those two rates; they are the measured state of this page, left as they are
+ * because the composition is settled and unifying them would resize the name by about 2px.
+ */
 h1 {
   max-width: 20ch;
   margin: 0;
@@ -400,7 +432,7 @@ h1 {
   color: var(--text-secondary);
   font-size: var(--text-lg);
   line-height: 1.35;
-  letter-spacing: -0.014em;
+  letter-spacing: -0.01em;
   text-align: left;
   overflow: hidden;
   transition:
@@ -1256,7 +1288,7 @@ h1 {
   margin: 0;
   font-size: 2rem;
   font-weight: 500;
-  letter-spacing: -0.022em;
+  letter-spacing: -0.02em;
   line-height: 1.2;
 }
 
@@ -1280,7 +1312,7 @@ h1 {
   margin: var(--space-12) 0 var(--space-4);
   font-size: var(--text-xl);
   font-weight: 500;
-  letter-spacing: -0.018em;
+  letter-spacing: -0.01em;
 }
 
 .doc-main p {
@@ -1319,9 +1351,9 @@ h1 {
 }
 
 /*
- * 500, like everything else here. The app is set in 400 and 500 throughout, and the comment on the
- * brand rule already says what a 600 does: it reads as a different typeface wearing the same
- * letters. Two weights are enough to carry emphasis when the type is set at a document's size.
+ * 500, like everything else here. The comment on the brand rule says what the application reserves
+ * 600 for and why borrowing it reads as a different typeface wearing the same letters. Two weights
+ * are enough to carry emphasis when the type is set at a document's size.
  */
 .doc-main strong {
   font-weight: 500;
