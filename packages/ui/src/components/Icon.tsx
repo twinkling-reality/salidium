@@ -25,11 +25,9 @@ export type IconName =
   | 'reset'
   | 'table'
   | 'close'
-  | 'expand'
   | 'prev'
   | 'next'
   | 'save'
-  | 'collapse'
   | 'copy'
   | 'check';
 
@@ -129,12 +127,6 @@ const PATHS: Record<IconName, React.ReactNode> = {
     </>
   ),
   close: <path d="M4 4l8 8M12 4l-8 8" />,
-  /*
-   * The pair that widens and narrows the stat bar. They point the way the bar's own edges travel,
-   * outward to take on more and inward to give it back — a chevron pointing at where the thing it
-   * controls will end up, rather than a plus and minus that could mean anything.
-   */
-  expand: <path d="M6.5 3.5 3 8l3.5 4.5M9.5 3.5 13 8l-3.5 4.5" />,
   /* One step back and one step on, through the log in the order it was stored. */
   prev: <path d="M10 3.5 5.5 8l4.5 4.5" />,
   next: <path d="M6 3.5 10.5 8 6 12.5" />,
@@ -146,7 +138,6 @@ const PATHS: Record<IconName, React.ReactNode> = {
       <path d="M3 12.5h10" />
     </>
   ),
-  collapse: <path d="M3 3.5 6.5 8 3 12.5M13 3.5 9.5 8l3.5 4.5" />,
   /* Sits inside the review count, so the number reads as "flagged" rather than as "unread". */
   flag: (
     <>

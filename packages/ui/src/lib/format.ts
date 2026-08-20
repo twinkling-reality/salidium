@@ -5,22 +5,6 @@ export function timeOfDay(iso: string | undefined): string {
   return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
-export function dateTime(iso: string | undefined): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const today = new Date();
-  const sameDay = d.toDateString() === today.toDateString();
-  return sameDay
-    ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-    : d.toLocaleString(undefined, {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-}
-
 export function relativeTime(iso: string | undefined, now = Date.now()): string {
   if (!iso) return '';
   const t = Date.parse(iso);
@@ -113,8 +97,4 @@ export function dirname(path: string): string {
 
 function normalizePath(path: string): string {
   return path.replaceAll('\\', '/');
-}
-
-export function plural(n: number, one: string, many = `${one}s`): string {
-  return `${n} ${n === 1 ? one : many}`;
 }

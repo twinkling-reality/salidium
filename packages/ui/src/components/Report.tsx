@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { durationMs, shortHome, timeOfDay } from '../lib/format.ts';
 import { useClamped } from '../lib/useClamped.ts';
 import type { Detail, PanelId } from '../store/appStore.ts';
+import { Disclosure } from './Controls.tsx';
 import {
   BeforeAfter,
   Converge,
@@ -11,7 +12,6 @@ import {
   type Marks,
   Tree,
 } from './FlowDiagram.tsx';
-import { Disclosure } from './Sections.tsx';
 import { SessionFlow } from './SessionFlow.tsx';
 import { CheckLanes, Coverage, FileChurn } from './Visuals.tsx';
 

@@ -428,18 +428,6 @@
 .status-dot.st-unknown {
   color: var(--text-tertiary);
 }
-
-.v-mark.v-pass {
-  color: var(--ok);
-}
-.v-mark.v-fail {
-  color: var(--danger);
-}
-.v-mark.v-unknown,
-.v-mark.v-partial {
-  color: var(--text-tertiary);
-}
-
 /* --------------------------------------------------------- session view */
 
 /*
@@ -574,26 +562,6 @@
 
 .session-actions-end {
   margin-left: auto;
-}
-
-/* The table of contents, in the bar. Reuses the button box so it sits level with the controls. */
-.section-nav {
-  display: flex;
-  gap: 2px;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.section-nav::-webkit-scrollbar {
-  display: none;
-}
-
-.section-nav a {
-  color: var(--text-tertiary);
-}
-
-.section-nav a:hover {
-  color: var(--text);
 }
 
 /* ------------------------------------------------------------ the page */
@@ -918,14 +886,6 @@
  * coverage is a filled proportion. Text inside a chart is a label or an exact value, never a
  * sentence.
  */
-.viz-grid {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-6);
-  max-width: var(--measure);
-  margin-bottom: var(--space-8);
-}
-
 .viz-title {
   display: flex;
   align-items: baseline;
@@ -1003,11 +963,6 @@
 .flow-sum-bad {
   color: var(--danger);
 }
-
-.flow-sum-commit {
-  color: var(--accent);
-}
-
 .flow-sum-gap {
   color: var(--warn);
 }
@@ -1129,15 +1084,6 @@
 }
 
 /* Edits, checks and commits are the load-bearing steps; reading and lookups stay quiet. */
-.flow-step.is-edit .flow-node {
-  border-color: var(--border-strong);
-  color: var(--text-secondary);
-}
-
-.flow-step.is-edit .flow-label {
-  color: var(--text);
-}
-
 .flow-step.is-check .flow-label {
   color: var(--text);
 }
@@ -1267,135 +1213,12 @@
   gap: var(--space-3);
   height: 22px;
 }
-
-.lane-label {
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-}
-
-.lane-track {
-  position: relative;
-  height: 100%;
-  border-bottom: 1px solid var(--border);
-}
-
-.lane-edit {
-  position: absolute;
-  top: 2px;
-  bottom: 0;
-  width: 1px;
-  background: var(--border-strong);
-}
-
-.lane-dot {
-  position: absolute;
-  top: 50%;
-  width: 16px;
-  height: 16px;
-  margin: -8px 0 0 -8px;
-  border: 1px solid transparent;
-  border-radius: 50%;
-  background: var(--bg-muted);
-  color: var(--text-tertiary);
-  font-size: 10px;
-  line-height: 14px;
-  text-align: center;
-}
-
-.lane-dot.v-pass {
-  background: var(--ok-soft);
-  color: var(--ok);
-}
-.lane-dot.v-fail {
-  background: var(--danger-soft);
-  color: var(--danger);
-}
-.lane-dot.v-partial,
-.lane-dot.v-unknown {
-  background: var(--warn-soft);
-  color: var(--warn);
-}
-.lane-dot.is-derived {
-  background: transparent;
-  border: 1px dashed currentColor;
-}
-
-/*
- * What the lane came to: how many ran, and only the exceptions in words. Numbers on the right of
- * every row so a column of lanes can be read down its outcomes without reading a label.
- */
-.lane-sum {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
-  justify-content: flex-end;
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-  white-space: nowrap;
-}
-
-.lane-sum-bad {
-  color: var(--danger);
-}
-
-.lane-last {
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  text-align: center;
-}
-.lane-last.v-pass {
-  color: var(--ok);
-}
-.lane-last.v-fail {
-  color: var(--danger);
-}
-.lane-last.v-partial,
-.lane-last.v-unknown {
-  color: var(--warn);
-}
-
 /* The root the listed files share, stated once above them. */
 .viz-root {
   margin: 0 0 var(--space-2);
   font-size: var(--text-xs);
   color: var(--text-tertiary);
   overflow-wrap: anywhere;
-}
-
-/* --- coverage --- */
-
-.coverage-bar {
-  height: 10px;
-  border-radius: 2px;
-  background: var(--danger-soft);
-  overflow: hidden;
-}
-
-.coverage-fill {
-  display: block;
-  height: 100%;
-  background: var(--ok);
-}
-
-/* Coverage is about reach, not health: an uncleared failure must not read as all-clear. */
-.coverage[data-held="true"] .coverage-fill {
-  background: var(--warn);
-}
-
-.coverage-held {
-  color: var(--danger);
-}
-
-.coverage-text {
-  margin: var(--space-2) 0 0;
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-}
-
-.coverage-text strong {
-  font-family: var(--font-mono);
-  font-weight: 400;
-  color: var(--text);
 }
 
 /* ------------------------------------------------------------ sections */
@@ -1409,41 +1232,6 @@
 .sec {
   border-bottom: 1px solid var(--border);
 }
-
-.sec-head {
-  margin: 0;
-  font-size: var(--text-base);
-  font-weight: 400;
-}
-
-.sec-toggle {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  width: 100%;
-  padding: var(--space-4) 0;
-  text-align: left;
-}
-
-.sec-title {
-  font-weight: 500;
-}
-
-.sec-count {
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-}
-
-.sec-glance {
-  flex: 1;
-  overflow: hidden;
-  font-size: var(--text-sm);
-  color: var(--text-tertiary);
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
 .chev {
   display: inline-block;
   color: var(--text-tertiary);
@@ -1453,33 +1241,12 @@
 .chev.is-open {
   transform: rotate(90deg);
 }
-
-.sec-body {
-  padding-bottom: var(--space-4);
-}
-
 /* Review is not a disclosure: it is already open, and it is the point of the page. */
 .sec-review {
   max-width: var(--measure);
   margin-bottom: var(--space-8);
   border-bottom: 0;
 }
-
-.sec-review .sec-head {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  margin-bottom: var(--space-2);
-}
-
-.sec-review .sec-title {
-  font-size: var(--text-xs);
-  font-weight: 500;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
-}
-
 /* ---------------------------------------------------------------- rows */
 
 .rows {
@@ -1506,151 +1273,18 @@
   background-size: 2px 100%;
   background-image: repeating-linear-gradient(var(--border-strong) 0 8px, transparent 8px 13px);
 }
-
-.row-review.sev-high {
-  border-left-color: var(--danger);
-}
-.row-review.sev-medium {
-  border-left-color: var(--warn);
-}
-
-.row-main {
-  display: block;
-  flex: 1;
-  min-width: 0;
-  text-align: left;
-}
-
-.row-title {
-  display: block;
-  overflow-wrap: anywhere;
-}
-
-.row-file .row-title {
-  font-size: var(--text-sm);
-}
-
-.path-dir {
-  color: var(--text-tertiary);
-}
-
-.row-sub {
-  max-width: var(--measure);
-  margin: var(--space-1) 0 0;
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-}
-
-.row-cmd {
-  display: block;
-  overflow: hidden;
-  margin-top: 2px;
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.row-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  margin-top: var(--space-1);
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-}
-
-.row-detail {
-  max-width: 100%;
-  margin: var(--space-2) 0 0;
-  padding: var(--space-3);
-  overflow-x: auto;
-  border-radius: var(--radius-sm);
-  background: var(--bg-muted);
-  font-size: var(--text-xs);
-  line-height: 1.5;
-}
-
-.row-expand {
-  padding: var(--space-3) 0 var(--space-2);
-}
-
 .row-flat {
   align-items: baseline;
   font-size: var(--text-sm);
 }
-
-.diff-stat .add {
-  color: var(--ok);
-}
-.diff-stat .del {
-  color: var(--danger);
-}
-
 /* An aside inside a row ("subset", "ran before the latest changes"), not the `.tag` primitive —
    this one predates it and had been silently overriding it from a later stylesheet. */
-.row-tag {
-  margin-left: var(--space-2);
-  padding: 1px 6px;
-  border-radius: var(--radius-xs);
-  background: var(--bg-muted);
-  font-family: var(--font-sans);
-  font-size: var(--text-xs);
-  color: var(--text-secondary);
-}
-
-.flag-unchecked {
-  color: var(--warn);
-}
-
-.v-glyph {
-  flex-shrink: 0;
-  width: 1em;
-  font-family: var(--font-mono);
-}
-
-.row-verification.v-pass .v-glyph {
-  color: var(--ok);
-}
-.row-verification.v-fail .v-glyph {
-  color: var(--danger);
-}
-.row-verification.v-fail {
-  border-left-color: var(--danger);
-}
-.row-verification.v-pass {
-  border-left-color: var(--ok);
-}
-.row-verification.is-stale {
-  border-left-color: var(--warn);
-}
-
-.left-glyph {
-  flex-shrink: 0;
-  color: var(--text-tertiary);
-}
-
-.left-failing {
-  border-left-color: var(--danger);
-}
-
 .bad {
   color: var(--danger);
-}
-.warn-text {
-  color: var(--warn);
 }
 .running {
   color: var(--accent);
 }
-
-.empty-line {
-  max-width: var(--measure);
-  padding: var(--space-2) 0;
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-}
-
 /* --------------------------------------------------------- disclosure */
 
 .disclosure {
@@ -1685,76 +1319,7 @@
 .turn:first-child {
   border-top: 0;
 }
-
-.turn-head {
-  display: flex;
-  gap: var(--space-2);
-  align-items: baseline;
-}
-
-.turn-index {
-  flex-shrink: 0;
-  width: 1.5em;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-}
-
-.turn-main {
-  min-width: 0;
-  flex: 1;
-}
-
 /* The ask is a label for the turn, not the turn's content: two lines, never more. */
-.turn-prompt {
-  display: block;
-}
-
-.turn-prompt-text {
-  display: -webkit-box;
-  overflow: hidden;
-  margin-top: 2px;
-  font-size: var(--text-sm);
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-}
-
-.turn-headline {
-  display: block;
-  margin-top: var(--space-1);
-}
-
-.turn-outcome {
-  color: var(--text-tertiary);
-}
-
-.outcome-failed {
-  color: var(--danger);
-}
-
-.turn-message {
-  margin-top: var(--space-2);
-}
-
-.turn-message pre {
-  max-width: 100%;
-  margin: var(--space-1) 0 0;
-  overflow-x: auto;
-  font-family: var(--font-sans);
-  font-size: var(--text-sm);
-  white-space: pre-wrap;
-}
-
-.turns-more {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding-top: var(--space-3);
-  font-size: var(--text-sm);
-  color: var(--text-tertiary);
-}
-
 .activities {
   margin: var(--space-2) 0 0;
   padding: 0;
@@ -1764,38 +1329,6 @@
 .activity {
   border-left: 2px solid var(--border);
 }
-
-.activity.is-verification {
-  border-left-color: var(--border-strong);
-}
-
-.activity-main {
-  display: flex;
-  gap: var(--space-2);
-  align-items: baseline;
-  width: 100%;
-  padding: 3px var(--space-2);
-  text-align: left;
-}
-
-.activity-main:hover {
-  background: var(--hover-row);
-}
-
-.act-glyph {
-  flex-shrink: 0;
-  width: 1em;
-  color: var(--text-tertiary);
-}
-
-.act-title {
-  overflow: hidden;
-  flex: 1;
-  font-size: var(--text-xs);
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
 /* ----------------------------------------------------------- inspector */
 
 /*
@@ -2132,16 +1665,6 @@
   font-size: var(--text-xs);
   color: var(--text-tertiary);
 }
-
-.prov-inferred {
-  border-bottom: 1px dashed var(--border-strong);
-}
-
-.prov-observed,
-.prov-planned {
-  display: none;
-}
-
 /* --------------------------------------------------------------- gate */
 
 /*
@@ -2502,48 +2025,12 @@
   font-size: var(--text-xs);
   line-height: 1.5;
 }
-
-.diff-hunk + .diff-hunk {
-  border-top: 1px solid var(--border);
-}
-
-.diff-line {
-  display: flex;
-  gap: var(--space-2);
-  padding: 0 var(--space-2);
-  white-space: pre;
-}
-
 .diff-add {
   background: var(--diff-add-bg);
 }
 .diff-del {
   background: var(--diff-del-bg);
 }
-
-.diff-gutter {
-  flex-shrink: 0;
-  min-width: 3em;
-  color: var(--text-tertiary);
-  text-align: right;
-  user-select: none;
-}
-
-.diff-sign {
-  flex-shrink: 0;
-  width: 1em;
-  user-select: none;
-}
-
-.diff-code {
-  white-space: pre;
-}
-
-.diff-more {
-  padding: var(--space-1) var(--space-2);
-  font-size: var(--text-xs);
-}
-
 /* -------------------------------------------------------------- utility */
 
 .muted {
@@ -2675,23 +2162,6 @@
 .report {
   margin-top: var(--space-10);
 }
-
-.rp-heading {
-  margin-bottom: var(--space-5);
-  padding-bottom: var(--space-2);
-  border-bottom: 1px solid var(--border);
-  font-size: var(--text-xs);
-  font-weight: 500;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
-}
-
-.rp-account,
-.rp-evidence {
-  margin-top: var(--space-10);
-}
-
 .rp-cols {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2712,12 +2182,6 @@
   text-transform: uppercase;
   color: var(--text-tertiary);
 }
-
-.rp-body {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
 .rp-statement {
   margin: 0 0 var(--space-3);
   padding-left: var(--space-3);
@@ -2749,32 +2213,10 @@
   display: block;
   overflow: visible;
 }
-
-.rp-statement.is-muted {
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-}
-
-.rp-attrib {
-  margin-right: var(--space-2);
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-}
-
 .rp-ev {
   margin-left: var(--space-2);
   font-size: var(--text-xs);
 }
-
-.rp-field {
-  display: flex;
-  gap: var(--space-2);
-  align-items: baseline;
-  min-width: 0;
-  margin: 0;
-  font-size: var(--text-sm);
-}
-
 /*
  * A path truncated at its *head*, because the tail is the part that identifies a file. `direction:
  * rtl` is what moves the ellipsis to the front, and on its own it also reorders the string: `/` and
@@ -2788,127 +2230,20 @@
  * the text sits inside a `bdi`, an isolated run whose own direction comes from its first strong
  * character and is therefore left-to-right.
  */
-.rp-field .mono {
-  overflow: hidden;
-  direction: rtl;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /*
  * The key never gives up width. It is a flex item beside a path set `nowrap`, so the path claimed
  * the row and the key was squeezed to its narrowest possible box — which for an unbreakable word
  * is one character, and `EDITING` came out as seven stacked letters down the side of the column.
  * The path is the thing with an ellipsis; the label is four to eight characters and always fits.
  */
-.rp-key {
-  flex-shrink: 0;
-  font-size: var(--text-xs);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
-}
-
 .rp-none {
   margin: 0;
   font-size: var(--text-sm);
   color: var(--text-tertiary);
 }
 
-/* --- the agent's own findings: rule and nodes drawn, not typed --- */
-
-.rp-chain {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.rp-chain-item {
-  position: relative;
-  padding: var(--space-2) 0 var(--space-2) var(--space-5);
-  font-size: var(--text-sm);
-}
-
-.rp-chain-item::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 5px;
-  width: 1px;
-  background: var(--border-strong);
-}
-
-.rp-chain-item:first-child::before {
-  top: 50%;
-}
-
-.rp-chain-item:last-child::before {
-  bottom: 50%;
-}
-
-.rp-chain-item::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 2px;
-  width: 7px;
-  height: 7px;
-  margin-top: -3px;
-  border-radius: 50%;
-  background: var(--bg);
-  border: 1px solid var(--border-strong);
-}
-
-/* --- approach changed --- */
-
-/*
- * The steps the agent said it was taking. One line — the latest — and a count for the rest.
- *
- * It was an amber "APPROACH CHANGED" heading over every entry but the last struck through, which
- * on a session that narrates its work is nineteen consecutive steps presented as nineteen
- * abandoned plans. Strikethrough over two-line paragraphs is also close to unreadable, so the
- * device was costing legibility to deliver a claim that was not true.
- */
-.rp-steps {
-  margin-bottom: var(--space-3);
-}
-
-/* Quiet: it is a count and a way in, not a finding. */
-.rp-steps-toggle {
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-  text-decoration: underline;
-  text-decoration-color: var(--border-strong);
-  text-underline-offset: 2px;
-  transition: color var(--motion-fast) var(--ease);
-}
-
-.rp-steps-toggle:hover {
-  color: var(--text);
-}
-
-/* Numbered, because the one thing observed about these is the order they were said in. */
-.rp-steps-list {
-  margin: var(--space-2) 0 0;
-  padding: 0 0 0 var(--space-5);
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-}
-
-.rp-steps-list li {
-  padding: 2px 0;
-}
-
-.rp-steps-list::marker,
-.rp-steps-list li::marker {
-  color: var(--text-tertiary);
-}
-
 /* --- plan, files, status --- */
 
-.rp-plan,
 .rp-status {
   margin: 0 0 var(--space-3);
   padding: 0;
@@ -2916,7 +2251,6 @@
   font-size: var(--text-sm);
 }
 
-.rp-plan-item,
 .rp-status li {
   display: flex;
   /* A row carries a scope tag and a caveat sentence as well as its method, so it wraps rather
@@ -2926,11 +2260,6 @@
   align-items: baseline;
   padding: 2px 0;
 }
-
-.rp-plan-item.is-completed {
-  color: var(--text-tertiary);
-}
-
 .rp-mark {
   flex-shrink: 0;
   width: 1em;
@@ -2938,14 +2267,6 @@
   color: var(--text-tertiary);
   text-align: center;
 }
-
-.mark-add {
-  color: var(--ok);
-}
-.mark-del {
-  color: var(--danger);
-}
-
 .rp-status .v-pass .rp-mark {
   color: var(--ok);
 }
@@ -3064,105 +2385,7 @@
   flex-shrink: 0;
   color: var(--text-tertiary);
 }
-
-.rp-files {
-  margin-top: var(--space-3);
-}
-
-/* The root every listed file shares, said once so no row has to repeat it. */
-.rp-files-root {
-  margin: var(--space-1) 0 var(--space-1);
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-  overflow-wrap: anywhere;
-}
-
-.rp-files ul {
-  margin: var(--space-1) 0 0;
-  padding: 0;
-  list-style: none;
-  font-size: var(--text-sm);
-}
-
-.rp-files li {
-  display: flex;
-  gap: var(--space-2);
-}
-
 /* --- evidence --- */
-
-.rp-charts {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-8);
-}
-
-.rp-panel {
-  margin-top: var(--space-8);
-}
-
-.rp-run {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.rp-run-item {
-  position: relative;
-  display: flex;
-  gap: var(--space-3);
-  align-items: baseline;
-  padding: 3px 0 3px var(--space-5);
-  font-size: var(--text-sm);
-}
-
-.rp-run-item::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 5px;
-  width: 1px;
-  background: var(--border);
-}
-
-.rp-run-item:first-child::before {
-  top: 50%;
-}
-.rp-run-item:last-child::before {
-  bottom: 50%;
-}
-
-.rp-run-item::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 3px;
-  width: 5px;
-  height: 5px;
-  margin-top: -2px;
-  border-radius: 50%;
-  background: var(--border-strong);
-}
-
-.rp-run-item.facet-verified::after {
-  background: var(--ok);
-}
-.rp-run-item.facet-review::after {
-  background: var(--warn);
-}
-
-.rp-run-at {
-  flex-shrink: 0;
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-}
-
-.rp-run-text {
-  min-width: 0;
-  color: var(--text-secondary);
-}
-
 .rp-empty {
   max-width: var(--measure);
   margin: var(--space-6) 0;
@@ -3844,24 +3067,6 @@
   flex-shrink: 0;
 }
 
-/* A node with the rule that leaves it. */
-.fd-key-step {
-  background:
-    linear-gradient(var(--border-strong), var(--border-strong)) 8px 4px / 14px 1px no-repeat;
-}
-
-.fd-key-step::before {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 0;
-  width: 6px;
-  height: 6px;
-  border: 1px solid var(--border-strong);
-  border-radius: 1px;
-  background: var(--bg);
-}
-
 /* Two paths meeting a bus. */
 .fd-key-junction {
   background:
@@ -4467,12 +3672,6 @@ button.cov-cell:hover {
   align-items: center;
   gap: var(--space-2);
 }
-
-.loading.is-md {
-  gap: var(--space-3);
-  font-size: var(--text-md);
-}
-
 /* Takes the colour of the sentence it sits in, like every other mark in the app. */
 .orb {
   flex-shrink: 0;
@@ -4480,12 +3679,6 @@ button.cov-cell:hover {
   height: 1em;
   color: inherit;
 }
-
-.loading.is-md .orb {
-  width: 1.4em;
-  height: 1.4em;
-}
-
 .orb-dot {
   /*
    * A loop, so its period is stated here rather than tokenised (tokens.css says why). 1.4s across
