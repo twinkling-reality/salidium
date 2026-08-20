@@ -72,10 +72,22 @@ function applyVerificationReview(state: RunState, event: StoredEvent, log: Chang
       epistemic: v.outcomeEpistemic,
     });
   } else if (v.outcome === 'pass' && v.scope !== 'partial') {
+    /*
+     * A pass always clears its own method's failure. It clears "unverified changes" only when it
+     * is the kind of run that counts as covering the work, which is the same three-part test
+     * `lastPass` applies in the projection: not partial scope, and not lint.
+     *
+     * Without the method test a passing lint dropped this item while the verdict above it still
+     * read "N files changed, unverified" and Coverage still drew the files uncovered. One report
+     * gave two answers to the same question, and the one it silently withdrew was the one a
+     * person was meant to act on.
+     */
+    const covers = v.method !== 'lint';
     resolve(
       state,
       event,
-      (r) => r.id === `verification-failed:${v.method}` || r.rule === 'changes-unverified',
+      (r) =>
+        r.id === `verification-failed:${v.method}` || (covers && r.rule === 'changes-unverified'),
     );
   }
 }

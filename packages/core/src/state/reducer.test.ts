@@ -129,6 +129,51 @@ describe('reducer: unverified claim and destructive commands', () => {
   });
 });
 
+describe('reducer: what clears unverified changes', () => {
+  /*
+   * A passing lint is a passing check and is not evidence that the work runs. Every reader of
+   * `lastPass` already excluded it, so when the review rule did not, one report answered the same
+   * question twice: the verdict said "unverified" while the item a person was meant to act on had
+   * been withdrawn from Needs you.
+   */
+  it('does not let a passing lint clear the unverified-changes item, but a passing test does', () => {
+    const b = new EventBuilder();
+    const open = (state: RunState) =>
+      state.review.some((r) => r.rule === 'changes-unverified' && r.resolvedSeq === undefined);
+
+    const { state } = run([
+      b.sessionStarted(),
+      b.turnStarted('Change a file and check nothing'),
+      ...b.edit('c1', '/repo/app/src/index.ts', 8, 2),
+      b.turnEnded('Edited the entry point.'),
+    ]);
+    expect(open(state)).toBe(true);
+
+    run(
+      [
+        b.turnStarted('Lint it'),
+        ...b.command('c2', 'eslint .', 'All files pass linting.', { exitCode: 0 }),
+        b.turnEnded('Lint passes.'),
+      ],
+      state,
+    );
+    expect(state.verifications.at(-1)?.method).toBe('lint');
+    expect(state.verifications.at(-1)?.outcome).toBe('pass');
+    expect(state.verifications.at(-1)?.scope).toBe('full');
+    expect(open(state)).toBe(true);
+
+    run(
+      [
+        b.turnStarted('Now actually test it'),
+        ...b.command('c3', 'pnpm vitest run', VITEST_PASS, { exitCode: 0 }),
+        b.turnEnded('Tests pass.'),
+      ],
+      state,
+    );
+    expect(open(state)).toBe(false);
+  });
+});
+
 describe('reducer: plan changes and remaining work', () => {
   it('tracks replace/merge plan semantics and remaining items', () => {
     const b = new EventBuilder();
