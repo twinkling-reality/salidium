@@ -42,7 +42,20 @@ export function useTheme(): { theme: Theme; toggle: () => void } {
   function toggle() {
     const next: Theme = theme === "light" ? "dark" : "light";
     visitTheme = next;
-    document.documentElement.dataset.theme = next;
+    /*
+     * Every colour on the page changes at once, and the transitions written for a control
+     * answering a pointer are not for that: they turned one repaint into a two hundred millisecond
+     * disagreement, with black cards carrying pale grey marks in the middle of it. The flag holds
+     * them off for the frame the swap lands in, then lets go.
+     */
+    const root = document.documentElement;
+    root.dataset.theming = "";
+    root.dataset.theme = next;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        delete root.dataset.theming;
+      });
+    });
     try {
       window.localStorage.setItem("salidium-site-theme", next);
     } catch {

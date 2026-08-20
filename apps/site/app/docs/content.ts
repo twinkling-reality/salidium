@@ -157,7 +157,7 @@ const RAW: Array<Omit<Page, "n">> = [
   {
     slug: "report",
     title: "Reading a report",
-    summary: "Whether the work is finished, whether it is checked, and what is waiting on you.",
+    summary: "Whether the checks passed, what is still open, and what is waiting on you.",
     blocks: [
       p(
         "A session opens as a report, and the report is built to answer one question first: can you leave this alone, or does it need you? Everything else is underneath that answer.",
@@ -208,7 +208,9 @@ const RAW: Array<Omit<Page, "n">> = [
         "Only the second of those is Salidium's own observation. The first is the agent's task list and is marked as planned; the third is the agent's word for it and is marked as reported. [How we know](/docs/provenance) is what tells them apart on the page.",
       ),
       h("Needs you"),
-      p("Each entry names the rule that raised it, with how many times it fired."),
+      p(
+        "Each entry names the rule that raised it, and says how many times it fired when it fired more than once.",
+      ),
       terms([
         ["A waiting prompt", "The agent asked for permission, for input, or a question."],
         ["A failed check", "A run failed and nothing has passed since."],

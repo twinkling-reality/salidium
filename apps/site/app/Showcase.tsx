@@ -137,6 +137,13 @@ function InstallCell() {
        * confirmation. Rest and answer are now mutually exclusive by selector.
        */
       data-state={state === "idle" ? undefined : state}
+      /*
+       * The colour of the last answer, kept after the state that produced it has gone. `data-state`
+       * says whether the wash is up; this says what colour it is. Keyed to the state, the gradient
+       * was dropped the frame the attribute cleared and the remaining 180ms of fade ran on a layer
+       * painting nothing, so the words receded and the colour vanished.
+       */
+      data-answered={answered}
       aria-label={`Copy ${COMMAND}`}
     >
       <Ico>
@@ -146,7 +153,7 @@ function InstallCell() {
       <CellMark answers />
       <span className="cell-wash" aria-hidden="true" />
       <CellBody
-        said="Easy, one line install"
+        said="Install it in one command"
         shown={<code>{COMMAND}</code>}
         answer={ANSWERS[answered]}
       />
@@ -197,7 +204,18 @@ export function Showcase() {
           </button>
         </div>
 
-        <h1 id="hero-title">Agent output, turned into a visual report.</h1>
+        <div className="card-claim-block">
+          <h1 id="hero-title">Agent output, turned into a visual report.</h1>
+          {/*
+           * Who it reads, what it says, and where it runs. The claim above is the proposition; a
+           * visitor who has never heard of Salidium still needs the three facts that place it, and
+           * they were nowhere on the page.
+           */}
+          <p className="card-sub">
+            It reads a Claude Code or Codex run and says what changed, what was checked, and what
+            needs you. Everything stays on your machine.
+          </p>
+        </div>
       </div>
 
       <div className="card-ways">
@@ -209,7 +227,7 @@ export function Showcase() {
             <path d="M4 17.5A1.5 1.5 0 0 1 5.5 16H20" />
           </Ico>
           <CellMark />
-          <CellBody said="Clear, complete documentation" shown="Open the docs" />
+          <CellBody said="What every part of it does" shown="Open the docs" />
         </Link>
 
         <a
