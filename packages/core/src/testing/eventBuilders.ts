@@ -207,6 +207,34 @@ export class EventBuilder {
     });
   }
 
+  /**
+   * A delegated agent, and what it wrote back.
+   *
+   * Here rather than left to `raw` because the pair has to agree on the id, and because until now
+   * nothing in this repository produced one: `Delegated`, `DelegatedRow` and the `Disclosure` they
+   * sit in render only when a session has subagents, so they had never been drawn against a
+   * running daemon.
+   */
+  subagentStarted(subagentId: string, agentType: string, description: string): StoredEvent {
+    return this.stored({
+      ...this.base(`subagent:${subagentId}:start`),
+      kind: 'subagent.started',
+      subagentId,
+      agentType,
+      description,
+    });
+  }
+
+  /** Omit `lastMessage` for a lane that ended without reporting, which is its own fact. */
+  subagentEnded(subagentId: string, lastMessage?: string): StoredEvent {
+    return this.stored({
+      ...this.base(`subagent:${subagentId}:end`),
+      kind: 'subagent.ended',
+      subagentId,
+      lastMessage,
+    });
+  }
+
   sessionEnded(): StoredEvent {
     return this.stored({ ...this.base('session:end'), kind: 'session.ended', reason: 'other' });
   }

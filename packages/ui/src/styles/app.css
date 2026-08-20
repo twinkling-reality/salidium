@@ -2370,10 +2370,28 @@
  * exact height where the clamp was a ceiling, so a two-line report was measured rendering 84px
  * tall instead of 42px, padded with two lines of nothing.
  *
- * There is a fourth way, not taken here: `useClamped` already knows whether this particular
- * statement is actually overflowing, so the fixed height could be applied only when it is. That
- * is a real option, and it is left because no fixture in this repository has a delegated agent in
- * it, so the one component that renders this cannot be exercised against a running daemon.
+ * The fourth way has now been tried, and it is the one the note above used to say was left for
+ * want of a fixture. `scripts/demo-daemon.mjs` has a delegated agent in it since 2026-08-20, so
+ * `DelegatedRow` can be driven against a running daemon, and `useClamped` already knows whether a
+ * given statement is overflowing: an `is-clamped` class applies `height: 4lh` only where the clamp
+ * is really a ceiling, which answers the two-line-report fault exactly. Measured against that
+ * fixture, opening the one clamped statement in it, 75px collapsed to 113px open:
+ *
+ *   Chromium 151   75 87 102 108 111 112 113, with a `height` transition running
+ *   Firefox 153    113 on the first frame, nothing running
+ *   WebKit 26      113 on the first frame, nothing running
+ *
+ * `interpolate-size: allow-keywords` is what animates a length to `auto`, and `CSS.supports`
+ * answers false for it in both of the other two. So the fourth way works in one engine of three,
+ * and a rule that reads unconditionally while delivering in one engine is the fault `.arrives` in
+ * `scale.css` was just repaired for. Reverted.
+ *
+ * A fifth way exists and was not taken: `useClamped` measures `scrollHeight`, so it could publish
+ * the open height as a length and both ends of the transition would be lengths, which every engine
+ * interpolates. It needs the measurement to keep up while the statement is open, and the hook
+ * deliberately holds its last collapsed answer instead, so that the toggle stays reversible. The
+ * alternative, releasing the height on `transitionend`, does not survive reduced motion: with
+ * transitions off the event never fires and the element keeps a height that no longer fits.
  *
  * What is left is symmetrical, which is the thing that matters here: this is not a state that
  * arrives over time and then vanishes in a frame, which is the rule `scale.css` states. It simply

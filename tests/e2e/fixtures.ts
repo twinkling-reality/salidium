@@ -51,6 +51,34 @@ export const test = base.extend<Record<string, never>, WorkerFixtures>({
         handle.registry.ingest(PRIMARY_SESSION, first, { cwd: '/repo/checkout' });
         handle.registry.flush(PRIMARY_SESSION);
 
+        /*
+         * A session that handed work to other agents.
+         *
+         * `Delegated`, `DelegatedRow` and the `Disclosure` they sit in render only when a session
+         * has subagents, and until now no fixture in this repository had one, so three components
+         * shipped without ever being drawn. Two lanes, unalike on purpose: one that wrote back far
+         * enough to be clamped, which is the only way the "more" control appears at all, and one
+         * that ended without reporting, which is a different fact from never having started.
+         */
+        const fanout = new EventBuilder('claude-code:e2e-fanout', '2026-08-19T13:00:00.000Z');
+        handle.registry.ingest(
+          fanout.sessionId,
+          [
+            titled(fanout.sessionStarted('/repo/api'), 'Find the unbounded queries'),
+            fanout.turnStarted('Find the unbounded queries'),
+            fanout.subagentStarted('orders', 'explore', 'Read the orders endpoints'),
+            fanout.subagentStarted('reports', 'explore', 'Read the reporting endpoints'),
+            fanout.subagentEnded(
+              'orders',
+              'Four handlers under src/orders read the table without a limit, and the worst of them selects every order for a tenant before slicing a page of twenty out of it in memory. All four take the cursor helper that src/invoices already uses, so the change is the same four lines in each place, and the tests for it are the ones that already cover invoices. The reporting endpoints were left alone because they run behind a job rather than a request, and the admin list is bounded in practice by how far anyone scrolls, though nothing in the code says so.',
+            ),
+            fanout.subagentEnded('reports'),
+            fanout.turnEnded('The orders endpoints take a cursor now.'),
+          ],
+          { cwd: '/repo/api' },
+        );
+        handle.registry.flush(fanout.sessionId);
+
         const empty = new EventBuilder('claude-code:empty-session', '2026-08-19T12:00:00.000Z');
         handle.registry.ingest(
           empty.sessionId,

@@ -1,5 +1,6 @@
 import type { FileRow, VerificationRow } from '@salidium/core';
 import { basename, commonDir, dirname, shortHome, shortPath, timeOfDay } from '../lib/format.ts';
+import { outcomeGlyph } from '../lib/outcome.ts';
 
 /**
  * The picture of the work, for reading without reading. Salidium exists because agent sessions
@@ -139,7 +140,7 @@ export function CheckLanes({
               <span className="checks-method">{m}</span>
               <span className={`checks-now v-${last.outcome}`}>
                 <span className="checks-now-mark" aria-hidden="true">
-                  {last.outcome === 'pass' ? '✓' : last.outcome === 'fail' ? '✕' : '?'}
+                  {outcomeGlyph(last.outcome)}
                 </span>
                 {word(last.outcome)}
                 {last.counts?.total !== undefined && (

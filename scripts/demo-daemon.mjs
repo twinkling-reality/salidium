@@ -60,6 +60,23 @@ const VITEST_FULL_PASS = `
    Duration  6.41s
 `;
 
+/*
+ * The suite passes and the command still fails, which is the one outcome the fixture never
+ * produced: `deriveVerification` reads the summary line as a pass, sees an explicit non-zero exit
+ * disagreeing with it, and records `partial` with an `exit-summary-mismatch` caveat. Every other
+ * check in this file is a clean pass or a clean fail, so the Verified panel's `◐` mark, its
+ * "partial" word and its caveat text had never been drawn by anything a reader could see.
+ */
+const VITEST_COVERAGE_SHORTFALL = `
+ Test Files  46 passed (46)
+      Tests  118 passed (118)
+   Duration  7.12s
+
+ % Coverage report from v8
+ src/payments/refunds.ts   |   61.4 |     44.1 |
+ERROR: Coverage for lines (78.9%) does not meet global threshold (85%)
+`;
+
 const VITEST_FAIL = `
  ❯ src/images/resolveUrl.test.ts (7 tests | 3 failed) 212ms
  Test Files  1 failed | 45 passed (46)
@@ -375,6 +392,77 @@ export async function startDemo({ at = Date.now() } = {}) {
       }),
       ...eb.command('iv-11', 'git commit -am "backfill invoice numbers"', '', { exitCode: 0 }),
       eb.turnEnded('Backfilled, and the suite still passes.'),
+    ],
+  });
+
+  /*
+   * A check that passed and failed at once.
+   *
+   * Nothing else here reaches `outcome: 'partial'`, and the panel that draws it is the panel every
+   * documentation page is a picture of. A coverage floor is the honest way to get there: the tests
+   * genuinely passed, the command genuinely failed, and neither reading is wrong.
+   */
+  other({
+    id: 'claude-code:demo-coverage',
+    cwd: '/Users/dev/acme/billing',
+    title: 'Bring the payments module up to the coverage floor',
+    startedAgo: 17,
+    build: (eb) => [
+      eb.turnStarted('Coverage on the payments module is under the floor. Bring it up.'),
+      eb.message('The refund path has no test at all, so that is where the missing lines are.'),
+      ...eb.edit('cov-1', '/Users/dev/acme/billing/src/payments/refunds.test.ts', 46, 0),
+      ...eb.command('cov-2', 'pnpm vitest run --coverage', VITEST_COVERAGE_SHORTFALL, {
+        exitCode: 1,
+      }),
+      eb.turnEnded('The suite is green and coverage is still four points under the threshold.'),
+    ],
+  });
+
+  /*
+   * A session that handed its work to other agents.
+   *
+   * `Delegated`, `DelegatedRow` and the `Disclosure` primitive they sit in render only when a
+   * session has subagents, and no fixture in this repository had one, so three components had
+   * never been drawn against a running daemon and the section that quotes an agent verbatim had
+   * never been photographed. Four lanes, deliberately unalike: one that wrote back at length and
+   * so is clamped, one that wrote a single line and so is not, one that ended without reporting,
+   * which is a different fact from never having been started, and one still running when the turn
+   * ended.
+   *
+   * It also runs the suite narrowed to one file, so a `subset` tag and a `scope-partial` caveat
+   * appear on a session the documentation actually shows.
+   */
+  other({
+    id: 'claude-code:demo-fanout',
+    cwd: '/Users/dev/acme/api',
+    title: 'Find every unbounded query in the API',
+    startedAgo: 19,
+    build: (eb) => [
+      eb.turnStarted(
+        'Some list endpoints read the whole table. Find them and put a limit on each.',
+      ),
+      eb.message(
+        'Three areas to read, so each one goes to its own agent and I collect the results.',
+      ),
+      eb.subagentStarted('sub-orders', 'explore', 'Read the orders endpoints'),
+      eb.subagentStarted('sub-catalog', 'explore', 'Read the catalog endpoints'),
+      eb.subagentStarted('sub-reports', 'explore', 'Read the reporting endpoints'),
+      eb.subagentEnded(
+        'sub-orders',
+        'Four handlers under src/orders read the table without a limit. The worst is the customer history endpoint, which selects every order for a tenant and then slices in memory: on the largest tenant in the seed data that is 41,000 rows for a page of twenty. The other three are admin-only and bounded in practice by how much anyone scrolls, but none of them says so in code. All four take the same cursor helper that src/invoices already uses, so the change is the same four lines in each place.',
+      ),
+      eb.subagentEnded('sub-catalog', 'The catalog endpoints already paginate. Nothing to change.'),
+      eb.subagentEnded('sub-reports'),
+      eb.subagentStarted('sub-search', 'explore', 'Read the search endpoints'),
+      ...eb.edit('fo-1', '/Users/dev/acme/api/src/orders/history.ts', 18, 6),
+      ...eb.edit('fo-2', '/Users/dev/acme/api/src/orders/list.ts', 9, 3),
+      ...eb.command(
+        'fo-3',
+        'pnpm vitest run src/orders/queries.test.ts',
+        '\n      Tests  14 passed (14)\n',
+        { exitCode: 0 },
+      ),
+      eb.turnEnded('The orders endpoints take a cursor now. Search is still being read.'),
     ],
   });
 

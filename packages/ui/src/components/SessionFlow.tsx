@@ -1,6 +1,7 @@
 import type { ActivityRow, CommitRow, TurnRow, VerificationRow } from '@salidium/core';
 import { useState } from 'react';
 import { basename, timeOfDay } from '../lib/format.ts';
+import { outcomeGlyph } from '../lib/outcome.ts';
 
 /**
  * What the agent did, in order, as a flow rather than a count.
@@ -320,7 +321,7 @@ function FlowStep({ step, onRef }: { step: Step; onRef: (ref: string) => void })
   }
   if (step.kind === 'check') {
     const v = step.row;
-    const glyph = v.outcome === 'pass' ? '✓' : v.outcome === 'fail' ? '✕' : '?';
+    const glyph = outcomeGlyph(v.outcome);
     return (
       <li className={`flow-step is-check v-${v.outcome}`}>
         <span className="flow-node" aria-hidden="true">

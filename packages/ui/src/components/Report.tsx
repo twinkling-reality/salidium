@@ -1,6 +1,7 @@
 import type { ReviewGroup, SessionView, StripView, VerdictView } from '@salidium/core';
 import { useState } from 'react';
 import { durationMs, shortHome, timeOfDay } from '../lib/format.ts';
+import { outcomeGlyph } from '../lib/outcome.ts';
 import { useClamped } from '../lib/useClamped.ts';
 import type { Detail, PanelId } from '../store/appStore.ts';
 import { Disclosure } from './Controls.tsx';
@@ -318,20 +319,10 @@ export function StatusColumn({
 }
 
 /*
- * The four outcomes, as a mark and as a word.
- *
- * `partial` had no mark of its own here and fell through to `?`, which is also `unknown` — so the
- * one outcome that means "the output and the exit code disagree" was drawn identically to the one
- * that means "nothing came back". The word exists because the mark is `aria-hidden` and the colour
- * is a class: without it the outcome reached nobody using a screen reader.
+ * The outcome as a word. The mark it is drawn beside is `outcomeGlyph` in `lib/outcome.ts`, shared
+ * with the two other surfaces that draw one. The word exists because the mark is `aria-hidden` and
+ * the colour is a class: without it the outcome reached nobody using a screen reader.
  */
-const OUTCOME_GLYPH: Record<string, string> = {
-  pass: '✓',
-  fail: '✕',
-  partial: '◐',
-  unknown: '?',
-};
-
 const OUTCOME_WORD: Record<string, string> = {
   pass: 'passed',
   fail: 'failed',
@@ -349,6 +340,13 @@ const CAVEAT_TEXT: Record<string, string> = {
   'exit-masked': 'exit code hidden by a pipe',
   'output-truncated': 'output was truncated',
   'no-summary-parsed': 'no summary line found in the output',
+  /*
+   * The caveat that comes with the `partial` outcome, and the reason it is worth wording: until a
+   * fixture produced one, this row fell through to the slug, and a hyphenated identifier printed
+   * beside a check is the panel telling a reader something in a language the rest of it does not
+   * speak. The three still unworded below it are the three no fixture reaches.
+   */
+  'exit-summary-mismatch': 'the output says passed and the exit code says failed',
 };
 
 function caveatText(caveats: string[]): string {
@@ -399,7 +397,7 @@ function StatusBlock({
                 return (
                   <li key={v.id} className={`v-${v.outcome}`}>
                     <span className="rp-mark" aria-hidden="true">
-                      {OUTCOME_GLYPH[v.outcome] ?? '?'}
+                      {outcomeGlyph(v.outcome)}
                     </span>
                     <button
                       type="button"

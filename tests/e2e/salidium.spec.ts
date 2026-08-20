@@ -215,6 +215,62 @@ test('sessions without evidence omit the control and panel', async ({ page, daem
   await expectNoA11yViolations(page);
 });
 
+/*
+ * The section that quotes a delegated agent verbatim, which nothing could reach until a fixture
+ * had one. It guards three things at once: that the disclosure counts the lanes and how many of
+ * them reported, that a lane which ended silently says so rather than being dropped, and that the
+ * "more" control appears over a statement with something behind it and not over one without.
+ *
+ * The last of those is why the two lanes are deliberately unalike. A control over text with
+ * nothing behind it is worse than no control, and only a measurement can tell the two apart.
+ */
+test('a session that delegated says what came back', async ({ page, daemon }, testInfo) => {
+  test.skip(testInfo.project.name.includes('narrow'), 'desktop flow');
+  await openSalidium(page, daemon);
+
+  const find = page.getByRole('textbox', { name: 'Find a session by name, repo or id' });
+  await find.fill('e2e-fanout');
+  await page.getByRole('button', { name: /Find the unbounded queries/ }).click();
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'Find the unbounded queries' }),
+  ).toBeVisible();
+
+  await page.getByRole('button', { name: 'Evidence' }).click();
+  await page.getByRole('button', { name: /What happened/ }).click();
+
+  const delegated = page.getByRole('button', { name: 'Delegated to 2 agents, 1 reported back' });
+  await expect(delegated).toBeVisible();
+  await delegated.click();
+
+  const rows = page.locator('.rows .row.is-quote');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.filter({ hasText: 'Read the reporting endpoints' })).toContainText(
+    'ended without reporting',
+  );
+
+  const reported = rows.filter({ hasText: 'Read the orders endpoints' });
+  const clamped = await reported
+    .locator('.rp-statement-body')
+    .evaluate((el) => el.scrollHeight - el.clientHeight > 1);
+  expect(clamped, 'the fixture statement is long enough to be cut off at this width').toBe(true);
+  const more = reported.getByRole('button', { name: 'more' });
+  await expect(more, 'so the control that opens it is offered').toBeVisible();
+
+  await more.click();
+  await expect(reported.getByRole('button', { name: 'less' })).toBeVisible();
+  const opened = await reported
+    .locator('.rp-statement-body')
+    .evaluate((el) => el.scrollHeight - el.clientHeight > 1);
+  expect(opened, 'and opening it shows the whole statement').toBe(false);
+
+  /* The lane that wrote one line is not clamped, so it is offered no control at all. */
+  await expect(
+    rows.filter({ hasText: 'Read the reporting endpoints' }).getByRole('button', { name: 'more' }),
+  ).toHaveCount(0);
+
+  await expectNoA11yViolations(page);
+});
+
 test('narrow session navigation is a contained modal across resize', async ({
   page,
   daemon,
