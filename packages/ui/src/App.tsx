@@ -154,8 +154,9 @@ export function App() {
       >
         <div className="side-head">
           <BrandMark size={22} className="side-mark" decorative />
+          {/* The panel is the session list; the heading beside the mark is the product's name. */}
           <span className="side-head-title" id="session-list-title">
-            Salidium sessions
+            Salidium
           </span>
           {listConnection !== 'open' && (
             <span className={`conn ${listConnection === 'closed' ? 'conn-bad' : 'conn-warn'}`}>

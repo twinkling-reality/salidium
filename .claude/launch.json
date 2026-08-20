@@ -4,8 +4,23 @@
     {
       "name": "ui",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@salidium/ui", "dev"],
+      "runtimeArgs": [
+        "--filter",
+        "@salidium/ui",
+        "dev"
+      ],
       "port": 5173
+    },
+    {
+      "name": "site",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "apps/site",
+        "run",
+        "dev"
+      ],
+      "port": 3000
     }
   ]
 }

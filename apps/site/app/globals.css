@@ -1,11 +1,94 @@
-@import "../../../packages/ui/src/styles/theme.css";
+/*
+ * The public site.
+ *
+ * It imports `scale.css` from the product rather than restating it, so the type ramp, the spacing
+ * grid, the corner family and the palette are the same objects the application uses. An earlier
+ * stylesheet imported only the palette and reinvented everything else: seven type sizes with four
+ * steps under 1.10, 41 spacing values including 7, 9, 13, 17 and 94, five radii, and a second
+ * easing curve. None of that could produce rank or rhythm, because nothing in it was a system.
+ *
+ * The one deliberate departure: the sizes below restate the product's ramp in `rem`. The values
+ * render identically at a 16px root, but the app is a fixed shell and this is a document, and a
+ * document that hard-codes px does not answer a reader who has raised their default text size.
+ */
+@import "../../../packages/ui/src/styles/scale.css";
 
-* {
-  box-sizing: border-box;
+:root {
+  --text-xs: 0.6875rem; /* 11px */
+  --text-sm: 0.78125rem; /* 12.5px */
+  --text-base: 0.875rem; /* 14px */
+  --text-md: 0.9375rem; /* 15px */
+  --text-lg: 1.1875rem; /* 19px */
+  --text-xl: 1.4375rem; /* 23px */
+  --text-display: 1.875rem; /* 30px */
+
+  /*
+   * The 4px grid, extended. The app stops at --space-10 because a pane is made of rows; a page is
+   * made of bands, and 7 fills the gap the app never needed between 6 and 8.
+   */
+  --space-7: 28px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+
+  /*
+   * The page takes the window rather than sitting in a column in the middle of it. The product
+   * panel is the argument, and it has to be big enough to read: at 1180px it rendered 600px wide,
+   * which put the interface's own type at 43% and turned it into texture.
+   */
+  --page-w: min(1680px, 94vw);
+
+  /*
+   * The reading measure, as a length rather than in `ch`. `ch` is relative to the element's own
+   * font, so a token shared by 15px prose and a 14px term list resolved to two different widths
+   * and the page had two right edges 39px apart. 34rem is about 65 characters of the body size.
+   */
+  --measure: 34rem;
+
+  /*
+   * The step between one thing arriving and the next thing starting.
+   *
+   * Not a motion duration. The two in `scale.css` say how long a change takes and are deliberate
+   * about being the only two; this says how far apart two changes begin, which the product has
+   * never needed because nothing in a fixed app shell arrives in sequence. It is stated here once
+   * with its reason rather than added to the ramp, where a third number would read as a third
+   * duration and invite a fourth.
+   *
+   * 70ms is under the threshold at which two arrivals read as separate events, so the page
+   * composes rather than counting itself out.
+   */
+  --stagger: 70ms;
+
+  /* Fainter than a border, because ruled paper is a ground and a border is an edge. */
+  --grid-line: color-mix(in srgb, var(--border) 62%, var(--bg));
+
+  /*
+   * How hard the colour washes push. Light and dark are not symmetrical: in light the palette is
+   * dark hues tinting white, which stays quiet on its own, but in dark the palette inverts to pale
+   * hues over near black, and the same strength turns into bright patches sitting on top of the
+   * card rather than light falling across it. Dark gets roughly a third of the strength and a
+   * blend mode that adds light instead of painting over it.
+   */
+  --wash: 34%;
+  --wash-soft: 22%;
+  --wash-blend: normal;
+  --grain: 0.26;
 }
 
-html {
-  scroll-behavior: smooth;
+:root[data-theme="dark"] {
+  --wash: 13%;
+  --wash-soft: 9%;
+  --wash-blend: screen;
+  --grain: 0.14;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --wash: 13%;
+    --wash-soft: 9%;
+    --wash-blend: screen;
+    --grain: 0.14;
+  }
 }
 
 body {
@@ -14,7 +97,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: var(--text-base);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
@@ -24,656 +107,1646 @@ a {
   text-decoration: none;
 }
 
+/*
+ * `color-scheme: light dark` means an unstyled button inherits the UA's `buttonface`, which under
+ * a dark-preferring OS paints a solid grey slab. Reset the chrome here so a control has to opt in
+ * to a surface rather than opt out of one.
+ */
 button {
+  padding: 0;
+  border: 0;
+  background: none;
   color: inherit;
+  cursor: pointer;
   font: inherit;
 }
 
+code {
+  font-family: var(--font-mono);
+  font-size: 0.94em;
+}
+
+/* Radius belongs to the shape, not to the focus state. Putting it here made the copy button's
+ * corners snap from 14px to 5px the moment it was tabbed to. */
 a:focus-visible,
-button:focus-visible,
-summary:focus-visible {
-  border-radius: 5px;
+button:focus-visible {
   outline: 2px solid var(--text);
-  outline-offset: 4px;
-}
-
-.site-rail {
-  position: fixed;
-  inset: 0 auto 0 0;
-  z-index: 10;
-  display: flex;
-  width: 216px;
-  flex-direction: column;
-  padding: 32px 34px 28px;
-  background: var(--bg);
-}
-
-.brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
-
-.brand-context {
-  display: flex;
-  align-items: center;
-  align-self: flex-start;
-  gap: 8px;
-}
-
-.brand-divider {
-  color: var(--border-strong);
-  font-size: 13px;
-}
-
-.brand-section {
-  color: var(--text-secondary);
-  font-size: 14px;
-  font-weight: 500;
-  letter-spacing: -0.01em;
-}
-
-.site-rail nav {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 7px;
-  margin-top: 58px;
-  color: var(--text-tertiary);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.site-rail nav a:hover,
-.site-rail nav a:focus-visible {
-  color: var(--text);
-}
-
-.site-rail nav a[aria-current="page"] {
-  color: var(--text);
-  font-weight: 500;
-}
-
-.rail-footer {
-  margin-top: auto;
-}
-
-.theme-toggle {
-  padding: 3px 0;
-  border: 0;
-  background: transparent;
-  color: var(--text-tertiary);
-  font-size: 11px;
-  line-height: 1.3;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-main {
-  display: flex;
-  width: min(680px, calc(100% - 292px));
-  flex-direction: column;
-  gap: 22px;
-  margin-left: clamp(280px, 38vw, 520px);
-  padding: 108px 36px 64px 0;
-}
-
-.hero,
-.demo,
-.report-overview,
-.setup {
-  scroll-margin-top: 32px;
-}
-
-.hero {
-  display: flex;
-  flex-direction: column;
-}
-
-h1,
-h2,
-h3,
-p {
-  text-wrap: pretty;
-}
-
-h1 {
-  max-width: 29ch;
-  margin: 0;
-  font-size: 22px;
-  font-weight: 500;
-  letter-spacing: -0.018em;
-  line-height: 1.3;
-}
-
-h2 {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 500;
-  letter-spacing: -0.008em;
-  line-height: 1.5;
-}
-
-h3 {
-  margin: 0;
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0;
-  line-height: 1.5;
-}
-
-.lede,
-.setup-copy > p {
-  color: var(--text-secondary);
-}
-
-.lede {
-  max-width: 58ch;
-  margin: 12px 0 0;
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.install-command {
-  width: min(500px, 100%);
-  margin-top: 18px;
-}
-
-.runner-tabs {
-  display: flex;
-  gap: 10px;
-  margin: 0 0 7px 2px;
-}
-
-.runner-tabs button {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  cursor: pointer;
-}
-
-.runner-tabs button[aria-pressed="true"] {
-  color: var(--text);
-}
-
-.command {
-  display: flex;
-  width: 100%;
-  min-height: 44px;
-  align-items: center;
-  align-self: flex-start;
-  gap: 11px;
-  padding: 10px 14px;
-  border: 0;
-  border-radius: 14px;
-  corner-shape: squircle;
-  background: var(--bg-subtle);
-  cursor: pointer;
-}
-
-.command code {
-  font-family: var(--font-mono);
-}
-
-.command code {
-  font-size: 13px;
-}
-
-.command-prompt {
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  font-size: 13px;
-}
-
-.command-action {
-  display: grid;
-  width: 16px;
-  height: 16px;
-  margin-left: auto;
-  place-items: center;
-  color: var(--text-tertiary);
-}
-
-.copy-icon {
-  position: relative;
-  width: 10px;
-  height: 10px;
-  border: 1px solid currentcolor;
-  border-radius: 2px;
-}
-
-.copy-icon::before {
-  position: absolute;
-  top: -4px;
-  left: 3px;
-  width: 8px;
-  height: 8px;
-  border: 1px solid currentcolor;
-  border-radius: 2px;
-  content: "";
-}
-
-.copy-check {
-  font-size: 12px;
+  outline-offset: 3px;
 }
 
 .sr-only {
   position: absolute;
-  overflow: hidden;
   width: 1px;
   height: 1px;
   padding: 0;
-  border: 0;
-  margin: -1px;
-  clip: rect(0, 0, 0, 0);
+  overflow: hidden;
+  clip-path: inset(50%);
   white-space: nowrap;
 }
 
-.section-heading {
-  margin-bottom: 17px;
+.skip-link {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: 20;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  box-shadow: var(--shadow-float-sm);
+  transform: translateY(-200%);
+  transition: transform var(--motion-base) var(--ease);
 }
 
-.demo {
-  padding: 22px 0 0;
+.skip-link:focus-visible {
+  transform: none;
 }
 
-.demo,
-.report-overview,
-.setup,
-.docs-page section {
-  border-top: 1px solid var(--border);
+/* ------------------------------------------------------------ arriving */
+
+/*
+ * The page composes itself rather than appearing.
+ *
+ * The order is the argument: the name and the claim, then the ways in, then the product. The claim
+ * and the capture land on the same beat, because the sentence and the thing that proves it are one
+ * statement and arriving apart would make the picture look like decoration that followed.
+ *
+ * It is the product's own gesture, restated because the site imports `scale.css` and not
+ * `primitives.css`, which is the control library. `primitives.css` sets out why it is this and not
+ * something else: opacity and translate only, never scale, because a scale moves the box and
+ * `getBoundingClientRect` then reports the moved one; and achromatic, because colour in the app
+ * means a verdict and an arrival is not a verdict.
+ *
+ * Pure CSS, and one-shot. There is no JavaScript in it, so a visitor without it sees the same page
+ * compose in the same order rather than an empty card waiting for a class that never lands.
+ */
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--enter-rise, 10px));
+  }
 }
 
-.report-overview,
-.setup,
-.docs-page section {
-  padding-top: 22px;
+.card-claim,
+.card-ways,
+.card-shot,
+.card-claim h1 {
+  /*
+   * `backwards`, so the element holds the first frame through its delay. Without it a delayed
+   * arrival is fully visible until its turn comes and then snaps to nothing to begin, which is
+   * worse than not staging it at all.
+   */
+  animation: enter var(--motion-base) var(--ease) backwards;
 }
 
-.translation {
-  margin: 0;
+.card-ways {
+  animation-delay: var(--stagger);
 }
 
-.translation figcaption {
-  margin-bottom: 24px;
-  color: var(--text);
-  font-size: 15px;
+.card-shot,
+.card-claim h1 {
+  animation-delay: calc(var(--stagger) * 2);
+}
+
+/*
+ * The claim is set to arrive from below its own panel, which is already arriving, so it travels
+ * the shorter distance. Composed with the panel's, the full distance is the same as the others.
+ */
+.card-claim h1 {
+  --enter-rise: 6px;
+}
+
+/*
+ * With motion off there is nothing to stage, and the delays have to go with the durations. The
+ * blanket at the foot of this file collapses `animation-duration` but says nothing about
+ * `animation-delay`, so an entrance held at its first frame for 140ms would still be 140ms of a
+ * blank card for the reader who asked for no motion.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .card-claim,
+  .card-ways,
+  .card-shot,
+  .card-claim h1 {
+    animation: none;
+  }
+}
+
+/* ---------------------------------------------------------------- home */
+
+/*
+ * The home page is one screen and never scrolls. Only this page is locked, which is why the rule
+ * is bound to the layout being present rather than set on the document: the docs are a document
+ * and have to scroll.
+ */
+body:has(.home) {
+  overflow: hidden;
+  background: var(--bg-subtle);
+}
+
+/* `dvh` rather than `vh`, so a mobile browser's collapsing toolbar cannot push the layout over. */
+.home {
+  height: 100dvh;
+  padding: var(--space-4);
+}
+
+/*
+ * Three panels rather than one divided card: separate shapes on a ground read as three things you
+ * can look at, where hairlines inside a single box read as one thing with rules drawn through it.
+ *
+ * The row is `minmax(0, 1fr)` rather than the default `auto`. An auto row takes the height of its
+ * tallest child, so the layout grew past the window and the bottom of it was clipped away by
+ * `overflow: hidden` — it looked like it fitted. Pinning the row, and letting each panel shrink
+ * below its content, is what makes "one screen" true rather than merely invisible.
+ */
+.card {
+  display: grid;
+  grid-template-columns: minmax(19rem, 23rem) minmax(14rem, 17rem) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: var(--space-3);
+  height: 100%;
+}
+
+.panel {
+  min-height: 0;
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+}
+
+/* ---- left: the name and the claim ---- */
+
+.card-claim {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: var(--space-8);
+  overflow: hidden;
+}
+
+/* The ruled ground marks where the page begins, and fades out rather than stopping. */
+.card-claim::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: linear-gradient(to bottom, #000, transparent 92%);
+}
+
+.card-brand-row,
+.card-claim h1 {
+  position: relative;
+}
+
+.card-brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+/*
+ * The name carries the top of the panel at display size, but at the weight the product uses. The
+ * app is set in 400 and 500 throughout; a 600 here read as a different typeface wearing the same
+ * letters, and size alone is enough to make it the first thing seen.
+ */
+.card-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: clamp(1.375rem, 1rem + 0.7vw, 1.75rem);
   font-weight: 500;
-  line-height: 1.5;
+  letter-spacing: -0.025em;
 }
 
-.translation-stage {
+/* The only icon-only control on the page, because it is the only thing here that is not a place. */
+.theme-toggle {
   display: grid;
-  grid-template-columns: minmax(0, 1.12fr) minmax(0, 0.88fr);
-  gap: clamp(40px, 6vw, 76px);
-  align-items: start;
-}
-
-.translation-label {
-  display: block;
-  margin-bottom: 15px;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: var(--radius-sm);
   color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  font-size: 9px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  transition:
+    background var(--motion-fast) var(--ease),
+    color var(--motion-fast) var(--ease);
 }
 
-.translation-source p {
+.theme-toggle:hover {
+  background: var(--bg-subtle);
+  color: var(--text);
+}
+
+/* The claim sits at the foot, where the reference puts its supporting line. */
+h1 {
+  max-width: 20ch;
   margin: 0;
-  color: var(--text-secondary);
-  font-size: 13px;
-  letter-spacing: -0.005em;
-  line-height: 1.6;
+  font-size: clamp(1.375rem, 0.95rem + 0.9vw, 1.875rem);
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+  text-wrap: balance;
 }
 
-.translation-source p + p {
-  margin-top: 14px;
-}
+/* ---- middle: the ways in ---- */
 
-.translation-source mark {
-  padding: 0;
-  border-radius: 0.48em;
-  background-color: transparent;
-  background-image: linear-gradient(var(--bg-muted), var(--bg-muted));
-  background-position: left 62%;
-  background-repeat: no-repeat;
-  background-size: 0 78%;
-  color: inherit;
-  corner-shape: squircle;
-  -webkit-box-decoration-break: clone;
-  box-decoration-break: clone;
-}
+/*
+ * Three equal cells: the thing to do, then the two things to read. The icon is what gets scanned
+ * here, so it is drawn large and the label is one direct phrase under it, not a sentence.
+ */
+/* ---- middle: the ways in ---- */
 
-.extract-cause {
-  animation: extract-cause 6s cubic-bezier(0.4, 0, 0.2, 1) both;
-}
-
-.extract-failure {
-  animation: extract-failure 6s cubic-bezier(0.4, 0, 0.2, 1) both;
-}
-
-.extract-how {
-  animation: extract-how 6s cubic-bezier(0.4, 0, 0.2, 1) both;
-}
-
-.translation-result {
+/*
+ * Three separate squircles with air between them, not one panel with rules drawn through it. Each
+ * is a whole target: the icon is what gets scanned, and the label under it is one direct phrase.
+ */
+.card-ways {
   display: grid;
-  gap: 28px;
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+  min-height: 0;
 }
 
-.translation-result section {
+.cell {
+  /*
+   * The distance the answer travels, declared by the surface the way the product declares it
+   * (`primitives.css`). The answer comes up from the foot of the card, the direction the product's
+   * own arrivals use for something belonging to the bottom of the thing it appears in. Translate
+   * rather than scale, for the reason stated there: a scale moves the box, a translate does not.
+   */
+  --rise: 14%;
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-5);
+  padding: var(--space-7);
+  color: var(--text-secondary);
+  font-size: var(--text-lg);
+  line-height: 1.35;
+  letter-spacing: -0.014em;
+  text-align: left;
+  overflow: hidden;
+  transition:
+    box-shadow var(--motion-base) var(--ease),
+    color var(--motion-base) var(--ease),
+    transform var(--motion-base) var(--ease);
+}
+
+/*
+ * The hover lifts, and a mesh comes up under it. A flat grey fill on a grey ground read as a state
+ * that had failed to load; raising the card and warming it from beneath reads as the card coming
+ * forward, which is the vocabulary the rest of the layout already uses.
+ *
+ * Each cell gets its own colour from the product's palette, so the three are distinguishable at a
+ * glance without any of them introducing a hue the app does not already own.
+ */
+/*
+ * Two wash layers, not one. `::before` carries the cell's own tone and `.cell-wash` carries the
+ * answer to a click, and they cross-fade. One layer whose `background-image` was rewritten by the
+ * state could not: a gradient is not an interpolable value, so the colour changed in a single
+ * frame in both directions, and the entrance only looked designed because an animation started it
+ * from nothing. Two layers make the exit the entrance run backwards, for free.
+ *
+ * Every rest rule is fenced with `:not([data-state])`. The hover reveal and the answer have
+ * identical specificity, so source order was the only thing separating them.
+ */
+.cell::before,
+.cell-wash {
+  position: absolute;
+  z-index: 0;
+  inset: -40%;
+  opacity: 0;
+  /*
+   * Blurred hard. Unblurred radial stops read as discs of colour laid on the card; at this radius
+   * the edges are gone and what is left is a field with light in it. This was the difference
+   * between the wash looking like light and looking like paint.
+   */
+  filter: blur(44px) saturate(1.1);
+  mix-blend-mode: var(--wash-blend);
+  pointer-events: none;
+}
+
+/*
+ * The wash drifts while it is up, and the drift is paused rather than removed when it goes down.
+ * Detaching the animation reverted the transform in the same frame the opacity started fading, so
+ * the field jumped back to its start position on the way out and again on the way in. Paused, it
+ * fades out from wherever it had wandered to and resumes from there.
+ *
+ * This is a loop, so it says its own period rather than borrowing a token: the product's two
+ * durations are one-shot, for something that happened, and the note in `scale.css` is explicit
+ * that a loop matches nothing and should not be tokenised. 14s, alternating.
+ */
+.cell::before {
+  content: "";
+  animation: cell-mesh 14s ease-in-out infinite alternate paused;
+  transition: opacity var(--motion-base) var(--ease);
+}
+
+.cell:not([data-state]):is(:hover, :focus-visible)::before {
+  opacity: 1;
+  animation-play-state: running;
+}
+
+/*
+ * Grain over the wash. A blurred field of colour on its own still reads as a cheap gradient; a
+ * fine noise laid over it breaks the banding and gives the surface something to catch. Generated
+ * by an SVG filter in a data URI, so it costs no request and no asset.
+ */
+.cell::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: 0;
+  mix-blend-mode: overlay;
+  pointer-events: none;
+  transition: opacity var(--motion-base) var(--ease);
+}
+
+.cell:is(:hover, :focus-visible)::after,
+.cell[data-state]::after {
+  opacity: var(--grain);
+}
+
+@keyframes cell-mesh {
+  from {
+    transform: translate3d(-2%, -1%, 0) scale(1);
+  }
+
+  to {
+    transform: translate3d(2%, 2%, 0) scale(1.08);
+  }
+}
+
+.cell[data-tone="install"]::before {
+  background-image:
+    radial-gradient(
+      58% 62% at 12% 8%,
+      color-mix(in srgb, var(--accent) var(--wash), transparent),
+      transparent 72%
+    ),
+    radial-gradient(
+      46% 52% at 88% 82%,
+      color-mix(in srgb, var(--facet-how) var(--wash-soft), transparent),
+      transparent 72%
+    );
+}
+
+.cell[data-tone="docs"]::before {
+  background-image:
+    radial-gradient(
+      54% 60% at 86% 10%,
+      color-mix(in srgb, var(--facet-how) var(--wash), transparent),
+      transparent 72%
+    ),
+    radial-gradient(
+      50% 56% at 10% 86%,
+      color-mix(in srgb, var(--ok) var(--wash-soft), transparent),
+      transparent 72%
+    );
+}
+
+.cell[data-tone="source"]::before {
+  background-image:
+    radial-gradient(
+      56% 60% at 14% 86%,
+      color-mix(in srgb, var(--facet-why) var(--wash), transparent),
+      transparent 72%
+    ),
+    radial-gradient(
+      48% 54% at 88% 12%,
+      color-mix(in srgb, var(--accent) var(--wash-soft), transparent),
+      transparent 72%
+    );
+}
+
+.cell:is(:hover, :focus-visible) {
+  color: var(--text);
+  box-shadow: var(--shadow-float);
+  transform: translateY(-2px);
+}
+
+/* Everything in the cell sits above its own wash. */
+.cell-ico,
+.cell-swap {
+  position: relative;
+  z-index: 1;
+}
+
+.cell-ico {
+  color: var(--text-tertiary);
+  transition: color var(--motion-base) var(--ease);
+}
+
+.cell:is(:hover, :focus-visible) .cell-ico,
+.cell[data-state] .cell-ico {
+  color: var(--text);
+}
+
+/*
+ * One line of type occupying one place, said up to three ways: what the cell is for, what the
+ * click will do, and - on the card that answers - what it just did.
+ *
+ * All three share one grid cell and are pinned to its bottom. Aligned to the top, a one-line
+ * reveal sat where the first line of a two-line label had been, with a line of air under it - it
+ * read as floating. Sharing the last baseline is what makes the swap look like one line changing
+ * rather than pieces of text trading places.
+ */
+.cell-swap {
+  display: grid;
+  width: 100%;
+  align-items: end;
+}
+
+/*
+ * Opacity on `fast`, position on `base`. The outgoing line is gone before it has finished moving,
+ * which is what keeps a cross-fade from showing two legible sentences stacked on one baseline at
+ * half strength. The split was 220ms against 260ms, two numbers belonging to nothing; the same
+ * technique reads better built from the two durations the product already has, and it has a
+ * meaning here: the fade is the control answering, the settle is the line changing shape.
+ */
+.cell-swap-said,
+.cell-swap-alt,
+.cell-swap-ack {
+  grid-area: 1 / 1;
+  will-change: opacity, transform;
+  transition:
+    opacity var(--motion-fast) var(--ease),
+    transform var(--motion-base) var(--ease);
+}
+
+/* The states are set at the same size, so a swap does not read as a change of rank. */
+.cell-swap-alt,
+.cell-swap-ack {
+  color: var(--text);
+  font-size: var(--text-lg);
+  opacity: 0;
+  transform: translateY(0.5em);
+}
+
+.cell-swap-alt code {
+  font-family: var(--font-mono);
+  font-size: 1em;
+}
+
+/*
+ * The mark sits in the corner and is the height of a line of text, filled rather than outlined.
+ * An outlined glyph beside the label read as punctuation; solid, in the text colour, it reads as
+ * the one thing on the card you are meant to act on.
+ */
+.cell-mark {
+  position: absolute;
+  z-index: 1;
+  top: var(--space-7);
+  right: var(--space-7);
+  display: grid;
+  width: 1.55em;
+  height: 1.55em;
+  place-items: center;
+  border-radius: 50%;
+  /* scale.css squircles every corner; a circle has to ask for its own shape back. */
+  corner-shape: round;
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+  font-size: var(--text-lg);
+  transition:
+    background var(--motion-base) var(--ease),
+    color var(--motion-base) var(--ease),
+    transform var(--motion-base) var(--ease);
+}
+
+/* Both glyphs occupy the mark and trade places, for the reason `CellBody` gives for the label. */
+.cell-mark-glyph {
+  grid-area: 1 / 1;
+  transition: opacity var(--motion-fast) var(--ease);
+}
+
+.cell-mark-done {
+  opacity: 0;
+}
+
+/*
+ * Only the copy that landed trades the arrow for a tick. A failed copy hands the job back to the
+ * reader, so the mark keeps pointing at the thing they now have to do by hand; hiding it on both
+ * states left the failure wearing an empty disc, which says less than either glyph.
+ */
+.cell[data-state="copied"] .cell-mark-go {
+  opacity: 0;
+}
+
+.cell[data-state="copied"] .cell-mark-done {
   opacity: 1;
 }
 
-.translation-result h3 {
-  margin-bottom: 7px;
-  color: var(--text-tertiary);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0;
+/*
+ * The nudge answers the pointer and holds while the card is answering a click, because the pointer
+ * is still there. The colours do not: they are fenced so the answer's colour wins by selector
+ * rather than by sitting lower in the file, which is the same trap the washes were in.
+ */
+.cell:is(:hover, :focus-visible) .cell-mark {
+  transform: translate(1px, -1px);
 }
 
-.translation-result p {
-  max-width: 28ch;
-  margin: 0;
-  font-size: 17px;
-  font-weight: 500;
-  letter-spacing: -0.012em;
-  line-height: 1.38;
+.cell:not([data-state]):is(:hover, :focus-visible) .cell-mark {
+  background: var(--text);
+  color: var(--bg);
 }
 
-@keyframes extract-cause {
-  0%, 8% {
-    background-size: 0 78%;
+.cell:not([data-state]):is(:hover, :focus-visible) .cell-swap-said {
+  opacity: 0;
+  transform: translateY(-0.5em);
+}
+
+.cell:not([data-state]):is(:hover, :focus-visible) .cell-swap-alt {
+  opacity: 1;
+  transform: none;
+}
+
+/* ---- the copy confirmation ---- */
+
+/*
+ * The whole card answers the click, not a word in the corner. A small grey "Copied" beside the
+ * mark was the least visible part of the least visible corner of the one control on the page, so
+ * the confirmation is the card itself: the wash turns to the product's pass colour and comes up
+ * once, the corner mark becomes a tick, and the line that showed the command says what happened
+ * to it. All of it is one state, so none of it can be seen without the rest.
+ *
+ * Every part of it is a declared state on an interpolable property rather than an animation, so
+ * the card leaves the answer the way it entered it. The entrance used to be a 620ms keyframe and
+ * the exit was whatever fell out when the attribute went away: with a pointer still resting on the
+ * card - which is where the pointer is, two seconds after a click on it - the answer was replaced
+ * by the command in one frame and the green by the purple in another. An animation plays forward
+ * and stops. It cannot have an exit, only a second animation kept in step with it by hand.
+ */
+.cell-wash {
+  transform: translateY(var(--rise));
+  transition:
+    opacity var(--motion-base) var(--ease),
+    transform var(--motion-base) var(--ease);
+}
+
+
+.cell[data-state] .cell-wash {
+  opacity: 1;
+  transform: none;
+}
+
+.cell[data-state="copied"] .cell-wash {
+  background-image:
+    radial-gradient(
+      52% 56% at 22% 88%,
+      color-mix(in srgb, var(--ok) var(--wash), transparent),
+      transparent 72%
+    ),
+    radial-gradient(
+      44% 50% at 84% 18%,
+      color-mix(in srgb, var(--ok) var(--wash-soft), transparent),
+      transparent 72%
+    );
+}
+
+.cell[data-state="failed"] .cell-wash {
+  background-image:
+    radial-gradient(
+      52% 56% at 22% 88%,
+      color-mix(in srgb, var(--warn) var(--wash), transparent),
+      transparent 72%
+    );
+}
+
+/* The answer holds the line whether or not a pointer is still on the card. */
+.cell[data-state] .cell-swap-said {
+  opacity: 0;
+  transform: translateY(-0.5em);
+}
+
+.cell[data-state] .cell-swap-ack {
+  opacity: 1;
+  transform: none;
+}
+
+.cell[data-state="copied"] .cell-mark {
+  background: var(--ok);
+  color: var(--bg);
+}
+
+.cell[data-state="failed"] .cell-mark {
+  background: var(--warn);
+  color: var(--bg);
+}
+
+/*
+ * The reveal is the cell telling you what it will do, and the answer is the card telling you what
+ * it did, so with motion off both still have to say it: the states swap instantly instead of
+ * sliding, and the wash arrives without coming up from anywhere.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .cell-swap-said,
+  .cell-swap-alt,
+  .cell-swap-ack,
+  .cell-wash,
+  .cell-mark {
+    transform: none !important;
   }
-  24%, 100% {
-    background-size: 100% 78%;
+
+  .cell::before {
+    animation: none !important;
   }
 }
 
-@keyframes extract-failure {
-  0%, 26% {
-    background-size: 0 78%;
-  }
-  45%, 100% {
-    background-size: 100% 78%;
-  }
-}
+/* ---- right: the product ---- */
 
-@keyframes extract-how {
-  0%, 50% {
-    background-size: 0 78%;
-  }
-  72%, 100% {
-    background-size: 100% 78%;
-  }
-}
-
-.setup {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 0;
-}
-
-.setup > p {
-  max-width: 66ch;
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.setup code {
-  font-family: var(--font-mono);
-  font-size: 0.92em;
-}
-
-.setup > .setup-note {
-  margin-top: 2px;
-  color: var(--text-tertiary);
-  font-size: 11px;
-  line-height: 1.55;
-}
-
-.report-overview,
-.docs-page section {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.report-overview > p,
-.docs-page p {
-  max-width: 66ch;
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.report-map {
+/*
+ * A wash inside the panel, with the capture inset on top of it: the reference puts the product on
+ * a coloured field rather than on the page, and the field is what lifts it. Every colour in it is
+ * a product token - the app's accent and its two facet hues - at low strength and heavily blurred,
+ * so the page gains depth without gaining a palette.
+ */
+.card-shot {
+  position: relative;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px 36px;
-  margin: 9px 0 4px;
+  grid-template-rows: minmax(0, 1fr);
+  margin: 0;
+  padding: var(--space-8);
+  place-items: center;
+  background: var(--bg);
+  overflow: hidden;
 }
 
-.report-map div,
-.docs-definitions div,
-.docs-commands div {
-  min-width: 0;
+/*
+ * A mesh, not a gradient. Six colour points at irregular positions and sizes, blurred until the
+ * seams are gone: the eye reads it as one field with depth in it rather than as a band sweeping
+ * from one corner to another, which is what a two-stop linear looks like at this scale.
+ */
+.card-shot::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: -30%;
+  background-image:
+    radial-gradient(
+      30% 26% at 16% 12%,
+      color-mix(in srgb, var(--accent) var(--wash), transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      26% 24% at 76% 10%,
+      color-mix(in srgb, var(--facet-why) var(--wash), transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      34% 30% at 94% 44%,
+      color-mix(in srgb, var(--facet-how) var(--wash), transparent),
+      transparent 72%
+    ),
+    radial-gradient(
+      28% 28% at 6% 64%,
+      color-mix(in srgb, var(--facet-why) var(--wash-soft), transparent),
+      transparent 72%
+    ),
+    radial-gradient(
+      38% 30% at 54% 96%,
+      color-mix(in srgb, var(--accent) var(--wash-soft), transparent),
+      transparent 74%
+    ),
+    radial-gradient(
+      26% 24% at 32% 40%,
+      color-mix(in srgb, var(--ok) var(--wash-soft), transparent),
+      transparent 70%
+    );
+  filter: blur(60px) saturate(1.15);
+  mix-blend-mode: var(--wash-blend);
 }
 
-.report-map dt,
-.docs-definitions dt,
-.docs-commands dt {
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.5;
+/*
+ * Grain over the mesh. A blurred field of colour on its own reads as a cheap wash; a fine noise
+ * laid over it in `overlay` breaks the banding and gives the surface something to catch. The
+ * texture is generated by an SVG filter in a data URI, so it costs no request and no asset.
+ */
+.card-shot::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: var(--grain);
+  mix-blend-mode: overlay;
+  pointer-events: none;
 }
 
-.report-map dd,
-.docs-definitions dd,
-.docs-commands dd {
-  margin: 2px 0 0;
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.55;
+/*
+ * The box hugs the picture. With `object-fit: contain` the element stayed the size of its grid
+ * area while the image inside it shrank to fit, so `border-radius` rounded empty space and the
+ * picture's own corners stayed square against the wash. Sizing by `max-*` instead means the
+ * element is exactly the rendered image, and the radius lands on the image.
+ */
+.shot {
+  position: relative;
+  z-index: 1;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 100%;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-float);
 }
 
-.report-overview > .report-tools,
-.docs-page .docs-note {
-  color: var(--text-tertiary);
-  font-size: 11px;
-  line-height: 1.55;
+/*
+ * Both themes ship and the stylesheet picks one. A `prefers-color-scheme` <picture> would ignore
+ * the site's own theme control, which is the thing a reader actually pressed.
+ */
+.shot-dark {
+  display: none;
 }
 
-.report-tools a,
-.docs-page a {
-  color: var(--text);
-  text-decoration: underline;
-  text-decoration-color: var(--border-strong);
-  text-underline-offset: 3px;
+:root[data-theme="dark"] .shot-light {
+  display: none;
 }
 
-.docs-page {
-  gap: 22px;
-  padding-bottom: 96px;
+:root[data-theme="dark"] .shot-dark {
+  display: block;
 }
 
-.docs-intro {
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .shot-light {
+    display: none;
+  }
+
+  :root:not([data-theme="light"]) .shot-dark {
+    display: block;
+  }
+}
+
+/* --------------------------------------------------------------- docs */
+
+/*
+ * The documentation, laid out the way documentation is laid out by the two references this was
+ * measured against rather than invented from: linear.app/docs and docs.stripe.com.
+ *
+ * Both put a persistent navigation column at the left edge of the window and a reading column
+ * beside it. Neither centres a narrow box in the middle of the screen, which is what the version
+ * before this did, and neither runs an essay whose contents read "Five classes" and "When it
+ * cannot tell". Linear's navigation is a list of the product's own nouns, so this one is too.
+ *
+ * Measured from the references at 1512px:
+ *   Linear   nav 280px at the left edge. Body 15px / 24px leading.  h1 32 / 590.
+ *   Stripe   nav 255px at the left edge. Body 16px / 26px leading.  h1 32 / 700, h2 21.
+ *   Here     nav 260px at the left edge. Body 16px / 26px leading.  h1 32, h2 23, h3 19.
+ */
+
+/*
+ * The one departure from the product's type ramp, made deliberately. `scale.css` tops its body
+ * sizes at 15px because the app is a fixed, dense shell of 28px rows; a document is not, and this
+ * page set its content at 14px in the colour the app uses for captions, which is why it read as a
+ * footnote to headings that carried nothing. 1rem is not so much a new size as the reader's own:
+ * the site restates the ramp in `rem` for exactly this reason.
+ */
+.doc-page {
+  --doc-body: 1rem;
+  --doc-lead: 1.62;
+  --doc-nav-w: 16.25rem;
+}
+
+/* ---- head ---- */
+
+/*
+ * Opaque, not the app's floating surface. `--float-bg` is for a panel the app deliberately hovers
+ * above its own content; a page head is not hovering, it is the top, and a translucent one showed
+ * the document sliding through it.
+ */
+.doc-head {
+  position: sticky;
+  top: 0;
+  z-index: 5;
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  align-items: center;
+  gap: var(--space-2);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  padding: var(--space-3) var(--space-6);
 }
 
-.docs-intro .translation-label {
-  margin-bottom: 2px;
+.doc-brand {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-md);
+  font-weight: 500;
+  letter-spacing: -0.02em;
 }
 
-.docs-page section {
-  scroll-margin-top: 36px;
+.doc-brand-divider {
+  color: var(--text-tertiary);
+  font-size: var(--text-md);
 }
 
-.docs-page code {
-  font-family: var(--font-mono);
-  font-size: 0.92em;
+.doc-brand-section {
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  transition: color var(--motion-fast) var(--ease);
 }
 
-.docs-command {
-  overflow-x: auto;
-  padding: 13px 15px;
-  border: 0;
-  border-radius: 10px;
-  margin: 4px 0;
+.doc-brand-section:hover {
+  color: var(--text);
+}
+
+.doc-head-actions {
+  display: flex;
+  margin-left: auto;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/*
+ * Two audiences, one control: the button copies the page as text, and the menu beside it holds the
+ * other ways out. Split, because copying is the common case and a menu that has to be opened to
+ * reach it costs a click on every visit.
+ */
+.doc-agent {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+}
+
+.doc-agent-copy,
+.doc-agent-more {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  transition:
+    background var(--motion-fast) var(--ease),
+    border-color var(--motion-fast) var(--ease),
+    color var(--motion-fast) var(--ease);
+}
+
+.doc-agent-copy {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+/* The two halves share an edge rather than each drawing their own. */
+.doc-agent-more {
+  padding: 0 var(--space-2);
+  border-left: 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.doc-agent-copy:hover,
+.doc-agent-more:hover,
+.doc-agent-more[aria-expanded="true"] {
+  background: var(--bg-subtle);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.doc-agent-copy[data-state="copied"] {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.doc-agent-copy[data-state="failed"] {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.doc-agent-menu {
+  position: absolute;
+  z-index: 6;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  display: grid;
+  min-width: 15rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  box-shadow: var(--shadow-float);
+  padding: var(--space-1);
+  animation: enter var(--motion-fast) var(--ease) backwards;
+  --enter-rise: -4px;
+}
+
+.doc-agent-menu > * {
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--text-base);
+  text-align: left;
+  transition:
+    background var(--motion-fast) var(--ease),
+    color var(--motion-fast) var(--ease);
+}
+
+.doc-agent-menu > *:hover {
   background: var(--bg-subtle);
   color: var(--text);
-  font-size: 13px;
+}
+
+/*
+ * Both wordings occupy one place and trade by opacity, and both glyphs do the same, for the reason
+ * the home page card gives: replacing the contents of one element changes the only property that
+ * cannot be interpolated, so no transition on it can have an exit.
+ */
+.doc-swap {
+  display: grid;
+  align-items: center;
+  justify-items: start;
+}
+
+.doc-swap-said,
+.doc-swap-ack {
+  grid-area: 1 / 1;
+  transition: opacity var(--motion-fast) var(--ease);
+}
+
+.doc-swap-ack {
+  opacity: 0;
+}
+
+[data-state] > .doc-swap > .doc-swap-said {
+  opacity: 0;
+}
+
+[data-state] > .doc-swap > .doc-swap-ack {
+  opacity: 1;
+}
+
+.doc-mark {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+}
+
+.doc-mark-glyph {
+  grid-area: 1 / 1;
+  transition: opacity var(--motion-fast) var(--ease);
+}
+
+.doc-mark-done {
+  opacity: 0;
+}
+
+.doc-mark[data-done] .doc-mark-go {
+  opacity: 0;
+}
+
+.doc-mark[data-done] .doc-mark-done {
+  opacity: 1;
+}
+
+/* ---- frame ---- */
+
+/*
+ * The navigation sits at the left edge of the window and the reading column beside it, which is
+ * what both references do. A centred box held the document in the middle of the screen with a
+ * void on either side; before that, a 90rem page held one on the right.
+ */
+.doc-frame {
+  display: grid;
+  grid-template-columns: var(--doc-nav-w) minmax(0, 1fr);
+  align-items: start;
+}
+
+/*
+ * The pair is capped and centred, rather than the reading column being centred inside whatever the
+ * window leaves. Centring the column alone opened a 300px gap between the navigation and the text
+ * it belongs to, so the two read as unrelated objects that happened to land on the same screen.
+ */
+@media (min-width: 76rem) {
+  .doc-head,
+  .doc-frame {
+    max-width: 76rem;
+    margin: 0 auto;
+  }
+}
+
+.doc-nav {
+  position: sticky;
+  top: 4rem;
+  display: grid;
+  max-height: calc(100dvh - 4rem);
+  align-content: start;
+  border-right: 1px solid var(--border);
+  padding: var(--space-8) var(--space-6) var(--space-16);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  font-size: var(--text-base);
+}
+
+.doc-nav ol {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 1px;
+  list-style: none;
+}
+
+/*
+ * Numbered, and flat. The product has no route table, no navigation and no section constant, so
+ * any grouping here would be this stylesheet's opinion wearing the product's name. A number gives
+ * a page an address a reader can say out loud, which a group name does not.
+ */
+.doc-nav a {
+  display: grid;
+  grid-template-columns: 1.6rem minmax(0, 1fr);
+  align-items: baseline;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  transition:
+    background var(--motion-fast) var(--ease),
+    color var(--motion-fast) var(--ease);
+}
+
+.doc-nav a:hover {
+  background: var(--bg-subtle);
+  color: var(--text);
+}
+
+/*
+ * The page you are on is filled rather than ruled. A line in the gutter says "here" and nothing
+ * else; a filled row says which row, which is the question a list of twenty answers.
+ */
+.doc-nav a[aria-current] {
+  background: var(--bg-muted);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.doc-nav-n {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- reading column ---- */
+
+/*
+ * The column sits in the space beside the navigation rather than at its edge, and stops at a
+ * measure. 44rem at 16px is about 68 characters, between Stripe's 52 and Linear's 87.
+ */
+/*
+ * The column is wider than the measure, and the text keeps the measure inside it. A capture is the
+ * running product photographed at 1400px; held to the same 44rem as a paragraph it renders at a
+ * third of its own size and the interface in it becomes texture rather than something to read.
+ * Prose is set to read; a picture is set to be legible.
+ */
+/*
+ * The top padding matches the navigation's, so the first heading and the first item of the list
+ * beside it start on one line. They were 16px apart, which is the kind of gap that reads as two
+ * unrelated columns rather than one page.
+ */
+.doc-main {
+  min-width: 0;
+  max-width: 54rem;
+  padding: var(--space-8) var(--space-10) var(--space-20);
+}
+
+.doc-main p,
+.doc-main ul,
+.doc-main h1,
+.doc-main h2,
+.doc-terms,
+.doc-command,
+.doc-contents,
+.doc-next {
+  max-width: 44rem;
+}
+
+.doc-lede {
+  padding-bottom: var(--space-8);
+}
+
+.doc-main h1 {
+  max-width: none;
+  margin: 0;
+  font-size: 2rem;
+  font-weight: 500;
+  letter-spacing: -0.022em;
+  line-height: 1.2;
+}
+
+/*
+ * More specific than `.doc-main p`, which follows it and would otherwise win on source order and
+ * set the lede at the body size. The whole point of a lede is that it is not the body size.
+ */
+.doc-main .doc-lede > p {
+  margin: var(--space-4) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-lg);
   line-height: 1.5;
 }
 
-.docs-definitions,
-.docs-commands {
+/*
+ * Headings step 32 / 23 against a 16px body. This page set its subheads at the body size, so a
+ * passage title and the sentence under it were the same size and only the weight said which was
+ * which. Both references step every level.
+ */
+.doc-main h2 {
+  margin: var(--space-12) 0 var(--space-4);
+  font-size: var(--text-xl);
+  font-weight: 500;
+  letter-spacing: -0.018em;
+}
+
+.doc-main p {
+  margin: var(--space-4) 0 0;
+  font-size: var(--doc-body);
+  line-height: var(--doc-lead);
+}
+
+.doc-main ul {
   display: grid;
-  gap: 14px;
-  margin: 8px 0 4px;
+  margin: var(--space-4) 0 0;
+  padding-left: var(--space-5);
+  gap: var(--space-2);
+  font-size: var(--doc-body);
+  line-height: var(--doc-lead);
 }
 
-.docs-commands {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px 32px;
+.doc-main li::marker {
+  color: var(--text-tertiary);
 }
 
-@media (max-width: 980px) {
-  .site-rail {
-    width: 180px;
-    padding-inline: 28px;
+/*
+ * An underline is for a link inside a sentence, and it says so by name rather than by where it
+ * happens to sit. Written as `.doc-main a` it reached every block link on the page: each row of
+ * the contents drew a rule along its bottom edge which went to the text colour on hover, putting a
+ * near-black bar under a rounded shape. Scoping it to `p, li, dd` did not help, because the
+ * contents are a list and each row is an `li`.
+ */
+.doc-link {
+  border-bottom: 1px solid var(--border-strong);
+  transition: border-color var(--motion-fast) var(--ease);
+}
+
+.doc-link:hover {
+  border-bottom-color: var(--text);
+}
+
+/*
+ * 500, like everything else here. The app is set in 400 and 500 throughout, and the comment on the
+ * brand rule already says what a 600 does: it reads as a different typeface wearing the same
+ * letters. Two weights are enough to carry emphasis when the type is set at a document's size.
+ */
+.doc-main strong {
+  font-weight: 500;
+}
+
+/* Emphasis here names a thing in the interface, so it is set as a name rather than as a slant. */
+.doc-main em {
+  font-style: normal;
+  font-weight: 500;
+}
+
+/*
+ * A note is an aside, so it is set apart rather than merely greyer: a paragraph that differs from
+ * the one above it only in colour reads as the same paragraph, printed worse.
+ */
+/*
+ * An aside sits on its own ground rather than behind a rule. The rule was a vertical line arriving
+ * from nowhere: it belonged to no grid, aligned with nothing, and carried no more meaning than the
+ * indent it came with.
+ */
+.doc-note {
+  margin-top: var(--space-6);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  padding: var(--space-4) var(--space-5);
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+}
+
+/* ---- terms ---- */
+
+.doc-terms {
+  display: grid;
+  margin: var(--space-6) 0 0;
+}
+
+.doc-terms > div {
+  border-top: 1px solid var(--border);
+  padding: var(--space-4) 0;
+}
+
+.doc-terms > div:last-child {
+  border-bottom: 1px solid var(--border);
+}
+
+.doc-terms dt {
+  font-size: var(--doc-body);
+  font-weight: 500;
+}
+
+.doc-terms dd {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--doc-body);
+  line-height: var(--doc-lead);
+}
+
+/* ---- the index ---- */
+
+/*
+ * A numbered contents: the page, and the one line saying what it covers. A reader who does not yet
+ * know that Salidium calls something "Left" cannot choose it from a list of bare names, and a grid
+ * of bordered cards would spend a rule and a corner on each of fourteen one-line entries.
+ */
+.doc-contents {
+  display: grid;
+  margin: var(--space-8) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.doc-contents li + li {
+  border-top: 1px solid var(--border);
+}
+
+/*
+ * Inset, and squircled. The hover used to paint the whole row edge to edge with square corners
+ * butted against the hairline above and below it, which is a band rather than a target. The three
+ * cards on the home page are the shape this site already uses for a row you can take.
+ */
+.doc-contents a {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr);
+  gap: 0 var(--space-4);
+  margin: var(--space-1) 0;
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  transition:
+    background var(--motion-fast) var(--ease),
+    transform var(--motion-fast) var(--ease);
+}
+
+.doc-contents a:hover {
+  background: var(--bg-subtle);
+  transform: translateX(2px);
+}
+
+.doc-contents-n {
+  grid-row: span 2;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.6;
+}
+
+.doc-contents-title {
+  font-size: var(--doc-body);
+  font-weight: 500;
+}
+
+.doc-contents-summary {
+  color: var(--text-secondary);
+  font-size: var(--text-base);
+  line-height: 1.5;
+}
+
+/* ---- captured surfaces ---- */
+
+/*
+ * A picture of the running product, taken by `scripts/capture-docs.mjs` against a real daemon and
+ * clipped to the surface the page is describing. A screenshot of a whole 1400px window scaled into
+ * a reading column is texture; clipped, the same capture is legible at the width a document has.
+ */
+.doc-shot {
+  margin: var(--space-6) 0 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  overflow: hidden;
+}
+
+/*
+ * The picture sets the box, rather than sitting inside one sized to the column. Held to the column
+ * width with `max-height` capping it, a tall capture shrank to 247px inside a 784px figure and left
+ * 537px of empty surface around itself, which is the one thing a frame must never do.
+ */
+/*
+ * Never wider than its own size, and never a different shape. `srcset` gives the picture an
+ * intrinsic size of half its pixels, so `max-width: 100%` only ever scales it down to fit the
+ * column: it cannot be blown up, and `height: auto` means it cannot be stretched.
+ */
+.doc-shot img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+/*
+ * A capture that shows one surface in the context of another has to stop somewhere, and stopping
+ * mid-word reads as a mistake rather than as a crop. The edge fades instead, which is the device
+ * the product already uses on every pane that can still be scrolled: a cut-off row reading as
+ * continuing rather than as ending. `mask-image` rather than an overlay, for the reason stated
+ * there, which holds here too: an overlay has to know the colour behind it and this sits on two
+ * grounds across two themes.
+ */
+/*
+ * Proportional, not a fixed distance. 56px of fade on a capture whose own ground is nearly white
+ * was invisible, and a fade nobody sees is a hard cut with extra CSS behind it.
+ */
+.doc-shot.is-cropped img {
+  mask-image: linear-gradient(to right, #000 78%, transparent);
+}
+
+/* One theme at a time, chosen by the control the reader pressed rather than by the OS. */
+.doc-shot .shot-dark {
+  display: none;
+}
+
+:root[data-theme="dark"] .doc-shot .shot-light {
+  display: none;
+}
+
+:root[data-theme="dark"] .doc-shot .shot-dark {
+  display: block;
+}
+
+/* ---- keys ---- */
+
+/*
+ * Key beside meaning, not above it. A key is two characters wide, so stacking it left most of the
+ * row empty and made a list of six shortcuts as tall as a page of prose.
+ */
+.doc-keys > div {
+  display: grid;
+  grid-template-columns: 8rem minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--space-5);
+  padding: var(--space-3) 0;
+}
+
+.doc-keys dt {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.doc-keys dd {
+  margin: 0;
+}
+
+kbd {
+  display: inline-flex;
+  min-width: 2em;
+  justify-content: center;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  padding: 0.2em 0.5em;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+/* ---- the command ---- */
+
+/*
+ * The line is the control. A bordered box with "Copy" written in it put a second thing on a line
+ * that already said what it was, and the label was the widest part of it.
+ */
+.doc-command {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+  margin: var(--space-5) 0 0;
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  color: var(--text);
+  text-align: left;
+  transition:
+    border-color var(--motion-fast) var(--ease),
+    color var(--motion-fast) var(--ease);
+}
+
+.doc-command code {
+  font-family: var(--font-mono);
+  font-size: var(--doc-body);
+}
+
+.doc-command .doc-mark {
+  color: var(--text-tertiary);
+  transition: color var(--motion-fast) var(--ease);
+}
+
+.doc-command:hover {
+  border-color: var(--border-strong);
+}
+
+.doc-command:hover .doc-mark {
+  color: var(--text);
+}
+
+.doc-command[data-state="copied"] {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.doc-command[data-state="failed"] {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.doc-command[data-state] .doc-mark {
+  color: inherit;
+}
+
+/* ---- what comes next ---- */
+
+/* A reader who finishes a page is given the next one rather than returned to a list. */
+.doc-next {
+  margin-top: var(--space-16);
+}
+
+.doc-next a {
+  display: grid;
+  gap: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-5);
+  transition:
+    background var(--motion-fast) var(--ease),
+    border-color var(--motion-fast) var(--ease);
+}
+
+.doc-next a:hover {
+  background: var(--bg-subtle);
+  border-color: var(--border-strong);
+}
+
+.doc-next-label {
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+
+.doc-next-title {
+  font-size: var(--doc-body);
+  font-weight: 500;
+}
+
+/* -------------------------------------------------------- narrow widths */
+
+/*
+ * Below three columns the product panel is too narrow to read anything in, so the claim and the
+ * ways in sit side by side above it and the capture takes the full width.
+ *
+ * 1280 rather than 1100, measured. Three columns give the capture a 454px panel at 1150 and a
+ * 584px panel at 1280, against 1068px the moment it drops to two, so crossing the old breakpoint
+ * upward shrank the picture from 36% of its size to 14%. The band this now covers is every width
+ * where the third column cost more than it paid for.
+ */
+@media (max-width: 1280px) {
+  /*
+   * The height lock goes with the third column. Kept past this point it gave the capture the full
+   * width and none of the height: at 1024 the panel was 992px wide and 275px tall, so a 2800px
+   * capture drew at 206px, and crossing this breakpoint made the picture smaller rather than
+   * larger. The same lock made the page unscrollable at 200% zoom, where a locked 100dvh is
+   * smaller than the content it is holding.
+   */
+  body:has(.home) {
+    overflow: auto;
   }
 
-  main {
-    width: min(680px, calc(100% - 228px));
-    margin-left: 200px;
+  .home {
+    height: auto;
+  }
+
+  .card {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .card-shot {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--border);
+  }
+
+  .card-ways {
+    border-right: 0;
   }
 }
 
-@media (max-width: 760px) {
-  .site-rail {
+/*
+ * The one-screen rule is a desktop rule. On a phone the card cannot hold three regions in 100vh
+ * without every one of them being unreadable, so the page becomes a page and scrolls.
+ */
+@media (max-width: 700px) {
+  body:has(.home) {
+    overflow: auto;
+  }
+
+  .home {
+    height: auto;
+  }
+
+  .card {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+  }
+
+  .card-claim,
+  .card-ways {
+    border-right: 0;
+  }
+
+  .card-ways {
+    border-top: 1px solid var(--border);
+  }
+
+  .card-shot {
+    padding: var(--space-4);
+  }
+
+  /* Given its own height back, the capture is shown whole rather than cropped. */
+  .shot {
+    height: auto;
+    object-fit: contain;
+  }
+
+  /*
+   * Below this the navigation cannot stand beside a reading column without squeezing both, so it
+   * goes above the page as a contents list, which is the only honest thing it can be when it
+   * cannot stay in view.
+   */
+  .doc-frame {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .doc-nav {
     position: static;
-    display: flex;
-    width: auto;
-    height: 64px;
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    gap: 18px;
-    padding: 0 20px;
+    max-height: none;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    padding: var(--space-6) var(--space-5);
+    overflow: visible;
   }
 
-  .site-rail nav {
-    flex-direction: row;
-    gap: 16px;
-    margin: 0 0 0 auto;
+  .doc-main {
+    padding: var(--space-10) var(--space-5) var(--space-16);
   }
 
-  .brand-context {
-    align-self: auto;
+  /*
+   * A capture of a desktop surface shrunk into a phone column is 37% of its own size, which is a
+   * picture of an interface rather than a picture you can read. It keeps its size and the frame
+   * scrolls instead, which is what the reader wanted from it.
+   */
+  .doc-shot {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
   }
 
-  .site-rail nav a:nth-child(1),
-  .site-rail nav a:nth-child(2),
-  .site-rail nav a:nth-child(4) {
-    display: none;
+  .doc-shot img {
+    max-width: none;
   }
 
-  .rail-footer {
-    margin: 0;
-  }
-
-  .theme-toggle {
-    padding: 4px 0;
-  }
-
-  main {
-    width: min(100% - 40px, 680px);
-    margin: 0 auto;
-    gap: 18px;
-    padding: 52px 0 64px;
-  }
-
-  .translation-stage {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 40px;
-  }
-
-  .demo,
-  .report-overview,
-  .setup,
-  .docs-page section {
-    padding-top: 18px;
-  }
-
-  .docs-page {
-    gap: 18px;
-  }
-
-}
-
-@media (max-width: 600px) {
-  .site-rail nav a:nth-child(3) {
-    display: none;
-  }
-
-  .lede {
-    font-size: 14px;
-  }
-
-  .setup {
-    gap: 12px;
-    padding: 0;
-  }
-
-  .report-map,
-  .docs-commands {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-}
-
-@media (max-width: 420px) {
-  .site-rail-docs nav {
-    display: none;
+  .doc-head {
+    padding: var(--space-3) var(--space-5);
   }
 }
 
-@media (max-width: 360px) {
-  .theme-toggle {
-    font-size: 10px;
+@media (max-width: 480px) {
+  /* A file path is longer than the column at this width and must not be broken mid-name. */
+  .doc-terms dt code {
+    overflow-wrap: anywhere;
   }
 }
 
+/*
+ * Nothing on this page reveals content over time, so there is nothing here to switch off but the
+ * interface's own answers to a pointer. The block this replaces targeted eleven selectors, every
+ * one of which had been deleted from the markup.
+ */
 @media (prefers-reduced-motion: reduce) {
-  html {
-    scroll-behavior: auto;
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    /*
+     * Delay as well as duration. An entrance that holds its first frame through a delay is
+     * invisible for that delay however short its duration is, so collapsing only the duration
+     * leaves the reader who asked for no motion looking at nothing for exactly as long.
+     */
+    animation-delay: 0s !important;
   }
-
-  .translation-source mark {
-    background-size: 100% 78%;
-    animation: none;
-  }
-
-  .translation-result section {
-    opacity: 1;
-    transform: none;
-    animation: none;
-  }
-
 }

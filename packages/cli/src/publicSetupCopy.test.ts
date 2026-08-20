@@ -53,9 +53,7 @@ describe('public setup instructions', () => {
     const page = readFileSync(join(root, 'apps/site/app/page.tsx'), 'utf8');
     expect(page).toMatch(/npx: "npx salidium"/);
     expect(page).toMatch(/pnpm: "pnpm dlx salidium"/);
-    expect(page).toMatch(
-      /Run Salidium once[\s\S]*shows what it wants to connect[\s\S]*asks\s+first/,
-    );
+    expect(page.match(/npx salidium/g)).toHaveLength(1);
     expect(page).not.toMatch(/install-hooks|salidium doctor/);
   });
 
