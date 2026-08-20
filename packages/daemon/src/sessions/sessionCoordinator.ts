@@ -49,6 +49,15 @@ export interface CoordinatorOptions {
   idleEndMs?: number;
   /** Injected only by tests or a future backend registry. */
   explainSession?: (state: RunState) => Promise<ExplanationAttempt>;
+  /**
+   * What time it is, for the one derivation that asks: `effectiveStatus` calls a session that has
+   * been silent for fifteen minutes idle however open its last turn is. `summarizeSession` already
+   * takes `now` as an argument for exactly this reason and every other caller passes one in; this
+   * was the last place reading the wall clock directly, which left a seeded fixture unable to say
+   * when it is. The screenshot fixture in `scripts/demo-daemon.mjs` pins it so the same seed
+   * produces the same pictures; nothing in production passes it.
+   */
+  now?: () => number;
 }
 
 /**
@@ -185,6 +194,7 @@ export class SessionCoordinator {
       cadence: envAllows ? 'turn' : 'off',
       idleEndMs: IDLE_END_MS,
       explainSession: explainWithStatus,
+      now: Date.now,
       ...args.options,
     };
     const cp = store.latestCheckpoint(sessionId, REDUCER_VERSION);
@@ -233,7 +243,7 @@ export class SessionCoordinator {
   }
 
   get summary(): SessionSummary {
-    const s = summarizeSession(this.state, Date.now());
+    const s = summarizeSession(this.state, this.opts.now());
     s.explanationStatus = this.explanationIsCurrent() ? 'generated' : this.explanationStatus;
     return s;
   }

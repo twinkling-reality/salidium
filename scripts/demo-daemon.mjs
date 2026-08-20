@@ -20,8 +20,27 @@ const SESSION = 'claude-code:demo-checkout';
 const CWD = '/Users/dev/acme/checkout';
 const MODEL = 'claude-opus-5';
 
-/** Minutes ago, as a canonical timestamp. Anchored to now so relative labels read honestly. */
-const ago = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
+/*
+ * The instant this fixture calls now.
+ *
+ * Browsed, it is the real one, so a person reading the demo sees ages that are true. Photographed,
+ * it is `CAPTURE_INSTANT` below, and then the whole fixture is a pure function of this file: the
+ * same seed draws the same pixels today and next year.
+ *
+ * It used to be `Date.now()`, read afresh for each of the twenty-four sessions, which made the
+ * pipeline irreproducible in two separate ways. Relative labels round to the minute and sixteen
+ * captures take longer than a minute, so a session seeded twenty-six minutes back printed "26m
+ * ago" early in a run and "27m ago" late in it. Absolute labels are worse: the History table and
+ * the raw record print clock times, and two runs a minute apart printed "04:40 PM" and "04:41 PM"
+ * down sixteen rows. Measured on 2026-08-20, five of the eight shots changed their bytes between
+ * two runs of identical code, which is why nobody could tell a real capture change from noise.
+ */
+export const CAPTURE_INSTANT = Date.parse('2026-08-20T16:20:00.000Z');
+
+let anchor = Date.now();
+
+/** Minutes ago, as a canonical timestamp. Anchored once per boot, not per call. */
+const ago = (minutes) => new Date(anchor - minutes * 60_000).toISOString();
 
 /*
  * A full-scope run, deliberately. An earlier fixture ran `vitest run <one file>`, which the
@@ -114,9 +133,37 @@ const temporary = await mkdtemp(join(tmpdir(), 'salidium-demo-'));
  * Starts the daemon, seeds it, and hands back the URL plus a stop function. Exported so the
  * screenshot capture and the browsable demo are the same environment rather than two that have to
  * be kept in step.
+ *
+ * `at` is what the fixture and the daemon both call now. A capture passes `CAPTURE_INSTANT`; a
+ * person browsing passes nothing and gets the wall clock.
  */
-export async function startDemo() {
+export async function startDemo({ at = Date.now() } = {}) {
+  /*
+   * No model call, and nothing appended after the seeding.
+   *
+   * The shipped default is `explainerCadence: 'turn'`, and a fresh home takes it, so booting this
+   * fixture spawned a real `claude -p` for every session whose turn had ended and ingested a
+   * `salidium.explanation` stamped at the wall clock. Measured on 2026-08-20: thirteen of the
+   * twenty-four sessions had their last event rewritten to "now" over the first sixty seconds, so
+   * the Recent group re-sorted and re-labelled itself underneath whatever was being photographed,
+   * and the featured report changed while the capture was still running. It also made the site's
+   * pictures depend on what a model happened to write that minute, which is the opposite of the
+   * claim they carry. Everything the interface shows here is derived by the product from the
+   * event log below, and the one explanation in it is written here on purpose.
+   */
+  process.env.SALIDIUM_EXPLAINER = 'off';
+
+  anchor = at;
+
   const handle = await startDaemon({
+    /*
+     * And the daemon is told the same instant, because it decides one thing from the clock that
+     * this fixture depends on: `effectiveStatus` calls a session idle once it has been silent for
+     * fifteen minutes, however open its last turn is. Left on the wall clock, a fixture pinned to
+     * a fixed instant would have its three Working sessions quietly demoted into Recent and the
+     * session list would be photographed a group short.
+     */
+    now: () => at,
     home: join(temporary, 'salidium'),
     userHome: join(temporary, 'providers'),
     port: 0,
@@ -372,6 +419,8 @@ export async function startDemo() {
   return {
     url: `http://127.0.0.1:${handle.port}/#token=${handle.token}`,
     session: SESSION,
+    /* The instant every seeded timestamp is measured back from, and the daemon's own. */
+    now: at,
     async stop() {
       await handle.stop();
       await rm(temporary, { recursive: true, force: true });

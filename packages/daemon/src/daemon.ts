@@ -73,6 +73,8 @@ export type StartDaemonOptions = Partial<DaemonConfig> & {
   storeFactory?: SalidiumStoreFactory;
   /** Test/embedding seam. Production retention sweeps run once per hour. */
   retentionSweepIntervalMs?: number;
+  /** Test/fixture seam for the one derivation that reads the wall clock; see `CoordinatorOptions.now`. */
+  now?: () => number;
 };
 
 const BUILT_IN_PROVIDERS: readonly ProviderDescriptor[] = [claudeCodeProvider, codexProvider];
@@ -214,6 +216,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
   const envOff = configuredExplainerMode(process.env) === 'off';
   const registry = new SessionRegistry(store, {
     explainerCadence: effectiveCadence(stored.explainerCadence),
+    ...(overrides.now ? { now: overrides.now } : {}),
   });
   const explainerSettings = (): ExplainerSettings => {
     const usage = registry.explainerUsage();

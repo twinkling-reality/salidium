@@ -63,10 +63,16 @@ export class SessionRegistry {
    * load: it is one value for the whole daemon, and a coordinator is created on the ingest path.
    */
   private explainerCadence: ExplainerCadence = 'turn';
+  /** Handed to every coordinator this registry loads; see `CoordinatorOptions.now`. */
+  private readonly now: (() => number) | undefined;
 
-  constructor(store: SalidiumStore, opts: { explainerCadence?: ExplainerCadence } = {}) {
+  constructor(
+    store: SalidiumStore,
+    opts: { explainerCadence?: ExplainerCadence; now?: () => number } = {},
+  ) {
     this.store = store;
     if (opts.explainerCadence) this.explainerCadence = opts.explainerCadence;
+    this.now = opts.now;
     this.listener = {
       onEvents: (sessionId, events, changes) => {
         for (const s of this.allSubscribers) {
@@ -113,7 +119,7 @@ export class SessionRegistry {
         cwd: hint?.cwd,
         store: this.store,
         listener: this.listener,
-        options: { cadence: this.explainerCadence },
+        options: { cadence: this.explainerCadence, ...(this.now ? { now: this.now } : {}) },
       });
       c.onError = (err) => this.onPersistError?.(sessionId, err);
       this.live.set(sessionId, c);

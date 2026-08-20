@@ -7,11 +7,12 @@
  *
  *   node scripts/capture-demo.mjs
  */
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 // @playwright/test is the workspace dependency; it re-exports the browser drivers.
 import { chromium } from '@playwright/test';
-import { startDemo } from './demo-daemon.mjs';
+import { captureContext, steady } from './capture-context.mjs';
+import { CAPTURE_INSTANT, startDemo } from './demo-daemon.mjs';
 
 const OUT = fileURLToPath(new URL('../apps/site/public/', import.meta.url));
 
@@ -21,12 +22,12 @@ const shots = [
 ];
 
 await mkdir(OUT, { recursive: true });
-const demo = await startDemo();
+const demo = await startDemo({ at: CAPTURE_INSTANT });
 const browser = await chromium.launch();
 
 try {
   for (const shot of shots) {
-    const context = await browser.newContext({
+    const context = await captureContext(browser, demo, {
       /*
        * The report column has a container query at 860px: below it the flow diagram stacks into a
        * single column and the converging lanes lose the shape that makes them worth drawing. The
@@ -39,8 +40,6 @@ try {
        * A tall window also shows more of the report, which is the thing worth showing.
        */
       viewport: { width: 1400, height: 1780 },
-      // Retina, so the image still reads when it is scaled down into a layout.
-      deviceScaleFactor: 2,
       colorScheme: shot.colorScheme,
     });
     const page = await context.newPage();
@@ -65,7 +64,7 @@ try {
     });
 
     const file = `${OUT}${shot.name}.png`;
-    await page.screenshot({ path: file, clip: { x: 0, y: 0, width: 1400, height } });
+    await writeFile(file, await steady(page, { x: 0, y: 0, width: 1400, height }));
     console.log(`wrote ${file}`);
     await context.close();
   }
@@ -79,9 +78,8 @@ try {
    * column under the 860px container query where the flow diagram stacks into a single column and
    * stops being the thing worth showing. Folded, the report gets the whole window.
    */
-  const cardContext = await browser.newContext({
+  const cardContext = await captureContext(browser, demo, {
     viewport: { width: 1200, height: 630 },
-    deviceScaleFactor: 2,
     colorScheme: 'light',
   });
   const cardPage = await cardContext.newPage();
@@ -96,7 +94,7 @@ try {
    */
   await cardPage.locator('.masthead h1').waitFor({ timeout: 15_000 });
   const card = `${OUT}card.png`;
-  await cardPage.screenshot({ path: card });
+  await writeFile(card, await steady(cardPage));
   console.log(`wrote ${card}`);
   await cardContext.close();
 } finally {

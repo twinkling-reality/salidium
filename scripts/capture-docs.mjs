@@ -14,7 +14,8 @@ import { createHash } from 'node:crypto';
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
-import { startDemo } from './demo-daemon.mjs';
+import { captureContext, steady } from './capture-context.mjs';
+import { CAPTURE_INSTANT, startDemo } from './demo-daemon.mjs';
 
 const OUT = fileURLToPath(new URL('../apps/site/public/docs/', import.meta.url));
 
@@ -174,7 +175,7 @@ async function record(name, theme, buffer) {
 }
 
 await mkdir(OUT, { recursive: true });
-const demo = await startDemo();
+const demo = await startDemo({ at: CAPTURE_INSTANT });
 const browser = await chromium.launch();
 let written = 0;
 /*
@@ -190,10 +191,10 @@ const empties = [];
 try {
   for (const theme of ['light', 'dark']) {
     for (const shot of SHOTS) {
-      const context = await browser.newContext({
+      /* Retina, so the image still reads when a document scales it down; the clock, the zone and
+         the locale come from `capture-context.mjs`, which says why. */
+      const context = await captureContext(browser, demo, {
         viewport: shot.viewport ?? { width: 1400, height: 1000 },
-        /* Retina, so the image still reads when a document scales it down. */
-        deviceScaleFactor: 2,
         colorScheme: theme,
       });
       const page = await context.newPage();
@@ -226,7 +227,7 @@ try {
       }
 
       if (shot.rect) {
-        await record(shot.name, theme, await page.screenshot({ clip: shot.rect }));
+        await record(shot.name, theme, await steady(page, shot.rect));
         written += 1;
         await context.close();
         continue;
@@ -277,7 +278,7 @@ try {
         width: Math.min((shot.viewport ?? { width: 1400 }).width, box.width + shot.pad * 2),
         height: Math.min(shot.maxHeight ?? 1000, box.height + shot.pad * 2),
       };
-      await record(shot.name, theme, await page.screenshot({ clip }));
+      await record(shot.name, theme, await steady(page, clip));
       written += 1;
       await context.close();
     }
