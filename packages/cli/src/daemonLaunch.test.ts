@@ -8,6 +8,24 @@ import { afterEach, describe, expect, it } from 'vitest';
 const temporaryDirectories: string[] = [];
 const entry = join(import.meta.dirname, 'main.ts');
 
+/*
+ * The CLI's own version, read rather than written down.
+ *
+ * Four assertions here used to name it. Three said `0.1.0` and one planted a `0.2.0` daemon to
+ * stand for one that is newer than the CLI, which meant the first release after they were written
+ * broke its own suite twice over: the bump made every literal wrong, and it made the daemon the
+ * fourth test plants exactly as new as the CLI rather than ahead of it, so the refusal it asserts
+ * stopped happening. A version is a fact about the package, and this reads it from the package.
+ */
+const VERSION = (
+  JSON.parse(readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf8')) as {
+    version: string;
+  }
+).version;
+
+/** Unambiguously ahead of the CLI, whatever the CLI is at. */
+const NEWER = `${Number(VERSION.split('.')[0]) + 1}.0.0`;
+
 function temporaryHome(): string {
   const path = mkdtempSync(join(tmpdir(), 'salidium-daemon-launch-'));
   temporaryDirectories.push(path);
@@ -79,7 +97,7 @@ describe('detached daemon launch failures', () => {
     const home = temporaryHome();
     const result = run(home, ['--version'], '0');
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe('0.1.0');
+    expect(result.stdout.trim()).toBe(VERSION);
     expect(existsSync(join(home, 'daemon.json'))).toBe(false);
   });
 
@@ -149,7 +167,7 @@ describe('detached daemon launch failures', () => {
         port: 1,
         token: 'a'.repeat(64),
         startedAt: new Date().toISOString(),
-        version: '0.1.0',
+        version: VERSION,
       }),
     );
 
@@ -190,9 +208,9 @@ describe('detached daemon launch failures', () => {
     try {
       const updated = start(home, '0');
       expect(updated.status).toBe(0);
-      expect(updated.stdout).toMatch(/updating daemon 0\.0\.0 to 0\.1\.0/);
+      expect(updated.stdout).toContain(`updating daemon 0.0.0 to ${VERSION}`);
       const replacement = JSON.parse(readFileSync(path, 'utf8')) as typeof original;
-      expect(replacement.version).toBe('0.1.0');
+      expect(replacement.version).toBe(VERSION);
       expect(replacement.pid).not.toBe(original.pid);
       expect(processExists(original.pid)).toBe(false);
     } finally {
@@ -259,10 +277,12 @@ describe('detached daemon launch failures', () => {
     };
 
     try {
-      writeFileSync(path, JSON.stringify({ ...original, version: '0.2.0' }));
+      writeFileSync(path, JSON.stringify({ ...original, version: NEWER }));
       const newer = start(home, '0');
       expect(newer.status).toBe(1);
-      expect(newer.stderr).toMatch(/daemon 0\.2\.0 is newer.*npx salidium@latest/);
+      expect(newer.stderr).toMatch(
+        new RegExp(`daemon ${NEWER.replaceAll('.', '\\.')} is newer.*npx salidium@latest`),
+      );
       expect(processExists(original.pid)).toBe(true);
 
       const { version: _version, ...legacy } = original;
