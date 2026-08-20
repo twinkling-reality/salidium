@@ -84,7 +84,7 @@ body {
   color: var(--text);
   font-family: var(--font-sans);
   font-size: var(--text-base);
-  line-height: 1.5;
+  line-height: var(--leading);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -107,13 +107,26 @@ button {
   font: inherit;
 }
 
+/*
+ * The application's `code` rule, restated because this page imports `scale.css` and not
+ * `tokens.css` where it lives. It had lost a line in the copying: without tabular figures a
+ * column of counts in a documentation table does not line up, which is the one thing monospace is
+ * being asked for here.
+ */
 code {
   font-family: var(--font-mono);
   font-size: 0.94em;
+  font-variant-numeric: tabular-nums;
 }
 
-/* Radius belongs to the shape, not to the focus state. Putting it here made the copy button's
- * corners snap from 14px to 5px the moment it was tabbed to.
+/*
+ * The product's ring, not a second one. `tokens.css` declares `2px solid var(--accent)` at 1px and
+ * this page had `--text` at 3px, so the same key on the same design system drew two different
+ * marks depending on which half of it you were looking at.
+ *
+ * Radius belongs to the shape, not to the focus state. Putting it here made the copy button's
+ * corners snap from 14px to 5px the moment it was tabbed to, and that argument has now been
+ * carried back the other way: the application's own rule no longer sets one either.
  *
  * Everything focusable, not just links and buttons. Scoped to those two it was correct only for as
  * long as they were the only tab stops on the site, and the moment a scrollable figure took one it
@@ -655,8 +668,13 @@ h1 {
   top: var(--space-7);
   right: var(--space-7);
   display: grid;
-  width: 1.55em;
-  height: 1.55em;
+  /*
+   * Sized against the type rather than the spacing grid, because it is a mark set beside words and
+   * has to hold its proportion to them at every width the card is read at. 1.5 is the ramp's own
+   * ratio, the one `--leading` is set to; 1.55 was a number with nothing behind it.
+   */
+  width: 1.5em;
+  height: 1.5em;
   place-items: center;
   border-radius: 50%;
   /* scale.css squircles every corner; a circle has to ask for its own shape back. */
@@ -1213,7 +1231,9 @@ h1 {
  */
 .doc-nav a {
   display: grid;
-  grid-template-columns: 1.6rem minmax(0, 1fr);
+  /* 24px, on the 4px grid. It was 1.6rem, which is 25.6 and on nothing; two digits measure 15px at
+     this size, so the column had 10px of slack to give and still has 9. */
+  grid-template-columns: 1.5rem minmax(0, 1fr);
   align-items: baseline;
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
@@ -1300,7 +1320,7 @@ h1 {
   margin: var(--space-4) 0 0;
   color: var(--text-secondary);
   font-size: var(--text-lg);
-  line-height: 1.5;
+  line-height: var(--leading);
 }
 
 /*
@@ -1468,7 +1488,7 @@ h1 {
 .doc-contents-summary {
   color: var(--text-secondary);
   font-size: var(--text-base);
-  line-height: 1.5;
+  line-height: var(--leading);
 }
 
 /* ---- captured surfaces ---- */
