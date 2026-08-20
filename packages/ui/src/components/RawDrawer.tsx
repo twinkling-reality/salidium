@@ -47,7 +47,11 @@ export function RawDrawer() {
   const drawerRef = useRef<HTMLDivElement>(null);
   const bodyRef = useScrollState<HTMLDivElement>();
 
-  useEffect(() => {
+  /*
+   * Named rather than inlined into the effect, so "Try again" can be the same call the drawer makes
+   * when it opens. A failed fetch used to leave closing the drawer as the only way out.
+   */
+  const load = useCallback(() => {
     if (!api || !rawOpen) return;
     setData(undefined);
     setError(undefined);
@@ -56,6 +60,8 @@ export function RawDrawer() {
       .raw(rawOpen.sessionId, rawOpen.eventId)
       .then(setData, (e) => setError(e instanceof Error ? e.message : String(e)));
   }, [api, rawOpen]);
+
+  useEffect(load, [load]);
 
   /*
    * The neighbours, in one request.
@@ -106,10 +112,17 @@ export function RawDrawer() {
   useEffect(() => {
     if (!rawOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      // Stepping the log, not moving a caret: only when nothing text-shaped has the focus.
+      /*
+       * Stepping the log, not moving a caret: only when nothing text-shaped has the focus, and
+       * only when the key is unmodified. Without the modifier test this took Alt+Left and Cmd+Left
+       * and called `preventDefault` on them, so the browser's own Back gesture stepped a record
+       * instead of leaving the page. The two other global handlers, in `App.tsx` and
+       * `SessionView.tsx`, both already guard this way.
+       */
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         const a = document.activeElement;
         if (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement) return;
+        if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
         e.preventDefault();
         go(e.key === 'ArrowLeft' ? step.prev : step.next);
         return;
@@ -210,9 +223,18 @@ export function RawDrawer() {
         {rf && <span className="drawer-id mono">{rf.meta}</span>}
       </div>
       <div className="drawer-body scroll-fade" ref={bodyRef}>
+        {/*
+         * The thrown message on its own, in red, with no title and no way to try again: a reader
+         * who hit `request failed: 500` could only close the drawer. Worded the way the session
+         * error screen words the same failure, and given the same control.
+         */}
         {error && (
           <div className="bad" role="alert">
-            {error}
+            <p className="bad-title">Could not load this record</p>
+            <p className="mono">{error}</p>
+            <button type="button" className="btn btn-accent" onClick={load}>
+              Try again
+            </button>
           </div>
         )}
         {!data && !error && (
