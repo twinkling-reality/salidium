@@ -117,10 +117,11 @@ code {
  *
  * Everything focusable, not just links and buttons. Scoped to those two it was correct only for as
  * long as they were the only tab stops on the site, and the moment a scrollable figure took one it
- * would have taken it invisibly. */
+ * would have taken it invisibly.
+ */
 :focus-visible {
-  outline: 2px solid var(--text);
-  outline-offset: 3px;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .sr-only {

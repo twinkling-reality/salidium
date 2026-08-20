@@ -900,13 +900,20 @@
   outline: none;
 }
 
+/*
+ * The ring the global rule would have drawn, restated because it cannot reach a pseudo-element and
+ * the input itself has had its outline moved off. Same colour and same width as everywhere else;
+ * these two were the only focus rings in the application set in `--text` rather than the accent.
+ * The offset stays at 2px because the thumb is a small circle riding a track, and at 1px the ring
+ * touched it.
+ */
 .tl-range:focus-visible::-webkit-slider-thumb {
-  outline: 2px solid var(--text);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
 .tl-range:focus-visible::-moz-range-thumb {
-  outline: 2px solid var(--text);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -3716,6 +3723,11 @@ button.cov-cell:hover {
   border-color: var(--border-strong);
 }
 
+/*
+ * The last `outline` in this file set in `--text` rather than the accent, and deliberately: it is
+ * a hover highlight, not a focus ring. Drawing it in the accent would give the two states one mark
+ * and leave a keyboard reader unable to tell which of them they were in.
+ */
 .checks-tick:hover {
   outline: 2px solid var(--text);
   outline-offset: 1px;

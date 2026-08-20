@@ -68,10 +68,23 @@ code,
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * One ring, everywhere, and it follows the shape rather than imposing one.
+ *
+ * The accent is what this file declares and what `primitives.css` already draws on every button
+ * and field; `scale.css` calls it "one accent for interaction", and focus is interaction. Two
+ * rules in `app.css` had drifted to `--text` and are back on it.
+ *
+ * The radius is gone. It set every focused element to `--radius-sm`, which was invisible here
+ * only by accident of source order: this file is imported before `primitives.css` and `app.css`,
+ * so a control declaring its own corner later kept it, and a session row stayed at its 10px.
+ * Anything given a radius earlier would have snapped to 6px on being tabbed to, which is exactly
+ * what the site measured happening to its copy button, 14px to 5px. A ring is a ring; the shape
+ * belongs to the box.
+ */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
-  border-radius: var(--radius-sm);
 }
 
 @media (prefers-reduced-motion: reduce) {
