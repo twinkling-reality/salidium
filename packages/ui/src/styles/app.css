@@ -325,6 +325,29 @@
   color: var(--text-secondary);
 }
 
+/*
+ * The stack the first screen holds: what this pane is, what puts something in it, and the way to
+ * the documentation. Narrower than `--measure` because it is centred rather than set in a column,
+ * and centred prose past about forty characters stops being one shape and becomes a paragraph a
+ * reader has to track back across.
+ */
+.main-empty-first {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 42ch;
+  padding: 0 var(--space-4);
+  text-align: center;
+}
+
+.main-empty-first p {
+  margin: 0;
+}
+
+.main-empty-first .link {
+  align-self: center;
+}
+
 /* ------------------------------------------------------- session rows */
 
 /*

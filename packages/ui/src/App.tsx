@@ -14,6 +14,12 @@ import { useAppStore } from './store/appStore.ts';
 /** The one command that ends up back here with a token attached, named once because it is quoted twice. */
 const COMMAND = 'salidium open';
 
+/**
+ * The only link in the application. The product had none at all, so a reader who wanted to know
+ * what a word on a report meant had nowhere to go from inside the thing that printed it.
+ */
+const DOCS = 'https://salidium.com/docs';
+
 /** Named for the platform, because "press the copy key" is not something anyone has ever pressed. */
 const COPY_KEY = /Mac|iPhone|iPad/.test(navigator.platform ?? '') ? '\u2318C' : 'Ctrl+C';
 
@@ -184,11 +190,30 @@ export function App() {
           <SessionView key={selectedId} sessionId={selectedId} now={now} />
         ) : (
           <div className="main-empty">
-            <p className="muted">
-              {sessionCount === 0
-                ? 'Nothing to show yet.'
-                : 'Pick a session to see what its agent did.'}
-            </p>
+            {sessionCount === 0 ? (
+              /*
+               * The first screen anyone sees, and it used to be "Nothing to show yet." on its own:
+               * a state described, in the larger half of a window whose smaller half was already
+               * telling the reader what to do. Someone who has just installed this does not yet
+               * know it watches an agent they have not started, so the pane that will hold the
+               * report says what will put one there.
+               *
+               * It claims nothing about whether the hooks are connected, because nothing here has
+               * checked that. It says what happens when a run starts, which is true either way.
+               */
+              <div className="main-empty-first">
+                <p>A report appears here when your agent runs.</p>
+                <p className="muted">
+                  Start a run in Claude Code or Codex. Salidium reads the session it writes and
+                  turns it into what changed, what was checked, and what needs you.
+                </p>
+                <a className="link" href={DOCS} target="_blank" rel="noreferrer">
+                  Read the documentation
+                </a>
+              </div>
+            ) : (
+              <p className="muted">Pick a session to see what its agent did.</p>
+            )}
           </div>
         )}
       </main>
