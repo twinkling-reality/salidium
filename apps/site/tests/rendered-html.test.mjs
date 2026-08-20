@@ -200,8 +200,12 @@ test("documentation states what the product does, not what an earlier draft said
   const limits = await (await fetchSite("http://localhost/docs/limits")).text();
   const install = await (await fetchSite("http://localhost/docs/install")).text();
 
-  // All five trust classes. The page used to list four and omit `planned`.
-  assert.match(provenance, /Observed[\s\S]*Reported[\s\S]*Derived[\s\S]*Planned[\s\S]*Generated/);
+  /*
+   * All five trust classes, named as the product names them. The page used to list four and omit
+   * `planned`; it then called the fifth "Generated", which is a word the interface never prints —
+   * the badge on a generated line reads `explained`.
+   */
+  assert.match(provenance, /Observed[\s\S]*Reported[\s\S]*Derived[\s\S]*Planned[\s\S]*Explained/);
 
   // The seven-day import default is the likeliest first-run surprise, so it stays on the page.
   assert.match(install, /last seven days/i);

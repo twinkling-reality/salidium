@@ -11,7 +11,7 @@
  * than chosen: sentence case throughout, no contractions, the reader addressed as "you", Salidium
  * named in the third person, labels as bare nouns without a full stop and prose as whole sentences
  * with one. Its house terms are used and not paraphrased: `record` for the drill-through,
- * observed / reported / derived / planned / generated for provenance, "needs you" for the
+ * observed / reported / derived / planned / explained for provenance, "needs you" for the
  * attention channel, "the daemon", "the agent", "session".
  *
  * The page renders this tree and `/docs.md` renders the same tree, so the version a person reads
@@ -69,14 +69,14 @@ const RAW: Array<Omit<Page, "n">> = [
         ["`~/.salidium/hooks/relay.sh`", "The relay those hooks call, readable only by you."],
       ]),
       p(
-        "Before each change, the file it is about to edit is copied to `<name>.salidium-backup`, so that copy is the state immediately before the most recent change rather than the original. Only entries Salidium owns are added or replaced, and `salidium uninstall-hooks` takes them out again.",
+        "Before each change to those settings files, the file is copied to `<name>.salidium-backup`, so that copy is the state immediately before the most recent change rather than the original. The relay is rewritten rather than backed up, because Salidium is the only thing that writes it. Only entries Salidium owns are added or replaced, and `salidium uninstall-hooks` takes them out again.",
       ),
       note(
         "Codex trusts a hook by the hash of its definition, so a changed hook has to be shown to it once. Salidium says so when it happens: open `/hooks` in Codex and trust it.",
       ),
       h("What it reads"),
       p(
-        "Salidium imports the last seven days of the session files your agents already write. Anything older is not read. Set `SALIDIUM_HISTORY_DAYS` before the first run to change that.",
+        "Salidium imports the last seven days of the session files your agents already write. Anything older is not read. `SALIDIUM_HISTORY_DAYS` changes that; the daemon reads it every time it starts, so set it and then run `salidium restart` if one is already running.",
       ),
       h("Running it again"),
       list(
@@ -137,7 +137,7 @@ const RAW: Array<Omit<Page, "n">> = [
         ],
       ]),
       h("The mark on a row"),
-      p("Every row carries one, and the question mark above the list keys them."),
+      p("Every row carries one. The question mark above the list keys the four a running agent produces; the fifth is what a row says when nothing was recorded at all."),
       terms([
         ["Working", "The agent is running."],
         ["Waiting for you", "It has asked for something and stopped."],
@@ -345,9 +345,15 @@ const RAW: Array<Omit<Page, "n">> = [
           "Reported",
           "The agent's words, or yours. Relayed and attributed, never promoted to observed by parsing them.",
         ],
-        ["Derived", "Salidium's own deterministic working, carrying the id of the rule behind it."],
+        [
+          "Derived",
+          "Salidium's own deterministic working. Where a named rule decided it, that rule's id is carried with it.",
+        ],
         ["Planned", "Items from the agent's task list, which are intent rather than fact."],
-        ["Generated", "The optional written explanation, and only ever that."],
+        [
+          "Explained",
+          "The optional written explanation, and only ever that. This is the word on the page: the badge reads `explained`.",
+        ],
       ]),
       note(
         "Observed is the default and prints nothing. Only the exceptions are labelled, because a badge on every line would say the same thing everywhere and so say nothing.",
@@ -392,7 +398,7 @@ const RAW: Array<Omit<Page, "n">> = [
       h("What it cannot do"),
       list(
         "It runs with its tools switched off, in a directory of its own.",
-        "Its own run is never ingested back as a session.",
+        "Its own run never appears as a session in your list.",
         "What comes back is validated against a schema before it can appear anywhere.",
         "It cannot change Verified, Left or Needs you.",
       ),
@@ -412,18 +418,18 @@ const RAW: Array<Omit<Page, "n">> = [
       list(
         "State lives in `~/.salidium`, or wherever `SALIDIUM_HOME` points. [Environment](/docs/environment) lists the rest.",
         "The daemon listens only on `127.0.0.1`, by default on port `47822`.",
-        "Every request to it carries a token, regenerated each time it starts.",
+        "Every request for your data carries a token, regenerated each time it starts.",
         "The directories it creates are readable only by you, and it repairs their permissions on every start.",
       ),
       h("Your repository"),
       p(
-        "At turn boundaries, for a session inside a git repository, Salidium runs four read-only commands to record where the work sat.",
+        "When a turn ends, when a session starts, and after the agent commits, for a live session inside a git repository, Salidium runs four read-only commands to record where the work sat.",
       ),
       list(
         "`git rev-parse --show-toplevel`",
         "`git rev-parse HEAD`",
         "`git rev-parse --abbrev-ref HEAD`",
-        "`git status --porcelain=v2`",
+        "`git status --porcelain=v2 --untracked-files=normal`",
       ),
       p("Nothing is written, and `SALIDIUM_NO_GIT=1` switches it off."),
       h("Redaction"),
@@ -458,7 +464,7 @@ const RAW: Array<Omit<Page, "n">> = [
     blocks: [
       terms([
         ["`salidium`", "Start it and open the page. This is what `npx salidium` runs."],
-        ["`salidium open`", "Open the page with a fresh token attached."],
+        ["`salidium open`", "Open the page with the current token attached."],
         ["`salidium status`", "Show the daemon and connection state."],
         ["`salidium doctor`", "Check the local setup and report problems."],
         ["`salidium show`", "Print a session as a report in the terminal."],
@@ -466,9 +472,12 @@ const RAW: Array<Omit<Page, "n">> = [
         ["`salidium stop`", "Stop the local daemon."],
         ["`salidium install-hooks`", "Connect an agent, or reconnect one."],
         ["`salidium uninstall-hooks`", "Disconnect it again."],
-        ["`salidium reingest`", "Re-read session files from disk. One session, or `--all`."],
+        ["`salidium reingest`", "Queue session files to be re-read on the next daemon start. One session, or `--all`, then `salidium restart`."],
         ["`salidium retention`", "Show or set how long sessions are kept."],
+        ["`salidium pin`", "Exempt a session from automatic retention."],
+        ["`salidium unpin`", "Remove that exemption."],
         ["`salidium forget`", "Delete one session for good. Requires `--yes`."],
+        ["`salidium audit-claims`", "Measure the claim classifier against every session in your store."],
       ]),
       note(
         "`reingest`, `retention`, `pin`, `unpin` and `forget` will not write while Salidium is running. Stop it first; offline maintenance does not rewrite a store under a running daemon.",
@@ -487,10 +496,15 @@ const RAW: Array<Omit<Page, "n">> = [
           "`SALIDIUM_HISTORY_DAYS`",
           "How far back to import session files. Defaults to `7`. Must be a whole number, and the daemon refuses to start on anything else.",
         ],
-        ["`SALIDIUM_EXPLAINER`", "`auto`, `claude`, `codex` or `off`. Outranks the setting in the page."],
+        [
+          "`SALIDIUM_EXPLAINER`",
+          "`auto`, `claude`, `codex` or `off`. Chooses the backend, and only `off` outranks the setting in the page.",
+        ],
         ["`SALIDIUM_EXPLAIN_MODEL`", "A model id for the explainer, instead of its default."],
         ["`SALIDIUM_NO_GIT`", "Set to `1` to stop the git snapshots."],
         ["`SALIDIUM_LOG`", "`silent`, `info` or `debug`. Defaults to `info`."],
+        ["`SALIDIUM_LOG_FILE`", "Where the structured log is written. The CLI sets it when it starts the daemon."],
+        ["`SALIDIUM_EXPLAIN`", "Set to `0` to switch explanations off. The older spelling of `SALIDIUM_EXPLAINER=off`."],
         ["`CLAUDE_CONFIG_DIR`", "Where Claude Code keeps its settings. Defaults to `~/.claude`."],
         ["`CODEX_HOME`", "Where Codex keeps its state. Defaults to `~/.codex`."],
       ]),
