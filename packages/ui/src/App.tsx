@@ -150,7 +150,7 @@ export function App() {
         aria-label={mobileSidebarOpen ? undefined : 'Sessions'}
         tabIndex={mobileSidebarOpen ? -1 : undefined}
         /*
-         * `display: none` takes a closed panel out of the tab order, but only once it has
+         * `visibility: hidden` takes a closed panel out of the tab order, but only once it has
          * finished leaving. For the 180ms in between it is still painted and still holds thirty
          * focusable rows, and the keyboard could walk back into a list the reader has just
          * dismissed. This is the same boolean the class is keyed to, so there is no second state
@@ -160,9 +160,9 @@ export function App() {
         /*
          * Closed by `.arrives` rather than by `hidden`. The attribute cannot be used here any
          * more: it is `display: none` from the frame it is set, which is the frame the drawer is
-         * supposed to spend sliding out. `.arrives` reaches the same `display: none` and takes
-         * the panel out of the tab order and the accessibility tree exactly as `hidden` did, but
-         * at the end of the gesture rather than instead of it.
+         * supposed to spend sliding out. `.arrives` takes the panel out of the tab order and the
+         * accessibility tree exactly as `hidden` did, but at the end of the gesture rather than
+         * instead of it.
          */
         onClickCapture={(event) => {
           if (

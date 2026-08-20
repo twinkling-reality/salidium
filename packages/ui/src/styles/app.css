@@ -57,6 +57,16 @@
   .side {
     transition: none;
   }
+
+  /*
+   * And out of the grid entirely while it is folded. `.app.no-side` leaves one column; a closed
+   * panel that is still a grid item is auto-placed into a second row and pushes the page out of a
+   * shell that is `height: 100%; overflow: hidden`. `.arrives` hides it but no longer removes its
+   * box, so the surface that owns the layout says what its closed box is worth.
+   */
+  .side:not(.is-open) {
+    position: absolute;
+  }
 }
 
 /* Mobile-only controls are inert on a two-pane desktop. */
@@ -3801,6 +3811,16 @@ button.cov-cell:hover {
   pointer-events: auto;
   /* `--rise` comes from `.session-foot`: this stands at the pane's foot, so it comes up into
      place and goes back down out of it. `.arrives` (scale.css) carries both directions. */
+}
+
+/*
+ * Out of the foot's flow once it has finished leaving. The pane reserves exactly the height of
+ * `.session-foot` (`useFootSpace`), so a scrubber that keeps its box keeps 70px of empty document
+ * under the last line written on it. `.arrives` delays the flip by the length of the fade, so the
+ * room is given back at the end of the gesture rather than at the start of it.
+ */
+.rewind:not(.is-open) {
+  position: absolute;
 }
 
 .rewind .timeline {

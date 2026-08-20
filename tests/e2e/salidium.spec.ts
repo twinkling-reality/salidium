@@ -24,6 +24,127 @@ async function expectNoA11yViolations(page: import('@playwright/test').Page): Pr
   ).toEqual([]);
 }
 
+interface RecordedExit {
+  found: boolean;
+  display: string;
+  visibility: string;
+  opacity: string;
+  running: string[];
+  /** Descendants still drawn on the frame the exit began, and so still there to be kept out of. */
+  painted: number;
+  inert: boolean;
+}
+
+/*
+ * Recording the exit rather than sampling for it.
+ *
+ * The probe here used to read `getComputedStyle` one round trip after the click that dismissed the
+ * surface, which is a race against the 180ms it is measuring. Under the load of three engines
+ * running in parallel the round trip lost: Chromium failed two runs in three against a stylesheet
+ * that was working, because the fade had already finished by the time the question was asked. The
+ * listener is installed before the dismissal instead and samples inside the page on the frame the
+ * transition is created, so the measurement cannot arrive late whatever the machine is doing.
+ */
+async function watchExit(page: import('@playwright/test').Page, selector: string): Promise<void> {
+  await page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) throw new Error(`nothing matches ${sel}`);
+    const recorded: RecordedExit = {
+      found: true,
+      display: '',
+      visibility: '',
+      opacity: '',
+      running: [],
+      painted: 0,
+      inert: false,
+    };
+    const scope = window as unknown as { __exit: RecordedExit; __exitDone: Promise<void> };
+    scope.__exit = recorded;
+    /*
+     * Transition events are queued rather than dispatched inside the style recalculation, so a
+     * question asked the instant after the click can still beat the answer to it. This resolves
+     * once the exit has both started and settled, and the sample above was taken when it started,
+     * so reading late costs nothing and reading early is no longer possible. The deadline is what
+     * turns "no transition was ever created" into a failed assertion rather than a hung test.
+     */
+    scope.__exitDone = new Promise<void>((resolve) => {
+      const deadline = performance.now() + 2_000;
+      const tick = () => {
+        const running = el.getAnimations().some((animation) => animation.playState === 'running');
+        if ((recorded.running.length > 0 && !running) || performance.now() > deadline) resolve();
+        else requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+    el.addEventListener('transitionrun', (event) => {
+      if (event.target !== el) return;
+      if (recorded.running.length === 0) {
+        const style = getComputedStyle(el);
+        recorded.display = style.display;
+        recorded.visibility = style.visibility;
+        recorded.opacity = style.opacity;
+        recorded.inert = el.hasAttribute('inert');
+        recorded.painted = [...el.querySelectorAll('a[href], button, input')].filter(
+          (node) =>
+            node.getClientRects().length > 0 && getComputedStyle(node).visibility === 'visible',
+        ).length;
+      }
+      recorded.running.push((event as TransitionEvent).propertyName);
+    });
+  }, selector);
+}
+
+async function recordedExit(page: import('@playwright/test').Page): Promise<RecordedExit> {
+  return page.evaluate(async () => {
+    const scope = window as unknown as { __exit?: RecordedExit; __exitDone?: Promise<void> };
+    await scope.__exitDone;
+    return (
+      scope.__exit ?? {
+        found: false,
+        display: '',
+        visibility: '',
+        opacity: '',
+        running: [],
+        painted: 0,
+        inert: false,
+      }
+    );
+  });
+}
+
+/*
+ * What the closed surface is worth to the keyboard, asked rather than inferred.
+ *
+ * A count of client rects answered this while the closed state was `display: none`, because a
+ * closed surface had no boxes at all. `visibility: hidden` leaves every rect exactly where layout
+ * put it, and the property under test was never whether a row has a box: it is whether the
+ * keyboard can land on one. So each candidate is offered focus and asked whether it took it.
+ */
+function settled(
+  page: import('@playwright/test').Page,
+  selector: string,
+): Promise<{ found: boolean; visibility: string; candidates: number; focusable: number }> {
+  return page.evaluate(async (sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return { found: false, visibility: '', candidates: 0, focusable: 0 };
+    await Promise.allSettled(el.getAnimations().map((animation) => animation.finished));
+    const restore = document.activeElement as HTMLElement | null;
+    const candidates = [...el.querySelectorAll<HTMLElement>('a[href], button, input')];
+    let focusable = 0;
+    for (const node of candidates) {
+      node.focus();
+      if (document.activeElement === node) focusable += 1;
+    }
+    restore?.focus?.();
+    return {
+      found: true,
+      visibility: getComputedStyle(el).visibility,
+      candidates: candidates.length,
+      focusable,
+    };
+  }, selector);
+}
+
 test('session evidence, source drill-through, and live updates remain accessible', async ({
   page,
   daemon,
@@ -157,10 +278,12 @@ test('narrow session navigation is a contained modal across resize', async ({
  * The assertion is deliberately about the mechanism rather than about a duration. A surface has
  * left properly when three things are true at once: it is still painted on the frame it was
  * dismissed, a transition is actually running on it, and once that has settled it is
- * `display: none` and so holds nothing focusable.
+ * `visibility: hidden` and so holds nothing the keyboard can reach.
  *
  * The failure this guards against is the one the whole pass was about, and it looks identical in
- * a screenshot to a correct exit: the element simply is not there on the next frame.
+ * a screenshot to a correct exit: the element simply is not there on the next frame. It caught
+ * exactly that in Firefox, where the `display`-carried version of the idiom ran nothing at all;
+ * the reason, and what replaced it, are recorded at `.arrives` in `scale.css`.
  */
 test('a surface that arrives with motion also leaves with it', async ({
   page,
@@ -169,58 +292,34 @@ test('a surface that arrives with motion also leaves with it', async ({
   test.skip(testInfo.project.name.includes('narrow'), 'desktop flow');
   await openSalidium(page, daemon);
 
-  const leaving = (selector: string) =>
-    page.evaluate((sel) => {
-      const el = document.querySelector(sel);
-      if (!el) return { found: false };
-      const running = el
-        .getAnimations()
-        .filter((a) => a.constructor.name === 'CSSTransition')
-        .map((a) => (a as CSSTransition).transitionProperty);
-      return {
-        found: true,
-        display: getComputedStyle(el).display,
-        running,
-      };
-    }, selector);
-
-  const settled = (selector: string) =>
-    page.evaluate(async (sel) => {
-      const el = document.querySelector(sel) as HTMLElement | null;
-      if (!el) return { found: false };
-      await Promise.allSettled(el.getAnimations().map((a) => a.finished));
-      return {
-        found: true,
-        display: getComputedStyle(el).display,
-        focusable: [...el.querySelectorAll('a[href], button, input')].filter(
-          (node) => node.getClientRects().length > 0,
-        ).length,
-      };
-    }, selector);
-
   // The panel over the page.
   await page.getByRole('button', { name: 'Evidence' }).click();
   await expect(page.getByRole('dialog', { name: 'Evidence' })).toBeVisible();
+  await watchExit(page, '.panel-scrim');
   await page.getByTitle('Close (Esc)').click();
-  const panelLeaving = await leaving('.panel-scrim');
+  const panelLeaving = await recordedExit(page);
   // Asserted before the two below, which a vanished element would otherwise satisfy by absence.
   expect(panelLeaving.found, 'the scrim is still in the document while it leaves').toBe(true);
-  expect(panelLeaving.display, 'the scrim is still painted while it leaves').not.toBe('none');
   expect(panelLeaving.running, 'the scrim leaves over time').toContain('opacity');
-  const panelSettled = await settled('.panel-scrim');
-  expect(panelSettled.display).toBe('none');
+  expect(panelLeaving.visibility, 'the scrim is still painted while it leaves').toBe('visible');
+  expect(panelLeaving.display, 'and still holds a box while it leaves').not.toBe('none');
+  const panelSettled = await settled(page, '.panel-scrim');
+  expect(panelSettled.visibility).toBe('hidden');
+  expect(panelSettled.candidates, 'and there was something in it to reach').toBeGreaterThan(0);
   expect(panelSettled.focusable, 'a closed panel holds nothing focusable').toBe(0);
 
   // The scrubber at the pane's foot, whose height the document reserves.
   await page.getByRole('button', { name: 'Rewind' }).click();
   await expect(page.locator('.rewind')).toBeVisible();
+  await watchExit(page, '.rewind');
   await page.getByRole('button', { name: 'Rewind' }).click();
-  const footLeaving = await leaving('.rewind');
+  const footLeaving = await recordedExit(page);
   expect(footLeaving.found, 'the scrubber is still in the document while it leaves').toBe(true);
-  expect(footLeaving.display, 'the scrubber is still painted while it leaves').not.toBe('none');
   expect(footLeaving.running, 'the scrubber leaves over time').toContain('opacity');
-  const footSettled = await settled('.rewind');
-  expect(footSettled.display).toBe('none');
+  expect(footLeaving.visibility, 'the scrubber is still painted while it leaves').toBe('visible');
+  expect(footLeaving.display, 'and still holds a box while it leaves').not.toBe('none');
+  const footSettled = await settled(page, '.rewind');
+  expect(footSettled.visibility).toBe('hidden');
 
   /*
    * The clearance the document keeps under the foot is measured from the foot's own box by
@@ -276,33 +375,22 @@ test('the session list drawer slides out and is unreachable while it does', asyn
   await expect(drawer).toBeVisible();
   await expect(drawer).not.toHaveAttribute('inert', '');
 
+  await watchExit(page, 'aside.side');
   await drawer.getByTitle('Hide the session list ([)').click();
 
-  const leaving = await page.evaluate(() => {
-    const el = document.querySelector('aside.side') as HTMLElement;
-    return {
-      display: getComputedStyle(el).display,
-      running: el
-        .getAnimations()
-        .filter((a) => a.constructor.name === 'CSSTransition')
-        .map((a) => (a as CSSTransition).transitionProperty),
-      inert: el.hasAttribute('inert'),
-      reachable: [...el.querySelectorAll('button, input')].filter(
-        (node) => node.getClientRects().length > 0,
-      ).length,
-    };
-  });
-  expect(leaving.display, 'the drawer is still painted while it leaves').not.toBe('none');
+  const leaving = await recordedExit(page);
+  expect(leaving.visibility, 'the drawer is still painted while it leaves').toBe('visible');
   expect(leaving.running, 'it slides as well as fades').toEqual(
     expect.arrayContaining(['opacity', 'transform']),
   );
   expect(leaving.inert, 'and is inert for every frame of it').toBe(true);
   /*
-   * The rows are still laid out, which is the whole reason the line above matters: `display: none`
-   * has not arrived yet, so nothing but `inert` is keeping the keyboard out of them. If this ever
-   * reads zero the drawer has stopped being painted and the assertion above proves nothing.
+   * Its rows are still drawn, which is the whole reason the line above matters: the drawer is
+   * still `visibility: visible` and still holds thirty focusable rows, so nothing but `inert` is
+   * keeping the keyboard out of them. If this ever reads zero the drawer has stopped being
+   * painted on the frame it was dismissed and the assertion above proves nothing.
    */
-  expect(leaving.reachable, 'its rows are still painted while it leaves').toBeGreaterThan(0);
+  expect(leaving.painted, 'its rows are still painted while it leaves').toBeGreaterThan(0);
 
   await expect(drawer).toBeHidden();
   await expect(page.locator('.side-backdrop')).toBeHidden();

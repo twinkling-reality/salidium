@@ -243,11 +243,48 @@
  * It is achromatic on purpose. Colour in this app means a verdict (app.css, rule 4), and a panel
  * opening is not a verdict.
  *
- * `display` carries the closed state rather than opacity alone. A closed surface is out of the
- * accessibility tree and out of the tab order because it is `display: none`, which no component
- * has to remember to arrange. `allow-discrete` holds that display value until the fade has
- * finished, and `@starting-style` supplies the frame before the open one, which a surface coming
- * back from `display: none` has no other way to get.
+ * `visibility` carries the closed state rather than opacity alone. A closed surface is out of the
+ * accessibility tree and out of the tab order because it is `visibility: hidden`, which no
+ * component has to remember to arrange, and which reaches the end of the fade rather than the
+ * start of it: `visibility` is the one property whose interpolation was always defined this way,
+ * so a surface on its way to `hidden` stays `visible` for the whole duration and flips on the
+ * last frame. `@starting-style` supplies the frame before the open one.
+ *
+ * This was `display: none` held through the fade by `transition-behavior: allow-discrete`, which
+ * is the idiom the specification is written around and the one every article recommends. It does
+ * not run in Firefox, and the failure is silent. Measured on 2026-08-20 against Gecko 153,
+ * Blink 151 and WebKit 26: the entrance works in all three, and on leaving Firefox reports
+ * `display: none` and zero running transitions where the other two report the element still
+ * painted at opacity 0.5. The cause is below CSS and no rewriting of these rules reaches it:
+ * `display` is not in Gecko's animatable set at all, so `element.animate([{ display: 'block' },
+ * { display: 'none' }])` comes back with the `display` key stripped, `@keyframes` drops it too,
+ * and a `block` to `flex` change is refused as flatly as a change to `none`. Twenty-nine
+ * arrangements were tried, including the one this file used to have, the textbook pairing of a
+ * base `display: none` with an open `.is-open` rule, `transition: all`, a delayed discrete step,
+ * popover, dialog, `::after` and shadow DOM. None of them produced a single `transitionrun` for
+ * `display` in Firefox, and the same harness fired in twenty of twenty-one under Blink.
+ *
+ * `@supports` cannot gate it either, and that is worth stating because it looks like it should:
+ * Gecko implements `allow-discrete` properly for other properties, so every honest query about
+ * the feature answers true there. Only irrelevant queries have the right truth table today, and
+ * a gate keyed to one of those decays into a silent wrong answer the day Firefox ships the
+ * unrelated feature it was keyed to.
+ *
+ * So the closed state is split across two properties that Gecko does interpolate. `visibility`
+ * carries the accessibility tree and the tab order; `position` carries the layout footprint, for
+ * the two surfaces that have one. `--leave-delay` is what makes the second land at the end of the
+ * fade instead of the start: zero while open, so a surface rejoins the flow the moment it is
+ * asked for, and one fade long while closed, so the room is given back only once the surface has
+ * gone. It is derived from `--motion-base` rather than written down, because a delay that drifts
+ * from the duration is a surface that leaves its shape behind or loses it mid-gesture.
+ *
+ * `content-visibility: hidden` was tried first and is the better fit on paper: it collapses the
+ * box on its own, so no surface would need to say anything about `position`. It was reverted.
+ * Gecko creates transitions on elements inside skipped contents and then never advances them.
+ * Five `CSSTransition`s on one `.opt-mark` inside a popover that had never been opened, stuck at
+ * `currentTime: 0` and `playState: 'running'` for as long as the page was up. Anything awaiting
+ * `getAnimations()` hangs on them, which is how it was found: the accessibility scan in
+ * `tests/e2e/salidium.spec.ts` settles animations before measuring contrast, and it timed out.
  *
  * What that leaves is the fade itself. For those 180ms the surface is still painted and still
  * holds whatever it holds, so it is deaf to the pointer here, and the two surfaces with something
@@ -262,24 +299,31 @@
  * of what the motion was going to say.
  */
 .arrives {
+  /* Zero while open, one fade while closing. See the note above; `app.css` states the values. */
+  --leave-delay: 0s;
   opacity: 0;
   transform: translate(var(--slide, 0), var(--rise, 0));
   transition:
     opacity var(--motion-base) var(--ease),
     transform var(--motion-base) var(--ease),
-    display var(--motion-base) allow-discrete;
+    visibility var(--motion-base) var(--ease),
+    position 0s var(--leave-delay) allow-discrete;
 }
 
 /*
- * Out-specifies the surface's own `display`, so each surface keeps stating what it is when it is
- * open and none of them has to restate what it is when it is closed.
+ * Out-specifies whatever the surface itself declares, so each surface keeps stating what it is
+ * when it is open and none of them has to restate what it is when it is closed. The two whose
+ * closed box the layout can see, `.rewind` under the document it scrubs and `.side` folded out of
+ * the shell's grid, add a `position` of their own beside their own rules in `app.css`; the
+ * delay above is what times it.
  *
  * Deaf to the pointer from the moment it is dismissed, not from the moment it finishes leaving. A
  * backdrop that is on its way out is still a full-window box for as long as the fade lasts, and
  * catching a click there would reopen the thing the reader has just put away.
  */
 .arrives:not(.is-open) {
-  display: none;
+  --leave-delay: var(--motion-base);
+  visibility: hidden;
   pointer-events: none;
 }
 
