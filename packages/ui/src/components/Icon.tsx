@@ -29,7 +29,8 @@ export type IconName =
   | 'next'
   | 'save'
   | 'copy'
-  | 'check';
+  | 'check'
+  | 'outbound';
 
 const PATHS: Record<IconName, React.ReactNode> = {
   /* One sheet laid over another: take this text. */
@@ -124,6 +125,20 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <>
       <path d="M2.5 13.5h11" />
       <path d="M4.5 11V7M8 11V3.5M11.5 11V8.5" />
+    </>
+  ),
+  /*
+   * A box with a corner open and an arrow leaving through it: this one goes somewhere else.
+   *
+   * Not the page glyph `record` already draws. What separates the documentation from every other
+   * control in the row is not that it is a document, it is that pressing it leaves the
+   * application, and that is the thing the mark has to say.
+   */
+  outbound: (
+    <>
+      <path d="M8 3.5H3.5v9h9V8" />
+      <path d="M10 2.5h3.5V6" />
+      <path d="M13.5 2.5 8.5 7.5" />
     </>
   ),
   close: <path d="M4 4l8 8M12 4l-8 8" />,

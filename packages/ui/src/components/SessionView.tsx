@@ -12,7 +12,7 @@ import { useScrollState } from '../lib/useScrollState.ts';
 import { useStaysMounted } from '../lib/useStaysMounted.ts';
 import { type LiveError, useAppStore } from '../store/appStore.ts';
 import { BrandMark } from './Brand.tsx';
-import { ConnectionBadge, ThemeToggle, ToolButton } from './Controls.tsx';
+import { ConnectionBadge, DOCS, ThemeToggle, ToolButton, ToolLink } from './Controls.tsx';
 import { HistoryRail } from './HistoryRail.tsx';
 import { HistoryTable } from './HistoryTable.tsx';
 import { Icon } from './Icon.tsx';
@@ -300,6 +300,28 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
               on={historyMode !== 'off'}
               title="Toggle history (h)"
               onClick={toggleHistory}
+            />
+            {/*
+             * The product's route to its own documentation, and for most of a session's life the
+             * only one there is: the first screen carries the same link, but the first screen is
+             * shown when no session has ever existed, so once one has the reader never sees it
+             * again. The words that need a definition — observed, derived, partial, needs you —
+             * are all on the report, which was the one surface with nothing to press.
+             *
+             * Here rather than in the list's head, which was measured and cannot take it: at
+             * 288px that head has 68px of room, a seventh control leaves 32px, and with the
+             * connection badge showing "disconnected" it reaches zero and truncates the product's
+             * own name, at the moment a reader most needs to read it. This row has the room
+             * because it wraps.
+             *
+             * Beside the theme rather than among Evidence and the rest, because those four are
+             * the session and these two are not.
+             */}
+            <ToolLink
+              icon="outbound"
+              label="Docs"
+              href={DOCS}
+              title="Open the Salidium documentation in a new tab"
             />
             <ThemeToggle />
             {/* The separator belongs to the badge: with a healthy connection neither is drawn,

@@ -18,13 +18,18 @@ export function ToolButton({
 }: {
   icon: IconName;
   /**
-   * Present for anything that opens or hides content, absent for the chrome and the settings.
+   * Present for anything that opens or hides content or takes the reader somewhere, absent for the
+   * chrome and the settings.
    *
    * That is the whole rule, and the toolbar broke it in one place: Evidence, Rewind and History
    * named themselves while the quantities bar — which is the same kind of thing, a body of content
    * it shows and hides — was a bar-chart glyph and a tooltip. The list fold and the theme are icons
    * because they act on the window rather than on the session, and because their glyphs are the
    * two everyone already knows.
+   *
+   * The clause about going somewhere was added for `ToolLink` below. A destination has the same
+   * claim on a name as a panel does, and a stronger one on a touch device, where the `title` that
+   * would otherwise stand in for the name is never shown at all.
    */
   label?: string;
   /** Current state the button reports, shown at full strength beside its label. */
@@ -46,6 +51,42 @@ export function ToolButton({
       {value && <span className="btn-value">{value}</span>}
       {!label && <span className="sr-only">{title}</span>}
     </button>
+  );
+}
+
+/**
+ * Where the documentation is, named once because the toolbar and the first screen both point at it.
+ */
+export const DOCS = 'https://salidium.com/docs';
+
+/**
+ * The same control as `ToolButton`, for the one thing on the toolbar that is a destination rather
+ * than a state.
+ *
+ * An anchor rather than a button, because it goes somewhere: the keyboard, the context menu and
+ * "open in a new tab" all come from the element being the thing it actually is, and none of them
+ * can be had from a button with a click handler. It takes `.btn` so it is the same box as every
+ * control beside it, which is the whole point of that primitive.
+ *
+ * It carries a label for the reason the rule above now states. The row is otherwise all state, so
+ * this is the only member of it that leaves the application, and the mark says so.
+ */
+export function ToolLink({
+  icon,
+  label,
+  href,
+  title,
+}: {
+  icon: IconName;
+  label: string;
+  href: string;
+  title: string;
+}) {
+  return (
+    <a className="btn" href={href} target="_blank" rel="noreferrer" title={title}>
+      <Icon name={icon} />
+      <span>{label}</span>
+    </a>
   );
 }
 

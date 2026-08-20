@@ -39,6 +39,16 @@ test('session evidence, source drill-through, and live updates remain accessible
   await expect.poll(() => streamAttempts).toBeGreaterThanOrEqual(2);
   await expectNoA11yViolations(page);
 
+  /*
+   * The report is the screen the product's own vocabulary appears on, so it is the screen that has
+   * to carry a route to what defines it. This used to be reachable only before a reader's first
+   * run had ever happened, which is to say never again afterwards.
+   */
+  const docs = page.getByRole('link', { name: 'Docs' });
+  await expect(docs).toBeVisible();
+  await expect(docs).toHaveAttribute('href', 'https://salidium.com/docs');
+  await expect(docs).toHaveAttribute('target', '_blank');
+
   const evidenceTrigger = page.getByRole('button', { name: 'Evidence' });
   await evidenceTrigger.click();
   const evidence = page.getByRole('dialog', { name: 'Evidence' });
