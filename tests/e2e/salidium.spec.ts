@@ -91,7 +91,7 @@ test('narrow session navigation is a contained modal across resize', async ({
   test.skip(!testInfo.project.name.includes('narrow'), 'narrow flow');
   await openSalidium(page, daemon);
 
-  const sessions = page.getByRole('dialog', { name: 'Salidium sessions' });
+  const sessions = page.getByRole('dialog', { name: 'Salidium' });
   const close = page.locator('aside.side').getByTitle('Hide the session list ([)');
   await expect(sessions).toBeVisible();
   await expect(close).toBeFocused();
@@ -130,12 +130,12 @@ test('narrow session navigation is a contained modal across resize', async ({
   await reopen.click();
   await expect(close).toBeFocused();
   await page.setViewportSize({ width: 1100, height: 800 });
-  await expect(page.getByRole('dialog', { name: 'Salidium sessions' })).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Salidium' })).toHaveCount(0);
   await expect(page.locator('aside.side')).toBeVisible();
   await expect(close).toBeFocused();
   await expect(page.locator('main')).not.toHaveAttribute('inert', '');
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.getByRole('dialog', { name: 'Salidium sessions' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Salidium' })).toBeVisible();
   await expect(close).toBeFocused();
 });
