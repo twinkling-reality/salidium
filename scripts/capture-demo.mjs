@@ -7,17 +7,17 @@
  *
  *   node scripts/capture-demo.mjs
  */
-import { mkdir } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { mkdir } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 // @playwright/test is the workspace dependency; it re-exports the browser drivers.
-import { chromium } from "@playwright/test";
-import { startDemo } from "./demo-daemon.mjs";
+import { chromium } from '@playwright/test';
+import { startDemo } from './demo-daemon.mjs';
 
-const OUT = fileURLToPath(new URL("../apps/site/public/", import.meta.url));
+const OUT = fileURLToPath(new URL('../apps/site/public/', import.meta.url));
 
 const shots = [
-  { name: "report-light", colorScheme: "light" },
-  { name: "report-dark", colorScheme: "dark" },
+  { name: 'report-light', colorScheme: 'light' },
+  { name: 'report-dark', colorScheme: 'dark' },
 ];
 
 await mkdir(OUT, { recursive: true });
@@ -46,11 +46,11 @@ try {
     const page = await context.newPage();
     // Not `networkidle`: the event stream holds a connection open for the life of the page, so it
     // never goes idle. The content waits below are the real signal anyway.
-    await page.goto(demo.url, { waitUntil: "domcontentloaded" });
+    await page.goto(demo.url, { waitUntil: 'domcontentloaded' });
 
     // Wait for the derived report, not a timer: the verdict only renders once state has folded.
-    await page.getByText("4 files changed, unverified").waitFor({ timeout: 15_000 });
-    await page.getByText("Some customers were charged twice").waitFor({ timeout: 15_000 });
+    await page.getByText('4 files changed, unverified').waitFor({ timeout: 15_000 });
+    await page.getByText('Some customers were charged twice').waitFor({ timeout: 15_000 });
 
     /*
      * Clip to where the report actually ends. The window has to be tall enough that nothing is cut
@@ -59,7 +59,7 @@ try {
      */
     const height = await page.evaluate(() => {
       // `.page` is the article the report is rendered into (SessionView.tsx).
-      const page = document.querySelector(".session-content .page");
+      const page = document.querySelector('.session-content .page');
       const bottom = page ? page.getBoundingClientRect().bottom : window.innerHeight;
       return Math.min(Math.ceil(bottom + 28), window.innerHeight);
     });

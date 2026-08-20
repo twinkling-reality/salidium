@@ -10,13 +10,13 @@
  * Each shot waits on rendered text before it is taken, so a surface that stopped working fails the
  * capture instead of quietly shipping a picture of the last time it did.
  */
-import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-import { chromium } from "@playwright/test";
-import { startDemo } from "./demo-daemon.mjs";
+import { createHash } from 'node:crypto';
+import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { chromium } from '@playwright/test';
+import { startDemo } from './demo-daemon.mjs';
 
-const OUT = fileURLToPath(new URL("../apps/site/public/docs/", import.meta.url));
+const OUT = fileURLToPath(new URL('../apps/site/public/docs/', import.meta.url));
 
 /*
  * Every shot names the element it is clipped to. A viewport screenshot of a 1400px window shrunk
@@ -33,16 +33,16 @@ const NARROW = { width: 1180, height: 1000 };
 
 const SHOTS = [
   {
-    name: "gate",
+    name: 'gate',
     /* The one surface reached without a token, which is what it is for. */
     gate: true,
-    ready: "This page needs the token your daemon is listening for.",
-    clip: ".gate-inner",
+    ready: 'This page needs the token your daemon is listening for.',
+    clip: '.gate-inner',
     pad: 40,
   },
   {
-    name: "sessions",
-    ready: "Needs you",
+    name: 'sessions',
+    ready: 'Needs you',
     /*
      * The list is a full-height column, and clipped to itself it is a narrow strip that no
      * document can show without either shrinking it to nothing or running it off the page. Taken
@@ -52,25 +52,25 @@ const SHOTS = [
     rect: { x: 0, y: 0, width: 940, height: 560 },
   },
   {
-    name: "masthead",
-    ready: "4 files changed, unverified",
-    clip: ".masthead",
+    name: 'masthead',
+    ready: '4 files changed, unverified',
+    clip: '.masthead',
     pad: 24,
     viewport: NARROW,
   },
   {
-    name: "evidence",
-    ready: "4 files changed, unverified",
-    click: "Evidence",
+    name: 'evidence',
+    ready: '4 files changed, unverified',
+    click: 'Evidence',
     /* The rail names its first section once the panel is open. */
-    waitFor: "Coverage",
+    waitFor: 'Coverage',
     clip: "[role='dialog']",
     pad: 0,
   },
   {
-    name: "rewind",
-    ready: "4 files changed, unverified",
-    click: "Rewind",
+    name: 'rewind',
+    ready: '4 files changed, unverified',
+    click: 'Rewind',
     /* The scrubber's own legend depends on whether the session is following live, so wait on the
      * element rather than on a word that is only one of three it might print. */
     waitFor: ".rewind input[type='range']",
@@ -79,12 +79,12 @@ const SHOTS = [
      * a capture of it caught half-sentences of the session showing through from behind and read as
      * a broken picture.
      */
-    clip: ".timeline",
+    clip: '.timeline',
     pad: 0,
     viewport: NARROW,
     /* The long run, so the track has a failure to draw red and marks close enough to merge. */
-    session: "claude-code:demo-timeline",
-    sessionReady: "Move invoice numbering off the sequence",
+    session: 'claude-code:demo-timeline',
+    sessionReady: 'Move invoice numbering off the sequence',
     /*
      * Dragged off the end before the shot. Left alone the scrubber says "following live", which is
      * the one state that shows nothing of what it is for.
@@ -92,21 +92,24 @@ const SHOTS = [
     scrub: 0.62,
   },
   {
-    name: "history",
-    ready: "4 files changed, unverified",
-    click: "History",
+    name: 'history',
+    ready: '4 files changed, unverified',
+    click: 'History',
     waitFor: "[aria-label='History']",
     /* The table, not the rail: it is the surface that carries the How we know column. */
-    then: { clickSelector: "[title='Open the history as a table across the page']", waitFor: "How we know" },
+    next: {
+      clickSelector: "[title='Open the history as a table across the page']",
+      waitFor: 'How we know',
+    },
     clip: ".hist-table, [aria-label='History']",
     pad: 0,
     fitContent: true,
     maxHeight: 560,
   },
   {
-    name: "quantities",
-    ready: "4 files changed, unverified",
-    click: "Quantities",
+    name: 'quantities',
+    ready: '4 files changed, unverified',
+    click: 'Quantities',
     waitFor: "[aria-label='Quantities']",
     clip: "[aria-label='Quantities']",
     pad: 0,
@@ -118,12 +121,12 @@ const SHOTS = [
     fitContent: true,
   },
   {
-    name: "record",
-    ready: "4 files changed, unverified",
-    click: "History",
+    name: 'record',
+    ready: '4 files changed, unverified',
+    click: 'History',
     waitFor: "[aria-label='History']",
     /* History is where every entry carries a `record` link, which is how a reader reaches one. */
-    then: { clickSelector: "[title='Open the raw record this came from']", waitFor: "How we know" },
+    next: { clickSelector: "[title='Open the raw record this came from']", waitFor: 'How we know' },
     clip: "[role='dialog']",
     pad: 0,
   },
@@ -152,7 +155,7 @@ function emptiness(buffer, width, height) {
 }
 
 async function record(name, theme, buffer) {
-  const digest = createHash("sha256").update(buffer).digest("hex").slice(0, 8);
+  const digest = createHash('sha256').update(buffer).digest('hex').slice(0, 8);
   const file = `${name}-${theme}-${digest}.png`;
   await writeFile(`${OUT}${file}`, buffer);
   /*
@@ -162,10 +165,10 @@ async function record(name, theme, buffer) {
    */
   const width = buffer.readUInt32BE(16) / 2;
   const height = buffer.readUInt32BE(20) / 2;
-  const entry = (shots[name] ??= { width, height });
-  entry[theme] = file;
+  shots[name] ??= { width, height };
+  shots[name][theme] = file;
   const { share } = emptiness(buffer, width, height);
-  const flat = share > 0.72 ? `  MOSTLY EMPTY (${Math.round(share * 100)}% one value)` : "";
+  const flat = share > 0.72 ? `  MOSTLY EMPTY (${Math.round(share * 100)}% one value)` : '';
   if (flat) empties.push(`${file}${flat}`);
   console.log(`wrote ${file}  ${width}x${height} css${flat}`);
 }
@@ -185,7 +188,7 @@ const shots = {};
 const empties = [];
 
 try {
-  for (const theme of ["light", "dark"]) {
+  for (const theme of ['light', 'dark']) {
     for (const shot of SHOTS) {
       const context = await browser.newContext({
         viewport: shot.viewport ?? { width: 1400, height: 1000 },
@@ -194,8 +197,8 @@ try {
         colorScheme: theme,
       });
       const page = await context.newPage();
-      const url = shot.gate ? demo.url.replace(/#token=.*/, "") : demo.url;
-      await page.goto(url, { waitUntil: "domcontentloaded" });
+      const url = shot.gate ? demo.url.replace(/#token=.*/, '') : demo.url;
+      await page.goto(url, { waitUntil: 'domcontentloaded' });
       /* Wait on something the page renders before the shot is set up, not on the shot's own text:
        * waiting for what a click is about to reveal only ever timed out. */
       await page.getByText(shot.ready).first().waitFor({ timeout: 20_000 });
@@ -211,10 +214,10 @@ try {
         await page.getByText(shot.sessionReady).first().waitFor({ timeout: 15_000 });
       }
 
-      for (const step of [shot, shot.then].filter((s) => s && (s.click || s.clickSelector))) {
+      for (const step of [shot, shot.next].filter((s) => s && (s.click || s.clickSelector))) {
         const control = step.clickSelector
           ? page.locator(step.clickSelector)
-          : page.getByRole("button", { name: step.click, exact: false });
+          : page.getByRole('button', { name: step.click, exact: false });
         await control.first().click();
         const after = /^[.[#]/.test(step.waitFor)
           ? page.locator(step.waitFor)
@@ -234,9 +237,11 @@ try {
         const box = await range.boundingBox();
         await page.mouse.move(box.x + box.width - 4, box.y + box.height / 2);
         await page.mouse.down();
-        await page.mouse.move(box.x + box.width * shot.scrub, box.y + box.height / 2, { steps: 12 });
+        await page.mouse.move(box.x + box.width * shot.scrub, box.y + box.height / 2, {
+          steps: 12,
+        });
         await page.mouse.up();
-        await page.getByText("back to now").first().waitFor({ timeout: 10_000 });
+        await page.getByText('back to now').first().waitFor({ timeout: 10_000 });
         await page.waitForTimeout(400);
       }
 
@@ -257,7 +262,7 @@ try {
         const content = await target.evaluate((el) => {
           const r = el.getBoundingClientRect();
           let bottom = r.top;
-          for (const child of el.querySelectorAll("*")) {
+          for (const child of el.querySelectorAll('*')) {
             const c = child.getBoundingClientRect();
             if (c.width > 0 && c.height > 0) bottom = Math.max(bottom, c.bottom);
           }
@@ -284,14 +289,17 @@ try {
 
 /* Anything left from a previous run has a name nothing references now. */
 for (const name of await readdir(OUT)) {
-  if (name.endsWith(".png") && !Object.values(shots).some((s) => s.light === name || s.dark === name)) {
+  if (
+    name.endsWith('.png') &&
+    !Object.values(shots).some((s) => s.light === name || s.dark === name)
+  ) {
     await rm(`${OUT}${name}`);
     console.log(`removed stale ${name}`);
   }
 }
 
 await writeFile(
-  fileURLToPath(new URL("../apps/site/app/docs/shots.json", import.meta.url)),
+  fileURLToPath(new URL('../apps/site/app/docs/shots.json', import.meta.url)),
   `${JSON.stringify(Object.fromEntries(Object.entries(shots).sort()), null, 2)}\n`,
 );
 

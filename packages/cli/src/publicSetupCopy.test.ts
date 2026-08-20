@@ -50,11 +50,19 @@ describe('public setup instructions', () => {
   });
 
   it('keeps the landing page free of required recovery commands', () => {
-    const page = readFileSync(join(root, 'apps/site/app/page.tsx'), 'utf8');
-    expect(page).toMatch(/npx: "npx salidium"/);
-    expect(page).toMatch(/pnpm: "pnpm dlx salidium"/);
-    expect(page.match(/npx salidium/g)).toHaveLength(1);
-    expect(page).not.toMatch(/install-hooks|salidium doctor/);
+    /*
+     * The command lives in `Showcase.tsx`: `page.tsx` is the route and holds only the layout.
+     *
+     * The npx/pnpm pair this used to assert is deliberately gone. The landing page offers one
+     * command and one control, and its own test forbids `pnpm dlx` from the rendered page, so the
+     * two suites asserted opposite things about the same screen. What this guards is unchanged:
+     * exactly one canonical first-run command, and no recovery command on the way in.
+     */
+    const showcase = readFileSync(join(root, 'apps/site/app/Showcase.tsx'), 'utf8');
+    expect(showcase).toMatch(/const COMMAND = "npx salidium"/);
+    expect(showcase.match(/npx salidium/g)).toHaveLength(1);
+    expect(showcase).not.toMatch(/pnpm dlx/);
+    expect(showcase).not.toMatch(/install-hooks|salidium doctor/);
   });
 
   it('describes onboarding and automation flags in CLI help', () => {
