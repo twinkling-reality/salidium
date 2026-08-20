@@ -109,6 +109,22 @@ const RAW: Array<Omit<Page, "n">> = [
       p(
         "The token is regenerated every time the daemon starts, so a tab you left open from before a restart signs itself out and says so. This is not an expiry you can extend. It is how a restart stops being something an old tab can keep talking to.",
       ),
+      h("When the daemon stops answering"),
+      p(
+        "The page keeps whatever it already has and says what the connection is doing, beside the session list and again in the toolbar above a report. A page that has stopped receiving events but still looks live is the one thing it must not be.",
+      ),
+      terms([
+        ["Connecting", "Opening the connection. This is what start-up looks like."],
+        ["Reconnecting", "Contact was lost and Salidium is retrying. Nothing is needed from you."],
+        ["Disconnected", "Nothing is arriving, and the daemon may have stopped."],
+      ]),
+      p(
+        "Open a session while the daemon is gone and the page says so in full, names `salidium` as the command that starts it again, and offers to try the request once more.",
+      ),
+      h("Light or dark"),
+      p(
+        "The control at the right of the toolbar above a report cycles three states: match the system, light, and dark. The choice is kept in this browser and applies to every page.",
+      ),
     ],
   },
   {
@@ -237,7 +253,7 @@ const RAW: Array<Omit<Page, "n">> = [
       terms([
         [
           "Coverage",
-          "How many changed files have had a passing check since they were last edited, as a grid you can open a file from.",
+          "How many changed files have had a passing check since they were last edited, as a grid you can open a file from. The first hundred and twenty are drawn and the rest are counted.",
         ],
         [
           "Checks",
@@ -247,7 +263,10 @@ const RAW: Array<Omit<Page, "n">> = [
           "Changed",
           "The files that moved, ranked by lines, with the twenty largest drawn and a count of the rest.",
         ],
-        ["What happened", "The run in order, turn by turn, with what each turn did."],
+        [
+          "What happened",
+          "The run in order, turn by turn, with what each turn did. A turn that handed work to subagents lists them underneath it, each with what it came back with.",
+        ],
       ]),
       p(
         "A filled square means that one file has had a passing check since it was last edited. It does not mean the project is green, and Coverage says so on the page rather than letting the picture imply it.",
@@ -402,6 +421,22 @@ const RAW: Array<Omit<Page, "n">> = [
         "What comes back is validated against a schema before it can appear anywhere.",
         "It cannot change Verified, Left or Needs you.",
       ),
+      h("When there is not one"),
+      p(
+        "The panel says which of these applies rather than leaving a gap, and in every case the observed and derived parts of the report are unaffected.",
+      ),
+      terms([
+        ["Explanations are off", "Nothing was sent to any agent."],
+        [
+          "No compatible command",
+          "No Claude or Codex CLI that Salidium can run was found, so nothing was sent.",
+        ],
+        [
+          "Asked, and nothing usable came back",
+          "The agent answered but the answer did not validate, and the next turn tries again.",
+        ],
+        ["Not yet", "One is written when the agent finishes its next turn."],
+      ]),
       note(
         "Turn it off and every observed and derived part of the page stays exactly as it is. Nothing else on a report depends on it, and [How we know](/docs/provenance) is what labels it wherever it appears.",
       ),
