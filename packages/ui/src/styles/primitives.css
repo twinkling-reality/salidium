@@ -92,38 +92,66 @@
  * `mask-image` rather than an overlay: an overlay has to know the colour behind it, and these
  * three panes sit on two different grounds across two themes.
  */
+/*
+ * The two edges are lengths rather than four whole gradients, so that reaching an edge is a
+ * change the mask can travel through instead of a swap between pictures.
+ *
+ * `mask-image` is not interpolable: measured at the midpoint of a transition it is already
+ * holding the value it is going to, because its animation type is discrete. So the four states
+ * this had — `none`, `top`, `bottom`, `both` — could only ever cut. Registering the two distances
+ * moves the change into something that does interpolate, and one gradient with both distances in
+ * it covers all four states by setting either to zero.
+ *
+ * `fast`, because this answers the reader's own scrolling and belongs to the same beat as the
+ * scrollbar it appears beside. It is not as frequent as it looks: `useScrollState` writes
+ * `data-fade` on every frame of a scroll, but writes the same value nearly every time, and only
+ * a crossing at an actual edge changes the computed style and starts anything.
+ */
+@property --fade-top {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --fade-bottom {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
 .scroll-fade {
   --fade: 24px;
-}
-
-.scroll-fade[data-fade="top"] {
-  mask-image: linear-gradient(to bottom, transparent, #000 var(--fade));
-}
-
-.scroll-fade[data-fade="bottom"] {
-  mask-image: linear-gradient(to top, transparent, #000 var(--fade));
-}
-
-.scroll-fade[data-fade="both"] {
+  --fade-top: 0px;
+  --fade-bottom: 0px;
   mask-image: linear-gradient(
     to bottom,
     transparent,
-    #000 var(--fade),
-    #000 calc(100% - var(--fade)),
+    #000 var(--fade-top),
+    #000 calc(100% - var(--fade-bottom)),
     transparent
   );
+  transition:
+    --fade-top var(--motion-fast) var(--ease),
+    --fade-bottom var(--motion-fast) var(--ease);
+}
+
+.scroll-fade[data-fade="top"],
+.scroll-fade[data-fade="both"] {
+  --fade-top: var(--fade);
+}
+
+.scroll-fade[data-fade="bottom"],
+.scroll-fade[data-fade="both"] {
+  --fade-bottom: var(--fade);
 }
 
 /*
  * For a pane whose top edge is already held by a sticky bar. Fading there would fade the bar
  * itself, and the bar is opaque chrome — it is the boundary the fade would otherwise be drawing.
+ * Last, so it wins the tie against the two rules above at equal specificity.
  */
-.scroll-fade.at-bottom-only[data-fade="top"] {
-  mask-image: none;
-}
-
-.scroll-fade.at-bottom-only[data-fade="both"] {
-  mask-image: linear-gradient(to top, transparent, #000 var(--fade));
+.scroll-fade.at-bottom-only {
+  --fade-top: 0px;
 }
 
 /*

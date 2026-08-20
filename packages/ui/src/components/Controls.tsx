@@ -126,8 +126,15 @@ export function Disclosure({
         </span>
         {label}
       </button>
-      <div id={`disc-${id}`} hidden={!open}>
-        {open && children}
+      {/*
+       * One box that grows, not a box that appears. The body used to be `hidden` and its contents
+       * conditionally rendered, so both halves of the gesture were instant while the chevron
+       * beside it turned over 120ms: one disclosure on two clocks, and only the smaller half was
+       * designed. `visibility` rather than `display` because the row has to keep a height to
+       * animate between, and it holds real controls that must leave the tab order when it shuts.
+       */}
+      <div className={`disclosure-body ${open ? 'is-open' : ''}`} id={`disc-${id}`}>
+        <div>{children}</div>
       </div>
     </div>
   );

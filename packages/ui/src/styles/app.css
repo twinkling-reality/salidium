@@ -1304,7 +1304,9 @@
 .chev {
   display: inline-block;
   color: var(--text-tertiary);
-  transition: transform var(--motion-fast) var(--ease);
+  /* `base`, not `fast`: this is half of one gesture and the body it points at is changing the
+     shape of the page. On `fast` it finished turning while the rows below were still opening. */
+  transition: transform var(--motion-base) var(--ease);
 }
 
 .chev.is-open {
@@ -1380,6 +1382,35 @@
 
 .disclosure-toggle:hover {
   color: var(--text);
+}
+
+/*
+ * The body opens by growing rather than by appearing. A grid track from `0fr` to `1fr` is the one
+ * way to get from nothing to the content's own height without writing that height down: no fixed
+ * maximum to guess, and none of the wrong easing a guessed maximum produces.
+ *
+ * `visibility` is what takes the closed body out of the tab order, and it is here rather than
+ * `display` for two reasons: a `display: none` row has no height to animate from, and `visibility`
+ * is the one property whose interpolation already does what is wanted, holding `visible` for the
+ * whole of the closing gesture and turning over only at the end.
+ */
+.disclosure-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  visibility: hidden;
+  transition:
+    grid-template-rows var(--motion-base) var(--ease),
+    visibility var(--motion-base) var(--ease);
+}
+
+/* The track is shorter than its contents for the whole gesture; without this they spill past it. */
+.disclosure-body > * {
+  overflow: hidden;
+}
+
+.disclosure-body.is-open {
+  grid-template-rows: 1fr;
+  visibility: visible;
 }
 
 /* -------------------------------------------------------------- turns */
@@ -2304,6 +2335,33 @@
   display: block;
   overflow: visible;
 }
+
+/*
+ * This one stays instant in both directions, deliberately.
+ *
+ * Every other state in the application animates from nothing to something, and a grid track from
+ * `0fr` to `1fr` reaches the content's own height without anyone writing that height down. This
+ * one is different in kind: it goes from *at most* four lines to however many the statement runs
+ * to, and the collapsed size is already `min(four lines, the whole thing)` because the clamp is a
+ * maximum. There is no from-value to animate out of that a stylesheet can name.
+ *
+ * The three ways to force it were each tried and each is worse than the snap. A guessed
+ * `max-height` lands the easing wrong by exactly however much the guess exceeded the text, so a
+ * short statement finishes opening early and then waits. A grid track cannot interpolate a length
+ * into a flex, which `minmax(4lh, 0fr)` to `minmax(4lh, 1fr)` was measured doing: it holds at
+ * 40px throughout. And `interpolate-size` with a fixed `height: 4lh` does animate, but 4lh is an
+ * exact height where the clamp was a ceiling, so a two-line report was measured rendering 84px
+ * tall instead of 42px, padded with two lines of nothing.
+ *
+ * There is a fourth way, not taken here: `useClamped` already knows whether this particular
+ * statement is actually overflowing, so the fixed height could be applied only when it is. That
+ * is a real option, and it is left because no fixture in this repository has a delegated agent in
+ * it, so the one component that renders this cannot be exercised against a running daemon.
+ *
+ * What is left is symmetrical, which is the thing that matters here: this is not a state that
+ * arrives over time and then vanishes in a frame, which is the rule `scale.css` states. It simply
+ * does not move, and says so.
+ */
 .rp-ev {
   margin-left: var(--space-2);
   font-size: var(--text-xs);
@@ -2788,7 +2846,8 @@
   -webkit-background-clip: text;
   color: transparent;
   /*
-   * A loop, so its period is stated here rather than tokenised (tokens.css says why): the two
+   * A loop, so its period and its curve are stated here rather than tokenised (scale.css says why,
+   * and says this is where they belong): the two
    * motion tokens are one-shot responses, and there is no reason a shimmer and a pulse should
    * agree. 2.4s is slow enough to read as waiting rather than as something arriving, and `linear`
    * because a sweep that eases has a moment where it looks stuck.
@@ -3769,7 +3828,8 @@ button.cov-cell:hover {
 }
 .orb-dot {
   /*
-   * A loop, so its period is stated here rather than tokenised (tokens.css says why). 1.4s across
+   * A loop, so its period and its curve are stated here rather than tokenised (scale.css says why,
+   * and says this is where they belong). 1.4s across
    * three dots offset by 0.18s reads as one thing breathing; faster reads as agitation, and this
    * mark sits inside a sentence rather than over a whole panel.
    */
