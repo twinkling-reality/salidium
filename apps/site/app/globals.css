@@ -298,6 +298,24 @@ body:has(.home) {
 
 /* ---- left: the name and the claim ---- */
 
+/*
+ * Two things and a great deal of nothing, on purpose, and measured rather than assumed: at
+ * 1440x900 this panel is 368x868 with 89.3% of it empty, and at 3840x2160 it is 368x2128 with
+ * 96.3% empty. Both numbers are the owner's decision, reviewed and kept, and neither is a defect
+ * to report again.
+ *
+ * `justify-content: space-between` is what produces it. The name takes the top and the claim
+ * takes the foot, and the distance between them is the whole of the argument: a sentence with
+ * nothing crowding it is read as a statement rather than as the first line of a pitch.
+ *
+ * The claim stands alone. There is no supporting paragraph beneath it, and that has been settled
+ * twice: an earlier pass added one and was asked to take it back. The sentence that would go
+ * there does exist and is good - the `description` constant at the head of `layout.tsx` says it reads a
+ * Claude Code or Codex run and reports what changed, why, which checks passed and what needs you,
+ * on your machine - and it is deliberately left to the link preview, the search result and the
+ * documentation rather than printed here. A reader who wants the definition is one press from it
+ * in the middle panel.
+ */
 .card-claim {
   position: relative;
   display: flex;

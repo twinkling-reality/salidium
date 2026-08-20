@@ -208,6 +208,21 @@ export function Showcase() {
 
       </div>
 
+      {/*
+       * The three doors, and the one place in this repository that speaks in claims.
+       *
+       * Two of these labels praise the thing they open: "Easy, one line install" says the install
+       * is easy and "Clear, complete documentation" says the documentation is clear and complete.
+       * The application never does this - a grep of `packages/` for easy, simple, seamless,
+       * powerful or effortless returns nothing - and the third label here, "Open source, every
+       * line", states a fact the way the product would.
+       *
+       * That inconsistency is known, deliberate and settled. An earlier pass restated all three as
+       * facts and was asked to put them back. This is a page whose job is to get a stranger to
+       * press something, which is not the job of a report that has to be trusted, and the owner
+       * has kept the difference. It is recorded here so the next reader finds the decision instead
+       * of rediscovering the defect.
+       */}
       <div className="card-ways">
         <InstallCell />
 
