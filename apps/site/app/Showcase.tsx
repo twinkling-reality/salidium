@@ -153,7 +153,7 @@ function InstallCell() {
       <CellMark answers />
       <span className="cell-wash" aria-hidden="true" />
       <CellBody
-        said="Install it in one command"
+        said="Easy, one line install"
         shown={<code>{COMMAND}</code>}
         answer={ANSWERS[answered]}
       />
@@ -217,7 +217,7 @@ export function Showcase() {
             <path d="M4 17.5A1.5 1.5 0 0 1 5.5 16H20" />
           </Ico>
           <CellMark />
-          <CellBody said="What every part of it does" shown="Open the docs" />
+          <CellBody said="Clear, complete documentation" shown="Open the docs" />
         </Link>
 
         <a

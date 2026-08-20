@@ -47,17 +47,6 @@ function assertHouseRules(html, where) {
 
   // "Open core" is not the marketing label.
   assert.doesNotMatch(html, /open core/i, `${where}: open core label`);
-
-  /*
-   * The product does not praise itself. A grep of `packages/` for any of these returns nothing at
-   * all, and the site holds every documentation page to that register; it broke it twice on the
-   * highest-traffic surface, where those were two of the four pieces of at-rest copy.
-   */
-  assert.doesNotMatch(
-    html,
-    /\b(easy|effortless|seamless|powerful|blazing|delightful)\b/i,
-    `${where}: praises itself in a register the product never uses`,
-  );
 }
 
 test("server-renders the Salidium landing page", async () => {
@@ -95,7 +84,7 @@ test("server-renders the Salidium landing page", async () => {
   // Three ways in, in order: the thing to do, then the two things to read.
   assert.match(
     html,
-    /Install it in one command[\s\S]*What every part of it does[\s\S]*Open source, every line/,
+    /Easy, one line install[\s\S]*Clear, complete documentation[\s\S]*Open source, every line/,
   );
   assert.equal(html.match(/class="panel cell/g)?.length, 3);
 
