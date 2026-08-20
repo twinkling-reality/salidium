@@ -27,17 +27,16 @@ function subscribeToTheme(onStoreChange: () => void) {
   };
 }
 
-const homeLinks = [
-  ["Overview", "/"],
-  ["How it works", "/#demo"],
-  ["Docs", "/docs"],
-] as const;
+/*
+ * No link points at the page it sits on. Both lists used to open with "Overview", which on the
+ * page itself was a link back to where you already were.
+ */
+const homeLinks = [["Docs", "/docs"]] as const;
 
 const docsLinks = [
-  ["Overview", "/docs"],
   ["Install", "/docs#install"],
   ["Read a report", "/docs#report"],
-  ["Privacy", "/docs#privacy"],
+  ["What stays local", "/docs#local"],
   ["Limits", "/docs#limits"],
 ] as const;
 
@@ -63,9 +62,19 @@ export function SiteRail({ active }: { active: "home" | "docs" }) {
   const links = active === "docs" ? docsLinks : homeLinks;
 
   return (
-    <aside className={`site-rail site-rail-${active}`}>
+    /*
+     * A bar across the top rather than a column down the side. The rail held three links and a
+     * theme switch in a 216px column running the full height of the page, which spent a sixth of
+     * every screen on furniture and pushed the content off centre.
+     */
+    <header className={`site-head site-head-${active}`}>
       <div className="brand-context">
-        <Link className="brand" href="/" aria-label="Salidium home">
+        <Link
+          className="brand"
+          href="/"
+          aria-label="Salidium home"
+          aria-current={active === "home" ? "page" : undefined}
+        >
           <BrandMark size={18} decorative />
           <span>Salidium</span>
         </Link>
@@ -78,15 +87,13 @@ export function SiteRail({ active }: { active: "home" | "docs" }) {
       </div>
 
       <nav aria-label={active === "docs" ? "Documentation" : "Primary navigation"}>
-        {links.map(([label, href], index) => (
-          <Link key={href} href={href} aria-current={index === 0 ? "page" : undefined}>
+        {links.map(([label, href]) => (
+          <Link key={href} href={href}>
             {label}
           </Link>
         ))}
         <a href="https://github.com/twinkling-reality/salidium">GitHub</a>
-      </nav>
 
-      <div className="rail-footer">
         <button
           className="theme-toggle"
           type="button"
@@ -95,9 +102,9 @@ export function SiteRail({ active }: { active: "home" | "docs" }) {
           suppressHydrationWarning
           onClick={toggleTheme}
         >
-          {theme === "light" ? "Theme / Light" : "Theme / Dark"}
+          {theme === "light" ? "Light" : "Dark"}
         </button>
-      </div>
-    </aside>
+      </nav>
+    </header>
   );
 }

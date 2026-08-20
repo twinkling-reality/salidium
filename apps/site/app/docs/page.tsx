@@ -3,7 +3,7 @@ import { SiteRail } from "../SiteRail";
 
 const title = "Salidium Docs";
 const description =
-  "Install Salidium, connect Claude Code and Codex, read a report, and understand its privacy boundaries.";
+  "Install Salidium, connect Claude Code and Codex, read a report, and see what stays on your machine.";
 
 export const metadata: Metadata = {
   title,
@@ -18,21 +18,25 @@ export default function DocsPage() {
     <>
       <SiteRail active="docs" />
 
-      <main className="docs-page">
+      <main className="docs-page" id="main">
         <header className="docs-intro">
-          <span className="translation-label">Docs</span>
-          <h1>Start with Salidium</h1>
-          <p>Install it, connect your agents, and see what changed, what passed, and what still needs you.</p>
+          <h1>Set up Salidium</h1>
+          <p>Two minutes to a first report.</p>
         </header>
 
         <section id="install" aria-labelledby="install-title">
           <h2 id="install-title">Install</h2>
-          <p>Salidium needs Node 24 or newer. Start it with one command:</p>
-          <pre className="docs-command"><code>npx salidium</code></pre>
+          <p>Salidium needs Node 24 or newer.</p>
+          <pre className="docs-command">
+            <code>npx salidium</code>
+          </pre>
           <p>
-            On first run, Salidium finds Claude Code and Codex, shows the settings it wants to
-            update, and asks before making any change. It then opens the local interface. Later
-            runs take you straight back.
+            With pnpm, run <code>pnpm dlx salidium</code> instead.
+          </p>
+          <p>
+            On first run, Salidium looks for Claude Code and Codex, shows you the exact settings
+            files it wants to change, and asks once before touching them. Then it opens the
+            interface. Run the same command later and it reopens whatever is already running.
           </p>
           <p className="docs-note">
             If Salidium adds or updates Codex hooks, approve them once in <code>/hooks</code>.
@@ -41,49 +45,152 @@ export default function DocsPage() {
 
         <section id="report" aria-labelledby="read-report-title">
           <h2 id="read-report-title">Read a report</h2>
+
+          <h3>Derived from the record</h3>
+          <p>
+            Salidium works these out from the run itself. A generated explanation cannot change
+            them.
+          </p>
           <dl className="docs-definitions">
-            <div><dt>What</dt><dd>The work the agent is doing and the changes it made.</dd></div>
-            <div><dt>Why</dt><dd>Your ask and the discoveries the agent reported, kept clearly attributed.</dd></div>
-            <div><dt>How</dt><dd>The plan and approach the agent described.</dd></div>
-            <div><dt>Approach changed</dt><dd>The earlier path, its replacement, and the reason for the change.</dd></div>
-            <div><dt>Verified</dt><dd>What passed, failed, or stayed unknown, parsed from real check output.</dd></div>
-            <div><dt>Left</dt><dd>Work that remains unfinished, failing, or unknown.</dd></div>
-            <div><dt>Review</dt><dd>Claims and actions that still need a person.</dd></div>
+            <div>
+              <dt>Changed</dt>
+              <dd>Every file the agent&rsquo;s tools touched, with the diff and the record behind it.</dd>
+            </div>
+            <div>
+              <dt>Verified</dt>
+              <dd>
+                Which test, build, typecheck, and lint runs actually happened, and what their output
+                said: passed, failed, ran on a subset, or unreadable. A command name is not proof.
+              </dd>
+            </div>
+            <div>
+              <dt>Left</dt>
+              <dd>Work the agent recorded as unfinished, in progress, or failing.</dd>
+            </div>
+            <div>
+              <dt>Needs you</dt>
+              <dd>
+                A failing check, a prompt waiting on you, a destructive command, files changed after
+                the last passing run, or a claim that checks passed when none did.
+              </dd>
+            </div>
           </dl>
-          <p className="docs-note">
-            Evidence opens the files, checks, changes, activity, and original records behind the
-            report. Rewind reconstructs an earlier moment. Quantities shows the scale of the work.
-            History shows how it unfolded. If the record cannot establish something, Salidium
-            leaves it unknown.
+
+          <h3>Generated, and labelled as such</h3>
+          <p>
+            These are written by your own Claude or Codex CLI from the evidence above, and are
+            marked as generated wherever they appear.
+          </p>
+          <dl className="docs-definitions">
+            <div>
+              <dt>What</dt>
+              <dd>One sentence on what the session was about.</dd>
+            </div>
+            <div>
+              <dt>Why</dt>
+              <dd>
+                The cause, drawn as a chain, or as separate paths converging when there was more than
+                one.
+              </dd>
+            </div>
+            <div>
+              <dt>How</dt>
+              <dd>The component the change centred on, with its parts beneath it.</dd>
+            </div>
+            <div>
+              <dt>Approach changed</dt>
+              <dd>The path that was abandoned above the one that replaced it, and the reason.</dd>
+            </div>
+          </dl>
+          <p>
+            Turn generated explanations off and Changed, Verified, Left, Needs you, and all the
+            evidence stay exactly as they are.
           </p>
         </section>
 
-        <section id="privacy" aria-labelledby="privacy-title">
-          <h2 id="privacy-title">Privacy</h2>
+        <section id="deeper" aria-labelledby="deeper-title">
+          <h2 id="deeper-title">Go deeper</h2>
+          <dl className="docs-definitions">
+            <div>
+              <dt>Evidence</dt>
+              <dd>
+                Which changed files a passing check actually ran after, the checks over time, what
+                changed, and what happened in order.
+              </dd>
+            </div>
+            <div>
+              <dt>Rewind</dt>
+              <dd>
+                Drag the scrubber and the page becomes the session as it stood at that moment.
+                Anything later is hidden.
+              </dd>
+            </div>
+            <div>
+              <dt>History</dt>
+              <dd>Every change with a How we know column, and a link to the original line.</dd>
+            </div>
+            <div>
+              <dt>Quantities</dt>
+              <dd>Files, lines, turns, commits, duration.</dd>
+            </div>
+          </dl>
           <p>
-            The daemon, event store, fact-based report, and interface stay on your machine. Salidium
-            has no telemetry or hosted reporting service.
+            Every statement carries how it is known: observed, reported by the agent, derived by
+            Salidium, or generated. If the record cannot establish something, Salidium says unknown
+            rather than guessing.
+          </p>
+        </section>
+
+        <section id="local" aria-labelledby="local-title">
+          <h2 id="local-title">What stays on your machine</h2>
+          <p>
+            The daemon, the event store, the report, and the interface never leave your machine.
+            Salidium has no account, no telemetry, and no hosted service. State lives in{" "}
+            <code>~/.salidium</code>, and the daemon listens only on <code>127.0.0.1</code> behind a
+            token.
           </p>
           <p>
-            Optional generated explanations send a bounded, redacted summary through your installed
-            Claude or Codex CLI. That CLI may contact its provider and use your plan or API allowance.
-            Generated explanations never decide Verified, Left, or Review. Turn them off with{" "}
-            <code>SALIDIUM_EXPLAINER=off</code>; the fact-based report still works.
+            Generated explanations are the one exception, and they are optional. Once per finished
+            turn, Salidium hands your installed Claude or Codex CLI a bounded, redacted summary. That
+            CLI talks to its own provider and spends your existing plan or API allowance. It runs
+            with tools disabled and cannot change Changed, Verified, Left, or Needs you. Set{" "}
+            <code>SALIDIUM_EXPLAINER=off</code> and nothing is sent.
           </p>
         </section>
 
         <section id="limits" aria-labelledby="limits-title">
           <h2 id="limits-title">Limits and recovery</h2>
           <p>
-            On native Windows, transcript history works, but the POSIX live-hook relay is not
-            installed. Codex hook approval cannot be confirmed automatically; after Salidium
-            changes Codex hooks, review them once in <code>/hooks</code>.
+            On Windows, Salidium reads the session files your agents already write, so history works,
+            but live updates during a run do not. Codex hook approval cannot be confirmed
+            automatically: after Salidium changes Codex hooks, review them once in{" "}
+            <code>/hooks</code>.
           </p>
           <dl className="docs-commands">
-            <div><dt><code>salidium doctor</code></dt><dd>Check local setup and report problems.</dd></div>
-            <div><dt><code>salidium status</code></dt><dd>Show the daemon and connection state.</dd></div>
-            <div><dt><code>salidium restart</code></dt><dd>Restart Salidium and reopen the interface.</dd></div>
-            <div><dt><code>salidium stop</code></dt><dd>Stop the local daemon.</dd></div>
+            <div>
+              <dt>
+                <code>salidium doctor</code>
+              </dt>
+              <dd>Check local setup and report problems.</dd>
+            </div>
+            <div>
+              <dt>
+                <code>salidium status</code>
+              </dt>
+              <dd>Show the daemon and connection state.</dd>
+            </div>
+            <div>
+              <dt>
+                <code>salidium restart</code>
+              </dt>
+              <dd>Restart Salidium and reopen the interface.</dd>
+            </div>
+            <div>
+              <dt>
+                <code>salidium stop</code>
+              </dt>
+              <dd>Stop the local daemon.</dd>
+            </div>
           </dl>
           <p className="docs-note">
             For source, architecture, and contribution details, visit the{" "}

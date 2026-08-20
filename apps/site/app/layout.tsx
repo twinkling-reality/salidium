@@ -3,7 +3,7 @@ import "./globals.css";
 
 const title = "Salidium: Agent output, turned into a visual report";
 const description =
-  "A clear report of what Claude Code and Codex changed, why, what passed, and what needs you.";
+  "Salidium reads a Claude Code or Codex run and tells you what changed, why, which checks passed, and what needs you. Runs on your machine.";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://salidium.com"),
@@ -30,7 +30,13 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body>{children}</body>
+      <body>
+        {/* Five rail controls precede the content on every page; this is the way past them. */}
+        <a className="skip-link" href="#main">
+          Skip to content
+        </a>
+        {children}
+      </body>
     </html>
   );
 }

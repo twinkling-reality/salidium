@@ -1,11 +1,72 @@
-@import "../../../packages/ui/src/styles/theme.css";
+/*
+ * The public site.
+ *
+ * It imports `scale.css` from the product rather than restating it, so the type ramp, the spacing
+ * grid, the corner family and the palette are the same objects the application uses. An earlier
+ * stylesheet imported only the palette and reinvented everything else: seven type sizes with four
+ * steps under 1.10, 41 spacing values including 7, 9, 13, 17 and 94, five radii, and a second
+ * easing curve. None of that could produce rank or rhythm, because nothing in it was a system.
+ *
+ * The one deliberate departure: the sizes below restate the product's ramp in `rem`. The values
+ * render identically at a 16px root, but the app is a fixed shell and this is a document, and a
+ * document that hard-codes px does not answer a reader who has raised their default text size.
+ */
+@import "../../../packages/ui/src/styles/scale.css";
 
-* {
-  box-sizing: border-box;
+:root {
+  --text-xs: 0.6875rem; /* 11px */
+  --text-sm: 0.78125rem; /* 12.5px */
+  --text-base: 0.875rem; /* 14px */
+  --text-md: 0.9375rem; /* 15px */
+  --text-lg: 1.1875rem; /* 19px */
+
+  /*
+   * The 4px grid, extended. The app stops at --space-10 because a pane is made of rows; a page is
+   * made of bands, and 7 fills the gap the app never needed between 6 and 8.
+   */
+  --space-7: 28px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+
+  /*
+   * The page takes the window rather than sitting in a column in the middle of it. The product
+   * panel is the argument, and it has to be big enough to read: at 1180px it rendered 600px wide,
+   * which put the interface's own type at 43% and turned it into texture.
+   */
+  --page-w: min(1680px, 94vw);
+  --measure: 62ch;
+
+  /* Fainter than a border, because ruled paper is a ground and a border is an edge. */
+  --grid-line: color-mix(in srgb, var(--border) 62%, var(--bg));
+
+  /*
+   * How hard the colour washes push. Light and dark are not symmetrical: in light the palette is
+   * dark hues tinting white, which stays quiet on its own, but in dark the palette inverts to pale
+   * hues over near black, and the same strength turns into bright patches sitting on top of the
+   * card rather than light falling across it. Dark gets roughly a third of the strength and a
+   * blend mode that adds light instead of painting over it.
+   */
+  --wash: 34%;
+  --wash-soft: 22%;
+  --wash-blend: normal;
+  --grain: 0.26;
 }
 
-html {
-  scroll-behavior: smooth;
+:root[data-theme="dark"] {
+  --wash: 13%;
+  --wash-soft: 9%;
+  --wash-blend: screen;
+  --grain: 0.14;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --wash: 13%;
+    --wash-soft: 9%;
+    --wash-blend: screen;
+    --grain: 0.14;
+  }
 }
 
 body {
@@ -14,7 +75,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: var(--text-base);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
@@ -24,212 +85,753 @@ a {
   text-decoration: none;
 }
 
+/*
+ * `color-scheme: light dark` means an unstyled button inherits the UA's `buttonface`, which under
+ * a dark-preferring OS paints a solid grey slab. Reset the chrome here so a control has to opt in
+ * to a surface rather than opt out of one.
+ */
 button {
+  padding: 0;
+  border: 0;
+  background: none;
   color: inherit;
+  cursor: pointer;
   font: inherit;
 }
 
+code {
+  font-family: var(--font-mono);
+  font-size: 0.94em;
+}
+
+/* Radius belongs to the shape, not to the focus state. Putting it here made the copy button's
+ * corners snap from 14px to 5px the moment it was tabbed to. */
 a:focus-visible,
-button:focus-visible,
-summary:focus-visible {
-  border-radius: 5px;
+button:focus-visible {
   outline: 2px solid var(--text);
-  outline-offset: 4px;
+  outline-offset: 3px;
 }
 
-.site-rail {
-  position: fixed;
-  inset: 0 auto 0 0;
-  z-index: 10;
-  display: flex;
-  width: 216px;
-  flex-direction: column;
-  padding: 32px 34px 28px;
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.skip-link {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: 20;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
   background: var(--bg);
+  box-shadow: var(--shadow-float-sm);
+  transform: translateY(-200%);
 }
 
-.brand {
-  display: inline-flex;
+.skip-link:focus-visible {
+  transform: none;
+}
+
+/* ---------------------------------------------------------------- head */
+
+.site-head {
+  display: flex;
   align-items: center;
-  gap: 9px;
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
+  justify-content: space-between;
+  gap: var(--space-6);
+  max-width: var(--page-w);
+  margin: 0 auto;
+  padding: var(--space-4) var(--space-6);
 }
 
 .brand-context {
   display: flex;
   align-items: center;
-  align-self: flex-start;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
-.brand-divider {
-  color: var(--border-strong);
-  font-size: 13px;
+.brand {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-base);
+  font-weight: 600;
+  letter-spacing: -0.02em;
 }
 
+.brand-divider,
 .brand-section {
-  color: var(--text-secondary);
-  font-size: 14px;
-  font-weight: 500;
-  letter-spacing: -0.01em;
-}
-
-.site-rail nav {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 7px;
-  margin-top: 58px;
   color: var(--text-tertiary);
-  font-size: 12px;
-  line-height: 1.4;
 }
 
-.site-rail nav a:hover,
-.site-rail nav a:focus-visible {
-  color: var(--text);
+.site-head nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
 }
 
-.site-rail nav a[aria-current="page"] {
-  color: var(--text);
-  font-weight: 500;
-}
-
-.rail-footer {
-  margin-top: auto;
-}
-
+.site-head nav a,
 .theme-toggle {
-  padding: 3px 0;
-  border: 0;
-  background: transparent;
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
   color: var(--text-tertiary);
-  font-size: 11px;
-  line-height: 1.3;
-  white-space: nowrap;
-  cursor: pointer;
+  font-size: var(--text-sm);
+  transition: color var(--motion-fast) var(--ease);
 }
 
-main {
-  display: flex;
-  width: min(980px, calc(100% - 292px));
-  flex-direction: column;
-  gap: 56px;
-  margin-left: clamp(260px, 20vw, 320px);
-  padding: 108px 36px 64px 0;
-}
-
-.hero,
-.demo,
-.report-overview,
-.setup {
-  scroll-margin-top: 32px;
-}
-
-.hero {
-  display: flex;
-  width: min(680px, 100%);
-  flex-direction: column;
-}
-
-h1,
-h2,
-h3,
-p {
-  text-wrap: pretty;
-}
-
-h1 {
-  max-width: 29ch;
-  margin: 0;
-  font-size: 22px;
-  font-weight: 500;
-  letter-spacing: -0.018em;
-  line-height: 1.3;
-}
-
-h2 {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 500;
-  letter-spacing: -0.008em;
-  line-height: 1.5;
-}
-
-h3 {
-  margin: 0;
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0;
-  line-height: 1.5;
-}
-
-.lede,
-.setup-copy > p {
-  color: var(--text-secondary);
-}
-
-.lede {
-  max-width: 58ch;
-  margin: 12px 0 0;
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.install-command {
-  width: min(500px, 100%);
-  margin-top: 18px;
-}
-
-.runner-tabs {
-  display: flex;
-  gap: 10px;
-  margin: 0 0 7px 2px;
-}
-
-.runner-tabs button {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  cursor: pointer;
-}
-
-.runner-tabs button[aria-pressed="true"] {
+.site-head nav a:hover,
+.theme-toggle:hover {
   color: var(--text);
 }
 
+/* ---------------------------------------------------------------- home */
+
+/*
+ * The home page is one screen and never scrolls. Only this page is locked, which is why the rule
+ * is bound to the layout being present rather than set on the document: the docs are a document
+ * and have to scroll.
+ */
+body:has(.home) {
+  overflow: hidden;
+  background: var(--bg-subtle);
+}
+
+/* `dvh` rather than `vh`, so a mobile browser's collapsing toolbar cannot push the layout over. */
+.home {
+  height: 100dvh;
+  padding: var(--space-4);
+}
+
+/*
+ * Three panels rather than one divided card: separate shapes on a ground read as three things you
+ * can look at, where hairlines inside a single box read as one thing with rules drawn through it.
+ *
+ * The row is `minmax(0, 1fr)` rather than the default `auto`. An auto row takes the height of its
+ * tallest child, so the layout grew past the window and the bottom of it was clipped away by
+ * `overflow: hidden` — it looked like it fitted. Pinning the row, and letting each panel shrink
+ * below its content, is what makes "one screen" true rather than merely invisible.
+ */
+.card {
+  display: grid;
+  grid-template-columns: minmax(19rem, 23rem) minmax(14rem, 17rem) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: var(--space-3);
+  height: 100%;
+}
+
+.panel {
+  min-height: 0;
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+}
+
+/* ---- left: the name and the claim ---- */
+
+.card-claim {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: var(--space-8);
+  overflow: hidden;
+}
+
+/* The ruled ground marks where the page begins, and fades out rather than stopping. */
+.card-claim::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: linear-gradient(to bottom, #000, transparent 92%);
+}
+
+.card-brand-row,
+.card-claim h1 {
+  position: relative;
+}
+
+.card-brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+/*
+ * The name carries the top of the panel at display size, but at the weight the product uses. The
+ * app is set in 400 and 500 throughout; a 600 here read as a different typeface wearing the same
+ * letters, and size alone is enough to make it the first thing seen.
+ */
+.card-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: clamp(1.375rem, 1rem + 0.7vw, 1.75rem);
+  font-weight: 500;
+  letter-spacing: -0.025em;
+}
+
+/* The only icon-only control on the page, because it is the only thing here that is not a place. */
+.theme-toggle {
+  display: grid;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  transition:
+    background var(--motion-fast) var(--ease),
+    color var(--motion-fast) var(--ease);
+}
+
+.theme-toggle:hover {
+  background: var(--bg-subtle);
+  color: var(--text);
+}
+
+/* The claim sits at the foot, where the reference puts its supporting line. */
+h1 {
+  max-width: 20ch;
+  margin: 0;
+  font-size: clamp(1.375rem, 0.95rem + 0.9vw, 1.875rem);
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+  text-wrap: balance;
+}
+
+/* ---- middle: the ways in ---- */
+
+/*
+ * Three equal cells: the thing to do, then the two things to read. The icon is what gets scanned
+ * here, so it is drawn large and the label is one direct phrase under it, not a sentence.
+ */
+/* ---- middle: the ways in ---- */
+
+/*
+ * Three separate squircles with air between them, not one panel with rules drawn through it. Each
+ * is a whole target: the icon is what gets scanned, and the label under it is one direct phrase.
+ */
+.card-ways {
+  display: grid;
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+  min-height: 0;
+}
+
+.cell {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-5);
+  padding: var(--space-7);
+  color: var(--text-secondary);
+  font-size: var(--text-lg);
+  line-height: 1.35;
+  letter-spacing: -0.014em;
+  text-align: left;
+  overflow: hidden;
+  transition:
+    box-shadow var(--motion-base) var(--ease),
+    color var(--motion-base) var(--ease),
+    transform var(--motion-base) var(--ease);
+}
+
+/*
+ * The hover lifts, and a mesh comes up under it. A flat grey fill on a grey ground read as a state
+ * that had failed to load; raising the card and warming it from beneath reads as the card coming
+ * forward, which is the vocabulary the rest of the layout already uses.
+ *
+ * Each cell gets its own colour from the product's palette, so the three are distinguishable at a
+ * glance without any of them introducing a hue the app does not already own.
+ */
+/*
+ * The wash is oversized and drifts while it is up. A mesh that arrives and then sits perfectly
+ * still reads as a flat image pasted behind the card; a slow wander keeps it reading as light.
+ *
+ * This is a loop, so it says its own period rather than borrowing a token: the product's two
+ * durations are one-shot, for something that happened, and the note in `tokens.css` is explicit
+ * that a loop matches nothing and should not be tokenised. 14s, alternating, only while the
+ * pointer is on the card.
+ */
+.cell::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: -40%;
+  opacity: 0;
+  /*
+   * Blurred hard. Unblurred radial stops read as discs of colour laid on the card; at this radius
+   * the edges are gone and what is left is a field with light in it. This was the difference
+   * between the wash looking like light and looking like paint.
+   */
+  filter: blur(44px) saturate(1.1);
+  mix-blend-mode: var(--wash-blend);
+  transition: opacity 260ms var(--ease);
+}
+
+/*
+ * Grain over the wash. A blurred field of colour on its own still reads as a cheap gradient; a
+ * fine noise laid over it breaks the banding and gives the surface something to catch. Generated
+ * by an SVG filter in a data URI, so it costs no request and no asset.
+ */
+.cell::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: 0;
+  mix-blend-mode: overlay;
+  pointer-events: none;
+  transition: opacity 260ms var(--ease);
+}
+
+.cell:hover::after,
+.cell:focus-visible::after {
+  opacity: var(--grain);
+}
+
+.cell:hover::before,
+.cell:focus-visible::before {
+  opacity: 1;
+  animation: cell-mesh 14s ease-in-out infinite alternate;
+}
+
+@keyframes cell-mesh {
+  from {
+    transform: translate3d(-2%, -1%, 0) scale(1);
+  }
+
+  to {
+    transform: translate3d(2%, 2%, 0) scale(1.08);
+  }
+}
+
+.cell[data-tone="install"]::before {
+  background-image:
+    radial-gradient(
+      58% 62% at 12% 8%,
+      color-mix(in srgb, var(--accent) var(--wash), transparent),
+      transparent 72%
+    ),
+    radial-gradient(
+      46% 52% at 88% 82%,
+      color-mix(in srgb, var(--facet-how) var(--wash-soft), transparent),
+      transparent 72%
+    );
+}
+
+.cell[data-tone="docs"]::before {
+  background-image:
+    radial-gradient(
+      54% 60% at 86% 10%,
+      color-mix(in srgb, var(--facet-how) var(--wash), transparent),
+      transparent 72%
+    ),
+    radial-gradient(
+      50% 56% at 10% 86%,
+      color-mix(in srgb, var(--ok) var(--wash-soft), transparent),
+      transparent 72%
+    );
+}
+
+.cell[data-tone="source"]::before {
+  background-image:
+    radial-gradient(
+      56% 60% at 14% 86%,
+      color-mix(in srgb, var(--facet-why) var(--wash), transparent),
+      transparent 72%
+    ),
+    radial-gradient(
+      48% 54% at 88% 12%,
+      color-mix(in srgb, var(--accent) var(--wash-soft), transparent),
+      transparent 72%
+    );
+}
+
+.cell:hover,
+.cell:focus-visible {
+  color: var(--text);
+  box-shadow: var(--shadow-float);
+  transform: translateY(-2px);
+}
+
+/* Everything in the cell sits above its own wash. */
+.cell-ico,
+.cell-swap {
+  position: relative;
+  z-index: 1;
+}
+
+.cell-ico {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  transition: color var(--motion-base) var(--ease);
+}
+
+.cell:hover .cell-ico,
+.cell:focus-visible .cell-ico {
+  color: var(--text);
+}
+
+/* ---- the reveal ---- */
+
+/*
+ * One line of type occupying one place, said two ways. The label is what the cell is for; the
+ * second line is what the click actually does, and a visitor should be able to see that before
+ * they commit to it rather than after.
+ */
+/*
+ * Both states share one grid cell and are pinned to its bottom. Aligned to the top, a one-line
+ * reveal sat where the first line of a two-line label had been, with a line of air under it - it
+ * read as floating. Sharing the last baseline is what makes the swap look like one line changing
+ * rather than two pieces of text trading places.
+ */
+.cell-swap {
+  display: grid;
+  width: 100%;
+  align-items: end;
+}
+
+.cell-swap-said,
+.cell-swap-alt {
+  grid-area: 1 / 1;
+  will-change: opacity, transform;
+  transition:
+    opacity 220ms var(--ease),
+    transform 260ms var(--ease);
+}
+
+/* The two states are set at the same size, so the swap does not read as a change of rank. */
+.cell-swap-alt {
+  color: var(--text);
+  font-size: var(--text-lg);
+  opacity: 0;
+  transform: translateY(0.5em);
+}
+
+.cell-swap-alt code {
+  font-family: var(--font-mono);
+  font-size: 1em;
+}
+
+/*
+ * The mark sits in the corner and is the height of a line of text, filled rather than outlined.
+ * An outlined glyph beside the label read as punctuation; solid, in the text colour, it reads as
+ * the one thing on the card you are meant to act on.
+ */
+.cell-mark {
+  position: absolute;
+  z-index: 1;
+  top: var(--space-7);
+  right: var(--space-7);
+  display: grid;
+  width: 1.55em;
+  height: 1.55em;
+  place-items: center;
+  border-radius: 50%;
+  /* scale.css squircles every corner; a circle has to ask for its own shape back. */
+  corner-shape: round;
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+  font-size: var(--text-lg);
+  transition:
+    background var(--motion-base) var(--ease),
+    color var(--motion-base) var(--ease),
+    transform var(--motion-base) var(--ease);
+}
+
+.cell:hover .cell-mark,
+.cell:focus-visible .cell-mark {
+  background: var(--text);
+  color: var(--bg);
+  transform: translate(1px, -1px);
+}
+
+.cell:hover .cell-swap-said,
+.cell:focus-visible .cell-swap-said {
+  opacity: 0;
+  transform: translateY(-0.5em);
+}
+
+.cell:hover .cell-swap-alt,
+.cell:focus-visible .cell-swap-alt {
+  opacity: 1;
+  transform: none;
+}
+
+/* ---- the copy confirmation ---- */
+
+/*
+ * The whole card answers the click, not a word in the corner. A small grey "Copied" beside the
+ * mark was the least visible part of the least visible corner of the one control on the page, so
+ * the confirmation is now the card itself: the wash turns to the product's pass colour and sweeps
+ * up once, the corner mark becomes a tick, and the line that showed the command says what happened
+ * to it. All three are the same state, so none of them can be seen without the others.
+ */
+.cell[data-state="copied"]::before,
+.cell[data-state="failed"]::before {
+  opacity: 1;
+  animation: cell-confirm 620ms var(--ease);
+}
+
+.cell[data-state="copied"]::after,
+.cell[data-state="failed"]::after {
+  opacity: var(--grain);
+}
+
+.cell[data-state="copied"]::before {
+  background-image:
+    radial-gradient(
+      52% 56% at 22% 88%,
+      color-mix(in srgb, var(--ok) var(--wash), transparent),
+      transparent 72%
+    ),
+    radial-gradient(
+      44% 50% at 84% 18%,
+      color-mix(in srgb, var(--ok) var(--wash-soft), transparent),
+      transparent 72%
+    );
+}
+
+.cell[data-state="failed"]::before {
+  background-image:
+    radial-gradient(
+      52% 56% at 22% 88%,
+      color-mix(in srgb, var(--warn) var(--wash), transparent),
+      transparent 72%
+    );
+}
+
+@keyframes cell-confirm {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 14%, 0) scale(1.06);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The state is the answer, so it holds the line whether or not a pointer is still on the card. */
+.cell[data-state="copied"] .cell-swap-said,
+.cell[data-state="failed"] .cell-swap-said {
+  opacity: 0;
+  transform: translateY(-0.5em);
+}
+
+.cell[data-state="copied"] .cell-swap-alt,
+.cell[data-state="failed"] .cell-swap-alt {
+  opacity: 1;
+  transform: none;
+}
+
+.cell[data-state="copied"] .cell-mark {
+  background: var(--ok);
+  color: var(--bg);
+}
+
+.cell[data-state="failed"] .cell-mark {
+  background: var(--warn);
+  color: var(--bg);
+}
+
+.cell[data-state="copied"] .cell-ico,
+.cell[data-state="failed"] .cell-ico {
+  color: var(--text);
+}
+
+/*
+ * The reveal is the cell telling you what it will do, so with motion off it still has to tell you:
+ * the states swap instantly instead of sliding.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .cell-swap-said,
+  .cell-swap-alt,
+  .cell-mark {
+    transform: none !important;
+  }
+
+  .cell:hover::before,
+  .cell:focus-visible::before {
+    animation: none;
+  }
+}
+
+/* ---- right: the product ---- */
+
+/*
+ * A wash inside the panel, with the capture inset on top of it: the reference puts the product on
+ * a coloured field rather than on the page, and the field is what lifts it. Every colour in it is
+ * a product token - the app's accent and its two facet hues - at low strength and heavily blurred,
+ * so the page gains depth without gaining a palette.
+ */
+.card-shot {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  margin: 0;
+  padding: var(--space-8);
+  place-items: center;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+/*
+ * A mesh, not a gradient. Six colour points at irregular positions and sizes, blurred until the
+ * seams are gone: the eye reads it as one field with depth in it rather than as a band sweeping
+ * from one corner to another, which is what a two-stop linear looks like at this scale.
+ */
+.card-shot::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: -30%;
+  background-image:
+    radial-gradient(
+      30% 26% at 16% 12%,
+      color-mix(in srgb, var(--accent) var(--wash), transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      26% 24% at 76% 10%,
+      color-mix(in srgb, var(--facet-why) var(--wash), transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      34% 30% at 94% 44%,
+      color-mix(in srgb, var(--facet-how) var(--wash), transparent),
+      transparent 72%
+    ),
+    radial-gradient(
+      28% 28% at 6% 64%,
+      color-mix(in srgb, var(--facet-why) var(--wash-soft), transparent),
+      transparent 72%
+    ),
+    radial-gradient(
+      38% 30% at 54% 96%,
+      color-mix(in srgb, var(--accent) var(--wash-soft), transparent),
+      transparent 74%
+    ),
+    radial-gradient(
+      26% 24% at 32% 40%,
+      color-mix(in srgb, var(--ok) var(--wash-soft), transparent),
+      transparent 70%
+    );
+  filter: blur(60px) saturate(1.15);
+  mix-blend-mode: var(--wash-blend);
+}
+
+/*
+ * Grain over the mesh. A blurred field of colour on its own reads as a cheap wash; a fine noise
+ * laid over it in `overlay` breaks the banding and gives the surface something to catch. The
+ * texture is generated by an SVG filter in a data URI, so it costs no request and no asset.
+ */
+.card-shot::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: var(--grain);
+  mix-blend-mode: overlay;
+  pointer-events: none;
+}
+
+/*
+ * The box hugs the picture. With `object-fit: contain` the element stayed the size of its grid
+ * area while the image inside it shrank to fit, so `border-radius` rounded empty space and the
+ * picture's own corners stayed square against the wash. Sizing by `max-*` instead means the
+ * element is exactly the rendered image, and the radius lands on the image.
+ */
+.shot {
+  position: relative;
+  z-index: 1;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 100%;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-float);
+}
+
+/*
+ * Both themes ship and the stylesheet picks one. A `prefers-color-scheme` <picture> would ignore
+ * the site's own theme control, which is the thing a reader actually pressed.
+ */
+.shot-dark {
+  display: none;
+}
+
+:root[data-theme="dark"] .shot-light {
+  display: none;
+}
+
+:root[data-theme="dark"] .shot-dark {
+  display: block;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .shot-light {
+    display: none;
+  }
+
+  :root:not([data-theme="light"]) .shot-dark {
+    display: block;
+  }
+}
+
+/* ------------------------------------------------------------- command */
+
+
+/*
+ * The command carries no surface of its own: it sits on the panel like the labels beside it, and
+ * the squircle only appears under the pointer. A permanent fill made it a box inside a box, which
+ * at this size read as a second panel rather than as a line you can take.
+ */
 .command {
   display: flex;
   width: 100%;
   min-height: 44px;
   align-items: center;
-  align-self: flex-start;
-  gap: 11px;
-  padding: 10px 14px;
-  border: 0;
+  gap: var(--space-3);
+  margin-left: calc(var(--space-3) * -1);
+  padding: var(--space-2) var(--space-3);
   border-radius: 14px;
-  corner-shape: squircle;
-  background: var(--bg-subtle);
-  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease);
 }
 
+.command:hover,
+.command:focus-visible {
+  background: var(--bg-subtle);
+}
+
+.command-prompt,
 .command code {
   font-family: var(--font-mono);
-}
-
-.command code {
-  font-size: 13px;
+  font-size: var(--text-md);
 }
 
 .command-prompt {
   color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  font-size: 13px;
 }
 
 .command-action {
@@ -260,1210 +862,206 @@ h3 {
   content: "";
 }
 
-.copy-check {
-  font-size: 12px;
-}
-
-.sr-only {
-  position: absolute;
-  overflow: hidden;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  border: 0;
-  margin: -1px;
-  clip: rect(0, 0, 0, 0);
+/* The copy used to reject silently on an insecure origin or a denied permission, and the button
+ * simply did nothing forever. It now says so instead. */
+.copy-failed {
+  color: var(--warn);
+  font-size: var(--text-xs);
   white-space: nowrap;
 }
 
-.section-heading {
-  margin-bottom: 17px;
-}
+/* --------------------------------------------------------------- docs */
 
-.demo {
-  padding: 64px 0 0;
-}
-
-.demo,
-.report-overview,
-.setup,
-.docs-page section {
-  border-top: 1px solid var(--border);
-}
-
-.report-overview,
-.setup,
-.docs-page section {
-  padding-top: 64px;
-}
-
-.translation {
-  margin: 0;
-}
-
-.translation figcaption h2,
-.report-walkthrough-copy h2,
-.setup-intro h2 {
-  font-size: clamp(22px, 2.5vw, 30px);
-  font-weight: 500;
-  letter-spacing: -0.028em;
-  line-height: 1.15;
-}
-
-.translation figcaption p,
-.report-walkthrough-copy > p,
-.setup-intro > p {
-  max-width: 56ch;
-  margin: 12px 0 0;
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.demo-modes {
-  display: flex;
-  gap: 22px;
-  margin-top: 30px;
-  border-bottom: 1px solid var(--border);
-}
-
-.demo-modes button {
-  min-height: 40px;
-  padding: 0;
-  border: 0;
-  border-bottom: 1px solid transparent;
-  margin-bottom: -1px;
-  background: transparent;
-  color: var(--text-tertiary);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.demo-modes button[aria-pressed="true"] {
-  border-bottom-color: var(--text);
-  color: var(--text);
-}
-
-.demo-modes .demo-pause {
-  margin-left: auto;
-}
-
-.translation-stage {
-  display: grid;
-  min-height: 390px;
-  grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr);
-  gap: clamp(34px, 5vw, 60px);
-  align-items: stretch;
-  padding-top: 48px;
-}
-
-.translation-source h3,
-.translation-result > h3 {
-  margin-bottom: 22px;
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  font-size: 9px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.translation-source p {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.75;
-  animation: quiet-enter 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.translation-source ol {
-  display: grid;
-  gap: 10px;
-  padding: 0;
-  margin: 0;
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.55;
-  list-style: none;
-  animation: quiet-enter 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.translation-rule {
-  position: relative;
-  overflow: hidden;
-  background: var(--border);
-}
-
-.translation-rule::after {
-  position: absolute;
-  top: -30%;
-  right: 0;
-  left: 0;
-  height: 30%;
-  background: var(--text);
-  content: "";
-  animation: read-rule 5.2s cubic-bezier(0.22, 1, 0.36, 1) infinite;
-}
-
-.translation-result {
-  min-width: 0;
-}
-
-.translation-result dl {
-  margin: 0;
-}
-
-.translation-result dl > div {
-  display: grid;
-  grid-template-columns: 70px minmax(0, 1fr);
-  gap: 18px;
-  padding: 14px 0;
-  border-bottom: 1px solid var(--border);
-  animation: quiet-enter 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.translation-result dl > div:nth-child(2) {
-  animation-delay: 60ms;
-}
-
-.translation-result dl > div:nth-child(3) {
-  animation-delay: 120ms;
-}
-
-.translation-result dl > div:nth-child(4) {
-  animation-delay: 180ms;
-}
-
-.translation-result dl > div:nth-child(5) {
-  animation-delay: 240ms;
-}
-
-.translation-result dt {
-  color: var(--text-tertiary);
-  font-size: 10px;
-}
-
-.translation-result dd {
-  margin: 0;
-  color: var(--text);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-@keyframes quiet-enter {
-  from {
-    opacity: 0;
-    transform: translateY(5px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes read-rule {
-  0%, 8% {
-    top: -30%;
-  }
-
-  55%, 100% {
-    top: 100%;
-  }
-}
-
-.setup {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 0;
-}
-
-.setup > p {
-  max-width: 66ch;
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.setup code {
-  font-family: var(--font-mono);
-  font-size: 0.92em;
-}
-
-.setup > .setup-note {
-  margin-top: 2px;
-  color: var(--text-tertiary);
-  font-size: 11px;
-  line-height: 1.55;
-}
-
-.report-overview,
-.docs-page section {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.report-overview > p,
-.docs-page p {
-  max-width: 66ch;
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.report-map {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px 36px;
-  margin: 9px 0 4px;
-}
-
-.report-map div,
-.docs-definitions div,
-.docs-commands div {
-  min-width: 0;
-}
-
-.report-map dt,
-.docs-definitions dt,
-.docs-commands dt {
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.5;
-}
-
-.report-map dd,
-.docs-definitions dd,
-.docs-commands dd {
-  margin: 2px 0 0;
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.report-overview > .report-tools,
-.docs-page .docs-note {
-  color: var(--text-tertiary);
-  font-size: 11px;
-  line-height: 1.55;
-}
-
-.report-tools a,
-.docs-page a {
-  color: var(--text);
-  text-decoration: underline;
-  text-decoration-color: var(--border-strong);
-  text-underline-offset: 3px;
-}
-
-.report-overview {
-  display: block;
-}
-
-.report-walkthrough {
-  display: grid;
-  grid-template-columns: minmax(220px, 0.72fr) minmax(0, 1.28fr);
-  gap: clamp(44px, 7vw, 88px);
-}
-
-.report-walkthrough-copy > p {
-  max-width: 34ch;
-}
-
-.report-questions {
-  display: grid;
-  margin-top: 36px;
-}
-
-.report-questions button {
-  min-height: 50px;
-  padding: 0 0 0 18px;
-  border: 0;
-  border-left: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-tertiary);
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.report-questions button[aria-pressed="true"] {
-  border-left: 2px solid var(--text);
-  color: var(--text);
-  font-weight: 500;
-}
-
-.report-links {
-  display: flex;
-  gap: 18px;
-  margin-top: 18px;
-}
-
-.report-links button,
-.report-links a {
-  padding: 4px 0;
-  border: 0;
-  background: transparent;
-  color: var(--text-tertiary);
-  font-size: 10px;
-  text-decoration: underline;
-  text-decoration-color: var(--border-strong);
-  text-underline-offset: 3px;
-  cursor: pointer;
-}
-
-.report-preview {
-  align-self: center;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  animation: quiet-enter 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.report-preview > header {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 18px;
-  padding: 15px 0;
-  border-bottom: 1px solid var(--border);
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  font-size: 9px;
-}
-
-.report-preview > header span:nth-child(2) {
-  overflow: hidden;
-  color: var(--text);
-  font-family: var(--font-sans);
-  font-size: 12px;
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.report-preview-answer {
-  padding: 34px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.report-preview-answer h3 {
-  color: var(--text-tertiary);
-  font-size: 10px;
-  font-weight: 500;
-}
-
-.report-preview-answer p {
-  max-width: 34ch;
-  margin: 10px 0 0;
-  font-size: clamp(18px, 2.1vw, 23px);
-  font-weight: 500;
-  letter-spacing: -0.022em;
-  line-height: 1.35;
-}
-
-.report-preview dl {
-  margin: 0;
-}
-
-.report-preview dl > div {
-  display: grid;
-  grid-template-columns: 84px minmax(0, 1fr);
-  gap: 18px;
-  padding: 14px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.report-preview dt {
-  color: var(--text-tertiary);
-  font-size: 10px;
-}
-
-.report-preview dd {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
-.report-preview > footer {
-  display: flex;
-  justify-content: space-between;
-  padding: 15px 0;
-  color: var(--text-secondary);
-  font-size: 11px;
-}
-
-.setup {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  padding-top: 64px;
-}
-
-.setup-intro {
-  margin-bottom: 34px;
-}
-
-.setup-steps {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  padding: 0;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  margin: 0;
-  list-style: none;
-}
-
-.setup-steps li {
-  display: grid;
-  min-width: 0;
-  gap: 18px;
-  padding: 22px 24px 24px 0;
-}
-
-.setup-steps li + li {
-  padding-left: 24px;
-  border-left: 1px solid var(--border);
-}
-
-.setup-steps strong {
-  font-size: 11px;
-  font-weight: 500;
-}
-
-.setup-steps code,
-.setup-steps span {
-  color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.setup > .setup-note {
-  max-width: none;
-  margin-top: 18px;
-  color: var(--text-tertiary);
-  font-size: 10px;
-}
-
-.setup-note a {
-  color: var(--text);
-  text-decoration: underline;
-  text-decoration-color: var(--border-strong);
-  text-underline-offset: 3px;
-}
-
-.transformation {
-  margin: 0;
-}
-
-.transformation figcaption {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 24px;
-}
-
-.transformation figcaption h2 {
-  font-size: clamp(22px, 2.5vw, 30px);
-  font-weight: 500;
-  letter-spacing: -0.028em;
-  line-height: 1.15;
-}
-
-.transformation figcaption button {
-  padding: 4px 0;
-  border: 0;
-  background: transparent;
-  color: var(--text-tertiary);
-  font-size: 10px;
-  text-decoration: underline;
-  text-decoration-color: var(--border-strong);
-  text-underline-offset: 3px;
-  cursor: pointer;
-}
-
-.agent-work {
-  margin-top: 40px;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-}
-
-.agent-work > header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 13px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.agent-work h3,
-.ordinary-output h3,
-.salidium-output > h3 {
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  font-size: 9px;
-  font-weight: 500;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-}
-
-.agent-work header > span {
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.agent-work ol {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  padding: 0;
-  margin: 0;
-  list-style: none;
-}
-
-.agent-work li {
-  display: grid;
-  min-width: 0;
-  min-height: 82px;
-  grid-template-columns: 10px minmax(0, 1fr);
-  gap: 8px;
-  align-content: center;
-  padding: 16px;
-  color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1.45;
-  opacity: 0.16;
-  transition: opacity 280ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.agent-work li + li {
-  border-left: 1px solid var(--border);
-}
-
-.agent-work li[data-visible="true"] {
-  opacity: 1;
-}
-
-.agent-work li > span {
-  color: var(--text-tertiary);
-}
-
-.flow-tree {
-  position: relative;
-  height: 96px;
-}
-
-.flow-tree::before {
-  position: absolute;
-  top: 0;
-  left: 50%;
-  width: 1px;
-  height: 48px;
-  background: var(--border-strong);
-  content: "";
-  transform-origin: top;
-  animation: draw-line 480ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.flow-tree::after {
-  position: absolute;
-  top: 48px;
-  left: 25%;
-  width: 50%;
-  border-top: 1px solid var(--border-strong);
-  content: "";
-  transform-origin: center;
-  animation: draw-branch 520ms 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.flow-tree span::before,
-.flow-tree span::after {
-  position: absolute;
-  top: 48px;
-  width: 1px;
-  height: 48px;
-  background: var(--border-strong);
-  content: "";
-  transform-origin: top;
-  animation: draw-line 420ms 720ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.flow-tree span::before {
-  left: 25%;
-}
-
-.flow-tree span::after {
-  left: 75%;
-}
-
-.output-comparison {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: clamp(54px, 8vw, 104px);
-}
-
-.ordinary-output,
-.salidium-output {
-  min-width: 0;
-  border-top: 1px solid var(--border);
-  padding-top: 18px;
-  animation: quiet-enter 280ms 760ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.ordinary-output p {
-  margin: 24px 0 0;
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.75;
-}
-
-.salidium-output dl {
-  margin: 10px 0 0;
-}
-
-.salidium-output dl > div {
-  display: grid;
-  grid-template-columns: 68px minmax(0, 1fr);
-  gap: 16px;
-  padding: 13px 0;
-  border-bottom: 1px solid var(--border);
-  opacity: 0.14;
-  transition: opacity 280ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.salidium-output dl > div[data-visible="true"] {
-  opacity: 1;
-}
-
-.salidium-output dt {
-  color: var(--text-tertiary);
-  font-size: 10px;
-}
-
-.salidium-output dd {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1.45;
-}
-
-.setup {
-  display: grid;
-  grid-template-columns: minmax(200px, 0.55fr) minmax(0, 1fr);
-  gap: 34px 64px;
-  padding-top: 64px;
-}
-
-.setup > h2 {
-  font-size: clamp(22px, 2.5vw, 30px);
-  font-weight: 500;
-  letter-spacing: -0.028em;
-  line-height: 1.15;
-}
-
-.setup-command {
-  min-width: 0;
-}
-
-.setup-command .command {
-  transition: background-color 160ms ease;
-}
-
-.setup-command .command:hover,
-.setup-command .command:focus-visible {
-  background: var(--bg-muted);
-}
-
-.setup > .setup-note {
-  grid-column: 2;
-  margin: -18px 0 0;
-}
-
-@keyframes draw-line {
-  from {
-    transform: scaleY(0);
-  }
-
-  to {
-    transform: scaleY(1);
-  }
-}
-
-@keyframes draw-branch {
-  from {
-    transform: scaleX(0);
-  }
-
-  to {
-    transform: scaleX(1);
-  }
-}
-
+/* The docs are a document: they scroll, and they keep a centred column inside the same hairlines. */
 .docs-page {
-  gap: 22px;
-  padding-bottom: 96px;
+  max-width: min(980px, 94vw);
+  margin: 0 auto;
+  padding: 0 var(--space-8) var(--space-20);
+  border-right: 1px solid var(--border);
+  border-left: 1px solid var(--border);
 }
 
 .docs-intro {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  padding: var(--space-16) 0 var(--space-10);
 }
 
-.docs-intro .translation-label {
-  margin-bottom: 2px;
+.docs-page h1 {
+  max-width: var(--measure);
+}
+
+.docs-intro p {
+  max-width: var(--measure);
+  margin: var(--space-3) 0 0;
+  color: var(--text-tertiary);
 }
 
 .docs-page section {
-  scroll-margin-top: 36px;
+  border-top: 1px solid var(--border);
+  padding: var(--space-10) 0;
 }
 
-.docs-page code {
-  font-family: var(--font-mono);
-  font-size: 0.92em;
+.docs-page h2 {
+  margin: 0 0 var(--space-5);
+  font-size: var(--text-lg);
+  font-weight: 500;
+  letter-spacing: -0.016em;
+}
+
+.docs-page h3 {
+  margin: var(--space-8) 0 var(--space-2);
+  font-size: var(--text-base);
+  font-weight: 600;
+}
+
+.docs-page p {
+  max-width: var(--measure);
+  margin: var(--space-4) 0 0;
+  color: var(--text-secondary);
+}
+
+.docs-page a {
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.docs-page a:hover {
+  border-bottom-color: var(--text);
+}
+
+.docs-note {
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
 }
 
 .docs-command {
-  overflow-x: auto;
-  padding: 13px 15px;
-  border: 0;
-  border-radius: 10px;
-  margin: 4px 0;
+  display: inline-block;
+  margin: var(--space-5) 0 0;
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-md);
   background: var(--bg-subtle);
-  color: var(--text);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: var(--text-base);
 }
 
 .docs-definitions,
 .docs-commands {
   display: grid;
-  gap: 14px;
-  margin: 8px 0 4px;
+  max-width: var(--measure);
+  margin: var(--space-5) 0 0;
+  gap: var(--space-4);
 }
 
-.docs-commands {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px 32px;
+.docs-definitions > div,
+.docs-commands > div {
+  display: grid;
+  grid-template-columns: 10.5em minmax(0, 1fr);
+  gap: var(--space-5);
 }
 
-@media (max-width: 980px) {
-  .site-rail {
-    width: 180px;
-    padding-inline: 28px;
-  }
-
-  main {
-    width: min(680px, calc(100% - 228px));
-    margin-left: 200px;
-  }
+.docs-definitions dt,
+.docs-commands dt {
+  font-weight: 500;
 }
 
-@media (max-width: 760px) {
-  .site-rail {
-    position: static;
-    display: flex;
-    width: auto;
-    height: 64px;
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    gap: 18px;
-    padding: 0 20px;
+.docs-definitions dd,
+.docs-commands dd {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+/* -------------------------------------------------------- narrow widths */
+
+/*
+ * Below three columns the product panel is too narrow to read anything in, so the claim and the
+ * ways in sit side by side above it and the capture takes the full width.
+ */
+@media (max-width: 1100px) {
+  .card {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
-  .site-rail nav {
-    flex-direction: row;
-    gap: 16px;
-    margin: 0 0 0 auto;
-  }
-
-  .brand-context {
-    align-self: auto;
-  }
-
-  .site-rail nav a:nth-child(1),
-  .site-rail nav a:nth-child(2),
-  .site-rail nav a:nth-child(4) {
-    display: none;
-  }
-
-  .rail-footer {
-    margin: 0;
-  }
-
-  .theme-toggle {
-    padding: 4px 0;
-  }
-
-  main {
-    width: min(100% - 40px, 680px);
-    margin: 0 auto;
-    gap: 48px;
-    padding: 52px 0 64px;
-  }
-
-  .translation-stage {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 34px;
-  }
-
-  .translation-rule {
-    height: 1px;
-  }
-
-  .translation-rule::after {
-    display: none;
-  }
-
-  .report-walkthrough {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 44px;
-  }
-
-  .agent-work ol {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .agent-work li {
-    min-height: 48px;
-    padding: 11px 0;
-  }
-
-  .agent-work li + li {
+  .card-shot {
+    grid-column: 1 / -1;
     border-top: 1px solid var(--border);
-    border-left: 0;
   }
 
-  .flow-tree {
-    height: 56px;
+  .card-ways {
+    border-right: 0;
+  }
+}
+
+/*
+ * The one-screen rule is a desktop rule. On a phone the card cannot hold three regions in 100vh
+ * without every one of them being unreadable, so the page becomes a page and scrolls.
+ */
+@media (max-width: 700px) {
+  body:has(.home) {
+    overflow: auto;
   }
 
-  .flow-tree::before {
-    height: 56px;
+  .home {
+    height: auto;
   }
 
-  .flow-tree::after,
-  .flow-tree span::before,
-  .flow-tree span::after {
-    display: none;
-  }
-
-  .output-comparison {
+  .card {
     grid-template-columns: minmax(0, 1fr);
-    gap: 48px;
+    grid-template-rows: auto;
   }
 
-  .setup {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 26px;
+  .card-claim,
+  .card-ways {
+    border-right: 0;
   }
 
-  .setup > .setup-note {
-    grid-column: 1;
-    margin: -10px 0 0;
+  .card-ways {
+    border-top: 1px solid var(--border);
   }
 
-  .demo,
-  .report-overview,
-  .setup,
-  .docs-page section {
-    padding-top: 48px;
+  .card-shot {
+    padding: var(--space-4);
+  }
+
+  /* Given its own height back, the capture is shown whole rather than cropped. */
+  .shot {
+    height: auto;
+    object-fit: contain;
   }
 
   .docs-page {
-    gap: 18px;
-  }
-
-}
-
-@media (max-width: 600px) {
-  .site-rail nav a:nth-child(3) {
-    display: none;
-  }
-
-  .lede {
-    font-size: 14px;
-  }
-
-  .setup {
-    gap: 0;
-  }
-
-  .report-map,
-  .docs-commands {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .setup-steps {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .setup-steps li,
-  .setup-steps li + li {
-    padding: 18px 0;
+    padding-right: var(--space-5);
+    padding-left: var(--space-5);
+    border-right: 0;
     border-left: 0;
   }
 
-  .setup-steps li + li {
-    border-top: 1px solid var(--border);
-  }
-
-}
-
-@media (max-width: 420px) {
-  .site-rail-docs nav {
-    display: none;
+  .site-head {
+    padding-right: var(--space-5);
+    padding-left: var(--space-5);
   }
 }
 
-@media (max-width: 360px) {
-  .theme-toggle {
-    font-size: 10px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  html {
-    scroll-behavior: auto;
+@media (max-width: 480px) {
+  .site-head {
+    flex-wrap: wrap;
+    gap: var(--space-2);
   }
 
-  .translation-source mark {
-    background-size: 100% 78%;
-    animation: none;
-  }
-
-  .translation-result section {
-    opacity: 1;
-    transform: none;
-    animation: none;
-  }
-
-  .translation-rule::after,
-  .translation-source p,
-  .translation-source ol,
-  .translation-result dl > div,
-  .report-preview,
-  .flow-tree::before,
-  .flow-tree::after,
-  .flow-tree span::before,
-  .flow-tree span::after,
-  .ordinary-output,
-  .salidium-output {
-    animation: none;
-  }
-
-}
-
-/* The walkthrough uses the site's existing grid and section rhythm. */
-.demo,
-.setup {
-  border-top: 1px solid var(--border);
-  padding-top: 64px;
-}
-
-.transformation {
-  margin: 0;
-}
-
-.transformation figcaption {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 24px;
-}
-
-.transformation figcaption h2,
-.setup > h2 {
-  font-size: clamp(22px, 2.5vw, 30px);
-  font-weight: 500;
-  letter-spacing: -0.028em;
-  line-height: 1.15;
-}
-
-.transformation figcaption button {
-  min-height: 44px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  font-size: 10px;
-}
-
-.work-stream {
-  display: grid;
-  grid-template-columns: minmax(190px, 0.62fr) minmax(340px, 1.38fr);
-  gap: clamp(48px, 8vw, 94px);
-  align-items: start;
-  margin-top: 42px;
-}
-
-.work-stream-heading h3,
-.output-pair h3 {
-  color: var(--text);
-  font-family: var(--font-sans);
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0;
-  text-transform: none;
-}
-
-.work-stream-heading span {
-  display: block;
-  margin-top: 6px;
-  color: var(--text-tertiary);
-  font-size: 10px;
-}
-
-.work-stream ol {
-  display: grid;
-  gap: 10px;
-  padding: 0;
-  margin: 0;
-  list-style: none;
-}
-
-.work-stream li {
-  display: grid;
-  grid-template-columns: 16px minmax(0, 1fr);
-  gap: 9px;
-  color: var(--text-tertiary);
-  font-size: 12px;
-  line-height: 1.5;
-  opacity: 0.16;
-  transition:
-    color 280ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 280ms cubic-bezier(0.22, 1, 0.36, 1),
-    transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.work-stream li[data-state="done"] {
-  opacity: 0.5;
-}
-
-.work-stream li[data-state="current"] {
-  color: var(--text);
-  opacity: 1;
-  transform: translateX(3px);
-}
-
-.work-stream li > span {
-  color: var(--text-tertiary);
-  text-align: center;
-}
-
-.output-pair {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: clamp(54px, 8vw, 96px);
-  align-items: start;
-  margin-top: 52px;
-}
-
-.agent-response,
-.salidium-report {
-  min-width: 0;
-}
-
-.agent-response p {
-  margin: 18px 0 0;
-  color: var(--text-tertiary);
-  font-size: 13px;
-  line-height: 1.72;
-}
-
-.agent-response p span {
-  border-radius: 3px;
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
-  padding: 0.06em 0;
-  transition:
-    color 320ms cubic-bezier(0.22, 1, 0.36, 1),
-    background-color 320ms cubic-bezier(0.22, 1, 0.36, 1),
-    padding 320ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.agent-response p span[data-state="read"] {
-  color: var(--text);
-}
-
-.agent-response p span[data-state="current"] {
-  padding-inline: 0.16em;
-  background: var(--bg-muted);
-  color: var(--text);
-}
-
-.salidium-report dl {
-  display: grid;
-  gap: 16px;
-  margin: 18px 0 0;
-}
-
-.salidium-report dl > div {
-  display: grid;
-  grid-template-columns: 70px minmax(0, 1fr);
-  gap: 16px;
-  opacity: 0.12;
-  transform: translateY(4px);
-  transition:
-    opacity 320ms cubic-bezier(0.22, 1, 0.36, 1),
-    transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.salidium-report dl > div[data-state="read"],
-.salidium-report dl > div[data-state="current"] {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.salidium-report dt {
-  color: var(--text-tertiary);
-  font-size: 10px;
-}
-
-.salidium-report dd {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1.45;
-}
-
-@media (max-width: 760px) {
-  .demo,
-  .setup {
-    padding-top: 48px;
-  }
-
-  .work-stream {
+  .docs-definitions > div,
+  .docs-commands > div {
     grid-template-columns: minmax(0, 1fr);
-    gap: 24px;
-    margin-top: 36px;
-  }
-
-  .output-pair {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 42px;
-    margin-top: 42px;
-  }
-
-  .site-rail-home nav a {
-    display: none;
-  }
-
-  .site-rail-home nav a[href="/docs"],
-  .site-rail-home nav a[href^="https://github.com/"] {
-    display: block;
+    gap: var(--space-1);
   }
 }
 
+/*
+ * Nothing on this page reveals content over time, so there is nothing here to switch off but the
+ * interface's own answers to a pointer. The block this replaces targeted eleven selectors, every
+ * one of which had been deleted from the markup.
+ */
 @media (prefers-reduced-motion: reduce) {
-  .work-stream li,
-  .agent-response p span,
-  .salidium-report dl > div {
-    transition: none;
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
   }
 }
