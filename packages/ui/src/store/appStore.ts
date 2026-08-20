@@ -194,7 +194,12 @@ interface AppState {
    * and a copy kept here would be the one a second tab disagreed with.
    */
   explainer: ExplainerSettings | undefined;
-  daemonError: string | undefined;
+  /*
+   * The message, and whether it means the daemon is not answering at all. The banner used to hold
+   * only the string, so it printed `daemon unreachable (Failed to fetch)` with no instruction, and
+   * could not have offered one without guessing at the cause.
+   */
+  daemonError: { message: string; unreachable: boolean } | undefined;
   /** The daemon rejected the stored token; the gate explains how to get a fresh one. */
   authRejected: boolean;
 
@@ -216,7 +221,7 @@ interface AppState {
   removeSession(id: string): void;
   select(id: string | undefined): void;
   setListConnection(s: ConnectionStatus): void;
-  setDaemonError(e: string | undefined): void;
+  setDaemonError(e: { message: string; unreachable: boolean } | undefined): void;
   setLiveError(id: string, e: LiveError | undefined): void;
   initLive(id: string, state: RunState, changes: SemanticChange[]): void;
   applyEvents(id: string, events: StoredEvent[], changes: SemanticChange[]): void;

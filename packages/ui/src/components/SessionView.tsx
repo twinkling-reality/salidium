@@ -11,7 +11,7 @@ import { useFootSpace } from '../lib/useFootSpace.ts';
 import { useScrollState } from '../lib/useScrollState.ts';
 import { type LiveError, useAppStore } from '../store/appStore.ts';
 import { BrandMark } from './Brand.tsx';
-import { ThemeToggle, ToolButton } from './Controls.tsx';
+import { ConnectionBadge, ThemeToggle, ToolButton } from './Controls.tsx';
 import { HistoryRail } from './HistoryRail.tsx';
 import { HistoryTable } from './HistoryTable.tsx';
 import { Icon } from './Icon.tsx';
@@ -627,28 +627,4 @@ function SessionError({ error, onRetry }: { error: LiveError; onRetry: () => voi
       </div>
     </div>
   );
-}
-
-/**
- * Whether Salidium is still receiving events, and nothing else.
- *
- * It printed "live" whenever the stream was open, which is to say on every session including ones
- * that ended days ago — the word read as a claim about the *session*, whose actual state is in the
- * masthead beside its title. A healthy connection is the expected case and says nothing worth a
- * slot on the toolbar, so only the exceptions print.
- */
-function ConnectionBadge({ status }: { status: string }) {
-  if (status === 'reconnecting')
-    return (
-      <span className="conn conn-warn" title="Lost contact with the daemon; retrying">
-        reconnecting…
-      </span>
-    );
-  if (status === 'closed')
-    return (
-      <span className="conn conn-bad" title="Not receiving updates; the daemon may have stopped">
-        disconnected
-      </span>
-    );
-  return null;
 }

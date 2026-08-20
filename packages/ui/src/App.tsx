@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { readToken, rememberToken, resolveToken } from './api/client.ts';
 import { BrandLockup, BrandMark } from './components/Brand.tsx';
-import { ToolButton } from './components/Controls.tsx';
+import { ConnectionBadge, ToolButton } from './components/Controls.tsx';
 import { Icon } from './components/Icon.tsx';
 import { RawDrawer } from './components/RawDrawer.tsx';
 import { MarksKey, SessionList } from './components/SessionList.tsx';
@@ -164,11 +164,7 @@ export function App() {
           <span className="side-head-title" id="session-list-title">
             Salidium
           </span>
-          {listConnection !== 'open' && (
-            <span className={`conn ${listConnection === 'closed' ? 'conn-bad' : 'conn-warn'}`}>
-              {listConnection}
-            </span>
-          )}
+          <ConnectionBadge status={listConnection} />
           {/* The key to the marks a row can carry, asked for rather than standing at the foot of
               the panel taking a row and a half of the list from it for good. */}
           {sessionCount > 0 && <MarksKey />}
@@ -183,7 +179,26 @@ export function App() {
           </span>
         </div>
         <SessionList now={now} />
-        {daemonError && <div className="side-error">{daemonError}</div>}
+        {/*
+         * The banner used to be the thrown message alone: `daemon unreachable (Failed to fetch)`,
+         * in red, with nothing to do about it. The message stays, because it says which failure
+         * this was, but it is no longer the whole of what the reader is given.
+         */}
+        {daemonError && (
+          <div className="side-error" role="alert">
+            <p className="side-error-title">The session list is not updating</p>
+            <p>
+              {daemonError.message}.{' '}
+              {daemonError.unreachable ? (
+                <>
+                  Start the daemon again with <code>salidium</code> in a terminal.
+                </>
+              ) : (
+                'It is reachable, so this is worth reporting rather than restarting.'
+              )}
+            </p>
+          </div>
+        )}
       </aside>
       <main className="main" inert={mobileSidebarOpen} aria-hidden={mobileSidebarOpen || undefined}>
         {selectedId ? (

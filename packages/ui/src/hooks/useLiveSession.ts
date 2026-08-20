@@ -133,7 +133,12 @@ export function useSessionList(): void {
       },
       (err) => {
         if (cancelled || (err instanceof ApiError && err.status === 401)) return;
-        useAppStore.getState().setDaemonError(err instanceof Error ? err.message : String(err));
+        // Status 0 is the client's own "never reached it"; anything else came back from a daemon
+        // that is alive, and telling that reader to start one would be wrong.
+        useAppStore.getState().setDaemonError({
+          message: err instanceof Error ? err.message : String(err),
+          unreachable: err instanceof ApiError && err.status === 0,
+        });
       },
     );
     const stop = api.stream(

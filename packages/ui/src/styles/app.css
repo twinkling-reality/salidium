@@ -267,6 +267,18 @@
   font-size: var(--text-sm);
 }
 
+.side-error p {
+  margin: 0;
+}
+
+.side-error p + p {
+  margin-top: var(--space-1);
+}
+
+.side-error-title {
+  font-weight: 500;
+}
+
 /*
  * The key to the marks a row can carry, in the popover the head's question mark opens.
  *
@@ -1305,6 +1317,16 @@
 .bad {
   color: var(--danger);
 }
+
+.bad-title {
+  margin: 0 0 var(--space-1);
+  font-weight: 500;
+}
+
+.bad p + button {
+  margin-top: var(--space-3);
+}
+
 .running {
   color: var(--accent);
 }

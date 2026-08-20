@@ -132,3 +132,42 @@ export function Disclosure({
     </div>
   );
 }
+
+/**
+ * Whether Salidium is still receiving events, and nothing else.
+ *
+ * It printed "live" whenever the stream was open, which is to say on every session including ones
+ * that ended days ago — the word read as a claim about the *session*, whose actual state is in the
+ * masthead beside its title. A healthy connection is the expected case and says nothing worth a
+ * slot on the toolbar, so only the exceptions print.
+ *
+ * Shared, because the session view and the session list both report this and only one of them was
+ * doing it in words: the list printed the connection state's own name, so a reader was shown
+ * `closed` with no tooltip and nothing to make of it, four lines of code away from a badge that
+ * said "disconnected" and why.
+ *
+ * The advice is still a `title`, which a touch device never shows. Saying it in text costs a line
+ * of the panel head, and the sentence a reader needs once the daemon has actually stopped is on
+ * the session error screen, which is where they arrive next.
+ */
+export function ConnectionBadge({ status }: { status: string }) {
+  if (status === 'connecting')
+    return (
+      <span className="conn conn-warn" title="Opening the connection to the daemon">
+        connecting
+      </span>
+    );
+  if (status === 'reconnecting')
+    return (
+      <span className="conn conn-warn" title="Lost contact with the daemon; retrying">
+        reconnecting…
+      </span>
+    );
+  if (status === 'closed')
+    return (
+      <span className="conn conn-bad" title="Not receiving updates; the daemon may have stopped">
+        disconnected
+      </span>
+    );
+  return null;
+}
