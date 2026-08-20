@@ -578,6 +578,19 @@ export function llmsTxt(origin = "https://salidium.com"): string {
 }
 
 /*
+ * Cross-references, made resolvable. In the tree a link is written the way the page needs it,
+ * `[Evidence](/docs/evidence)`, and the Markdown used to carry that through untouched: an agent
+ * that fetched `/docs/report.md` was handed a root-relative path with no base to resolve it
+ * against, and resolving it anyway landed on the HTML it had deliberately not asked for.
+ *
+ * `llmsTxt` and the image emitter already build absolute `.md` URLs from `origin`. This is the
+ * same rule applied to prose.
+ */
+function links(text: string, origin: string): string {
+  return text.replace(/\]\(\/docs\/([a-z0-9-]+)\)/g, `](${origin}/docs/$1.md)`);
+}
+
+/*
  * The same tree, as Markdown. Served at `/docs.md` and `/docs/<slug>.md`, advertised by every page
  * with a `rel="alternate"` link, and copied by the control in the head, because anything asked to
  * read these docs should be handed the text rather than made to strip tags out of a rendered page.
@@ -585,12 +598,20 @@ export function llmsTxt(origin = "https://salidium.com"): string {
 export function docsMarkdown(origin = "https://salidium.com", slug?: string): string {
   const pages = slug ? PAGES.filter((page) => page.slug === slug) : PAGES;
   const out: string[] = [];
+  /*
+   * One page fetched on its own is a document and starts at `#`; the same page inside the combined
+   * file is a section of one and starts at `##`. It used to start at `##` either way, so
+   * `/docs/report.md` was a hierarchy with no root, and fourteen of them spliced into one context
+   * were fourteen co-equal sections belonging to nothing.
+   */
+  const top = slug ? 1 : 2;
+  const hash = (n: number) => "#".repeat(n);
 
   if (!slug) out.push(`# ${OVERVIEW.title}`, "", OVERVIEW.lede, "", `Source: ${origin}/docs`, "");
 
   for (const page of pages) {
     out.push(
-      `## ${page.n}. ${page.title}`,
+      slug ? `# ${page.title}` : `${hash(top)} ${page.n}. ${page.title}`,
       "",
       page.summary,
       "",
@@ -598,20 +619,26 @@ export function docsMarkdown(origin = "https://salidium.com", slug?: string): st
       "",
     );
     for (const block of page.blocks) {
-      if (block.kind === "p") out.push(block.text, "");
-      else if (block.kind === "h") out.push(`### ${block.text}`, "");
-      else if (block.kind === "note") out.push(`> ${block.text}`, "");
-      else if (block.kind === "list") out.push(...block.items.map((i) => `- ${i}`), "");
+      if (block.kind === "p") out.push(links(block.text, origin), "");
+      else if (block.kind === "h") out.push(`${hash(top + 1)} ${block.text}`, "");
+      else if (block.kind === "note") out.push(`> ${links(block.text, origin)}`, "");
+      else if (block.kind === "list")
+        out.push(...block.items.map((i) => `- ${links(i, origin)}`), "");
       else if (block.kind === "command") out.push("```sh", block.command, "```", "");
       else if (block.kind === "shot") {
         const file = (SHOTS as Record<string, Shot>)[block.name]?.light;
         if (file) out.push(`![${block.alt}](${origin}/docs/${file})`, "");
       }
       else if (block.kind === "terms")
-        out.push(...block.items.map(([name, meaning]) => `- **${name}** ${meaning}`), "");
+        out.push(
+          ...block.items.map(([name, meaning]) => `- **${name}**: ${links(meaning, origin)}`),
+          "",
+        );
       else if (block.kind === "keys")
         out.push(
-          ...block.items.map(([ks, meaning]) => `- **${ks.map((k) => `\`${k}\``).join(" ")}** ${meaning}`),
+          ...block.items.map(
+            ([ks, meaning]) => `- **${ks.map((k) => `\`${k}\``).join(" ")}**: ${meaning}`,
+          ),
           "",
         );
     }

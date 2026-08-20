@@ -252,8 +252,25 @@ test("serves the docs as Markdown for anything that would rather read text", asy
   const one = await fetchSite("https://salidium.com/docs/report.md");
   assert.equal(one.status, 200);
   const onePage = await one.text();
-  assert.match(onePage, /^## 4\. Reading a report$/m);
-  assert.doesNotMatch(onePage, /^## 1\. Install$/m);
+  /*
+   * A page fetched alone is a document: it is rooted at `#` and its own headings are `##`. Inside
+   * `docs.md` the same page is a section, so it is `##` and its headings are `###`. It used to be
+   * `##` either way, which left a single page as a hierarchy hanging off nothing.
+   */
+  assert.match(onePage, /^# Reading a report$/m);
+  assert.match(onePage, /^## The verdict$/m);
+  assert.doesNotMatch(onePage, /Install/);
+  assert.match(markdown, /^## 4\. Reading a report$/m);
+  assert.match(markdown, /^### The verdict$/m);
+
+  /*
+   * Every cross-reference in the Markdown is absolute and points at the Markdown. A fetcher handed
+   * `[Evidence](/docs/evidence)` has no base to resolve it against, and resolving it anyway lands
+   * on the HTML it chose not to ask for.
+   */
+  assert.match(onePage, /\]\(https:\/\/salidium\.com\/docs\/evidence\.md\)/);
+  assert.doesNotMatch(onePage, /\]\(\/docs\//);
+  assert.doesNotMatch(markdown, /\]\(\/docs\//);
 
   /*
    * The page and this file come from one tree, so a claim cannot be true in one and absent from
