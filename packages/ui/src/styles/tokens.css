@@ -5,7 +5,6 @@
  */
 @import "./scale.css";
 
-
 /*
  * The shell owns the viewport and every scroll inside it belongs to a named pane. The window may
  * never scroll: anything that escapes a pane's clipping is a bug, and without this it is a bug
