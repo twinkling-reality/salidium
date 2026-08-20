@@ -32,20 +32,6 @@
   --space-20: 80px;
 
   /*
-   * The page takes the window rather than sitting in a column in the middle of it. The product
-   * panel is the argument, and it has to be big enough to read: at 1180px it rendered 600px wide,
-   * which put the interface's own type at 43% and turned it into texture.
-   */
-  --page-w: min(1680px, 94vw);
-
-  /*
-   * The reading measure, as a length rather than in `ch`. `ch` is relative to the element's own
-   * font, so a token shared by 15px prose and a 14px term list resolved to two different widths
-   * and the page had two right edges 39px apart. 34rem is about 65 characters of the body size.
-   */
-  --measure: 34rem;
-
-  /*
    * The step between one thing arriving and the next thing starting.
    *
    * Not a motion duration. The two in `scale.css` say how long a change takes and are deliberate
