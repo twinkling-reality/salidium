@@ -4197,8 +4197,14 @@
 }
 
 .cov-held {
-  margin: 0 0 var(--space-3);
+  margin: 0 0 var(--space-2);
   color: var(--danger);
+}
+
+/* What the grid does and does not claim. Always present, so it is not styled as an alarm. */
+.cov-scope {
+  margin: 0 0 var(--space-3);
+  color: var(--text-tertiary);
 }
 
 .cov-grid {

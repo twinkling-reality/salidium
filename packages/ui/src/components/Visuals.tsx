@@ -208,10 +208,18 @@ export function Coverage({
       </p>
       {held && (
         <p className="cov-held">
-          {failing.join(' and ')} {failing.length === 1 ? 'is' : 'are'} still failing, so a filled
-          square does not mean the project is green.
+          {failing.join(' and ')} {failing.length === 1 ? 'is' : 'are'} still failing.
         </p>
       )}
+      {/*
+       * Unconditional. This sentence used to be the tail of the failing-checks line, so a session
+       * where nothing had failed showed a grid of filled squares and nothing to stop it reading as
+       * a green project. The one case that most needs the qualifier was the one case without it.
+       */}
+      <p className="cov-scope">
+        A filled square is one file, not the project. A full grid does not mean the project is
+        green.
+      </p>
       <ul className="cov-grid">
         {shown.map((f) => (
           <li key={f.path}>
