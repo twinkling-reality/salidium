@@ -38,10 +38,25 @@
   background: var(--bg-subtle);
 }
 
-/* `display: flex` above outranks the UA's `[hidden] { display: none }`, and a hidden grid item
-   that still lays out drops onto its own row instead of disappearing. */
-.side[hidden] {
-  display: none;
+/*
+ * Wide enough for two columns, and here the panel is one of them: folding it is `.app.no-side`
+ * rewriting `grid-template-columns` in a single frame. Fading the panel over 180ms against that
+ * would leave it dissolving on top of a document that had already reflowed to the full width,
+ * which reads as a rendering fault rather than as a panel leaving; animating the column instead
+ * means reflowing the whole session page on every frame of the fold, which is the cost this file
+ * refuses everywhere else it is measured.
+ *
+ * So the fold stays instant at this size and the gesture belongs to the drawer below, which is
+ * out of flow and owes the layout nothing. `.arrives` still supplies the `display: none`, so the
+ * folded panel leaves the tab order either way; only the 180ms is given up.
+ *
+ * The one place in this file that asks about the wide layout rather than the narrow one, because
+ * this is the only rule that is a concession to it.
+ */
+@media (min-width: 901px) {
+  .side {
+    transition: none;
+  }
 }
 
 /* Mobile-only controls are inert on a two-pane desktop. */
@@ -2143,10 +2158,9 @@
     display: flex;
     width: min(320px, calc(100vw - 48px));
     box-shadow: var(--shadow-float);
-  }
-
-  .side[hidden] {
-    display: none;
+    /* Out of flow here, so it can have the gesture the desktop column cannot afford: docked to
+       the window's left edge, so it comes in from it and goes back out the same way. */
+    --slide: -12px;
   }
 
   .side-backdrop {

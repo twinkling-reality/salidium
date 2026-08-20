@@ -229,8 +229,9 @@
  * Something that was not on screen a moment ago fades in and settles from the direction it came
  * from, and when it goes it retraces that exactly. One gesture, composed by everything that
  * appears: a popover hangs under its trigger and so comes down (`--rise` negative), the scrubber
- * stands at the pane's foot and so comes up. The surface states its own `--rise`; a surface that
- * only fades states none.
+ * stands at the pane's foot and so comes up, the session list is docked to the window's left edge
+ * and so comes in from it (`--slide`). The surface states its own direction; one that only fades
+ * states neither.
  *
  * Transform and opacity only, and translate rather than scale, for a reason that is not taste.
  * The page's clearance under the floating foot is measured from the foot's own box
@@ -242,12 +243,17 @@
  * It is achromatic on purpose. Colour in this app means a verdict (app.css, rule 4), and a panel
  * opening is not a verdict.
  *
- * `display` carries the closed state rather than opacity alone, which is what makes this safe
- * without any bookkeeping: a closed surface is out of the accessibility tree and out of the tab
- * order because it is `display: none`, not because something remembered to mark it `inert`.
- * `allow-discrete` holds that display value until the fade has finished, and `@starting-style`
- * supplies the frame before the open one, which a surface coming back from `display: none` has no
- * other way to get.
+ * `display` carries the closed state rather than opacity alone. A closed surface is out of the
+ * accessibility tree and out of the tab order because it is `display: none`, which no component
+ * has to remember to arrange. `allow-discrete` holds that display value until the fade has
+ * finished, and `@starting-style` supplies the frame before the open one, which a surface coming
+ * back from `display: none` has no other way to get.
+ *
+ * What that leaves is the fade itself. For those 180ms the surface is still painted and still
+ * holds whatever it holds, so it is deaf to the pointer here, and the two surfaces with something
+ * focusable in them are marked `inert` from the same boolean that opens them. Neither is a timer
+ * and neither is a second source of truth; they are the same state said in the one place CSS
+ * cannot reach.
  *
  * Here rather than in `primitives.css` because the public site imports this file and not that
  * one, and a docs menu opening at a different speed from the same panel in the product was the
@@ -257,7 +263,7 @@
  */
 .arrives {
   opacity: 0;
-  transform: translateY(var(--rise, 0));
+  transform: translate(var(--slide, 0), var(--rise, 0));
   transition:
     opacity var(--motion-base) var(--ease),
     transform var(--motion-base) var(--ease),
@@ -267,9 +273,14 @@
 /*
  * Out-specifies the surface's own `display`, so each surface keeps stating what it is when it is
  * open and none of them has to restate what it is when it is closed.
+ *
+ * Deaf to the pointer from the moment it is dismissed, not from the moment it finishes leaving. A
+ * backdrop that is on its way out is still a full-window box for as long as the fade lasts, and
+ * catching a click there would reopen the thing the reader has just put away.
  */
 .arrives:not(.is-open) {
   display: none;
+  pointer-events: none;
 }
 
 .arrives.is-open {
@@ -280,6 +291,6 @@
 @starting-style {
   .arrives.is-open {
     opacity: 0;
-    transform: translateY(var(--rise, 0));
+    transform: translate(var(--slide, 0), var(--rise, 0));
   }
 }

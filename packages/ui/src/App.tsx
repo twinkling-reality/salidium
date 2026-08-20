@@ -133,7 +133,13 @@ export function App() {
 
   return (
     <div className={`app ${sidebarOpen ? '' : 'no-side'}`}>
-      {sidebarOpen && <div className="side-backdrop" aria-hidden="true" onClick={toggleSidebar} />}
+      {/* Always present so it can fade with the drawer it dims; `.arrives` makes it deaf to the
+          pointer the moment it starts leaving, so the fade cannot catch the tap that dismissed it. */}
+      <div
+        className={`side-backdrop arrives ${sidebarOpen ? 'is-open' : ''}`}
+        aria-hidden="true"
+        onClick={toggleSidebar}
+      />
       {!sidebarOpen && (
         <div className="mobile-side-trigger" ref={mobileSideTriggerRef}>
           <ToolButton icon="panel" title="Show the session list ([)" onClick={toggleSidebar} />
@@ -143,13 +149,27 @@ export function App() {
       {/* biome-ignore lint/a11y/useAriaPropsSupportedByRole: aria-modal is paired with the conditional dialog role below. */}
       <aside
         ref={sideRef}
-        className="side"
+        className={`side arrives ${sidebarOpen ? 'is-open' : ''}`}
         role={mobileSidebarOpen ? 'dialog' : undefined}
         aria-modal={mobileSidebarOpen ? 'true' : undefined}
         aria-labelledby={mobileSidebarOpen ? 'session-list-title' : undefined}
         aria-label={mobileSidebarOpen ? undefined : 'Sessions'}
         tabIndex={mobileSidebarOpen ? -1 : undefined}
-        hidden={!sidebarOpen}
+        /*
+         * `display: none` takes a closed panel out of the tab order, but only once it has
+         * finished leaving. For the 180ms in between it is still painted and still holds thirty
+         * focusable rows, and the keyboard could walk back into a list the reader has just
+         * dismissed. This is the same boolean the class is keyed to, so there is no second state
+         * to keep in step, and no timer.
+         */
+        inert={!sidebarOpen}
+        /*
+         * Closed by `.arrives` rather than by `hidden`. The attribute cannot be used here any
+         * more: it is `display: none` from the frame it is set, which is the frame the drawer is
+         * supposed to spend sliding out. `.arrives` reaches the same `display: none` and takes
+         * the panel out of the tab order and the accessibility tree exactly as `hidden` did, but
+         * at the end of the gesture rather than instead of it.
+         */
         onClickCapture={(event) => {
           if (
             window.matchMedia('(max-width: 900px)').matches &&

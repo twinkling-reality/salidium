@@ -68,7 +68,11 @@ export function Panel({
    */
   if (!mounted) return null;
   return (
-    <div className={`panel-scrim arrives ${open ? 'is-open' : ''}`}>
+    <div
+      className={`panel-scrim arrives ${open ? 'is-open' : ''}`}
+      /* Unreachable for the 180ms it spends fading, not merely once it has gone; see `App`. */
+      inert={!open}
+    >
       {/* The close control is inside the dialog. The backdrop is pointer affordance only, so it
           stays out of the tab order and the modal has exactly one keyboard boundary. */}
       <div className="panel-backdrop" aria-hidden="true" onClick={closePanel} />

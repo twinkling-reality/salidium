@@ -147,7 +147,8 @@ test('narrow session navigation is a contained modal across resize', async ({
  * The assertion is deliberately about the mechanism rather than about a duration. A surface has
  * left properly when three things are true at once: it is still painted on the frame it was
  * dismissed, a transition is actually running on it, and once that has settled it is
- * `display: none` and therefore gone from the tab order without anything having marked it so.
+ * `display: none` and so holds nothing focusable.
+ *
  * The failure this guards against is the one the whole pass was about, and it looks identical in
  * a screenshot to a correct exit: the element simply is not there on the next frame.
  */
@@ -240,4 +241,59 @@ test('a surface that arrives with motion also leaves with it', async ({
   expect(space.reserved, 'the document stops reserving room the scrubber no longer needs').toBe(
     space.actual,
   );
+});
+
+/*
+ * The same rule on the surface where it is most visible and hardest to get right.
+ *
+ * The session list is one element playing two parts. Wide, it is a grid column and folding it
+ * rewrites the shell's tracks in a frame, so it deliberately keeps no motion at all; narrow, it
+ * is a drawer standing out of flow over the document, where it slides. Only the second is
+ * asserted here, because only the second has a gesture to hold it to.
+ *
+ * `inert` is the half of this that CSS cannot state. A drawer spends 180ms painted after it has
+ * been dismissed, and for that time it still holds thirty focusable rows; the keyboard must not
+ * be able to walk back into a list the reader has just put away.
+ */
+test('the session list drawer slides out and is unreachable while it does', async ({
+  page,
+  daemon,
+}, testInfo) => {
+  test.skip(!testInfo.project.name.includes('narrow'), 'narrow flow');
+  await openSalidium(page, daemon);
+
+  const drawer = page.locator('aside.side');
+  await expect(drawer).toBeVisible();
+  await expect(drawer).not.toHaveAttribute('inert', '');
+
+  await drawer.getByTitle('Hide the session list ([)').click();
+
+  const leaving = await page.evaluate(() => {
+    const el = document.querySelector('aside.side') as HTMLElement;
+    return {
+      display: getComputedStyle(el).display,
+      running: el
+        .getAnimations()
+        .filter((a) => a.constructor.name === 'CSSTransition')
+        .map((a) => (a as CSSTransition).transitionProperty),
+      inert: el.hasAttribute('inert'),
+      reachable: [...el.querySelectorAll('button, input')].filter(
+        (node) => node.getClientRects().length > 0,
+      ).length,
+    };
+  });
+  expect(leaving.display, 'the drawer is still painted while it leaves').not.toBe('none');
+  expect(leaving.running, 'it slides as well as fades').toEqual(
+    expect.arrayContaining(['opacity', 'transform']),
+  );
+  expect(leaving.inert, 'and is inert for every frame of it').toBe(true);
+  /*
+   * The rows are still laid out, which is the whole reason the line above matters: `display: none`
+   * has not arrived yet, so nothing but `inert` is keeping the keyboard out of them. If this ever
+   * reads zero the drawer has stopped being painted and the assertion above proves nothing.
+   */
+  expect(leaving.reachable, 'its rows are still painted while it leaves').toBeGreaterThan(0);
+
+  await expect(drawer).toBeHidden();
+  await expect(page.locator('.side-backdrop')).toBeHidden();
 });
