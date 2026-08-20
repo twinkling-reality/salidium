@@ -1,0 +1,50 @@
+{
+  "evidence": {
+    "width": 880,
+    "height": 232,
+    "light": "evidence-light-5966cad8.png",
+    "dark": "evidence-dark-c93e0880.png"
+  },
+  "gate": {
+    "width": 485,
+    "height": 393,
+    "light": "gate-light-dce69376.png",
+    "dark": "gate-dark-e533ba2d.png"
+  },
+  "history": {
+    "width": 1064,
+    "height": 560,
+    "light": "history-light-a6bde42c.png",
+    "dark": "history-dark-f9380743.png"
+  },
+  "masthead": {
+    "width": 870,
+    "height": 225,
+    "light": "masthead-light-bd490069.png",
+    "dark": "masthead-dark-9bbc0678.png"
+  },
+  "quantities": {
+    "width": 320,
+    "height": 412,
+    "light": "quantities-light-c24cdcd6.png",
+    "dark": "quantities-dark-49668270.png"
+  },
+  "record": {
+    "width": 760,
+    "height": 381,
+    "light": "record-light-32b754b3.png",
+    "dark": "record-dark-7f29bbd8.png"
+  },
+  "rewind": {
+    "width": 744,
+    "height": 69,
+    "light": "rewind-light-026091af.png",
+    "dark": "rewind-dark-7a3093fd.png"
+  },
+  "sessions": {
+    "width": 940,
+    "height": 560,
+    "light": "sessions-light-eb5d23a6.png",
+    "dark": "sessions-dark-5729bc37.png"
+  }
+}

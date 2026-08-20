@@ -285,6 +285,52 @@ export async function startDemo() {
     ],
   });
 
+  /*
+   * A long run, for the documentation's picture of the scrubber.
+   *
+   * The featured session is four files over two turns, which draws three marks on a track and so
+   * illustrates none of what the page says about it: no failure to draw red, and nothing close
+   * enough to another mark to be merged. This one is deliberately longer, and it is a separate
+   * session so nothing about the featured one moves.
+   */
+  other({
+    id: "claude-code:demo-timeline",
+    cwd: "/Users/dev/acme/api",
+    title: "Move invoice numbering off the sequence",
+    startedAgo: 26,
+    build: (eb) => [
+      eb.turnStarted("Invoice numbers collide under load. Move them off the shared sequence."),
+      ...eb.edit("iv-1", "/Users/dev/acme/api/src/invoices/number.ts", 34, 12),
+      ...eb.command("iv-2", "pnpm vitest run", VITEST_FAIL, { exitCode: 1 }),
+      eb.turnEnded("Three tests fail on the new allocator. Fixing."),
+
+      eb.turnStarted("Fix the allocator and run the suite again."),
+      ...eb.edit("iv-3", "/Users/dev/acme/api/src/invoices/allocator.ts", 21, 8),
+      ...eb.command("iv-4", "pnpm vitest run", "\n      Tests  118 passed (118)\n", {
+        exitCode: 0,
+      }),
+      ...eb.command("iv-5", 'git commit -am "allocate invoice numbers per tenant"', "", {
+        exitCode: 0,
+      }),
+      eb.turnEnded("Suite is green and the change is committed."),
+
+      /* Two checks inside one turn, close enough on the track that the marks merge. */
+      eb.turnStarted("Check the types and the lint before opening it."),
+      ...eb.edit("iv-6", "/Users/dev/acme/api/src/invoices/index.ts", 6, 3),
+      ...eb.command("iv-7", "pnpm tsc --noEmit", "", { exitCode: 0 }),
+      ...eb.command("iv-8", "pnpm eslint .", "", { exitCode: 0 }),
+      eb.turnEnded("Types and lint are clean."),
+
+      eb.turnStarted("Backfill the existing rows."),
+      ...eb.edit("iv-9", "/Users/dev/acme/api/migrations/0051_backfill_invoice_no.sql", 18, 0),
+      ...eb.command("iv-10", "pnpm vitest run", "\n      Tests  121 passed (121)\n", {
+        exitCode: 0,
+      }),
+      ...eb.command("iv-11", 'git commit -am "backfill invoice numbers"', "", { exitCode: 0 }),
+      eb.turnEnded("Backfilled, and the suite still passes."),
+    ],
+  });
+
   // --- Recent: finished and clean ------------------------------------------
 
   const finished = [

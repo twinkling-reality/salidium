@@ -31,7 +31,11 @@ export default function RootLayout({
         />
       </head>
       <body>
-        {/* Five rail controls precede the content on every page; this is the way past them. */}
+        {/*
+         * The way past the controls that precede the content on every page. `tabindex="-1"` on the
+         * target is what makes it move focus as well as the viewport: without it the browser
+         * scrolls and leaves focus where it was, so the next Tab goes back into what was skipped.
+         */}
         <a className="skip-link" href="#main">
           Skip to content
         </a>

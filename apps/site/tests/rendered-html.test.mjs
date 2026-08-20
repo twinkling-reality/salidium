@@ -120,37 +120,182 @@ test("server-renders the Salidium landing page", async () => {
   assertHouseRules(html, "home");
 });
 
-test("server-renders first-party Salidium docs", async () => {
+/*
+ * The documentation is one tree rendered two ways, so these check the tree's properties rather
+ * than the wording of whichever draft was last on the page.
+ */
+const DOC_SLUGS = [
+  "install",
+  "the-page",
+  "sessions",
+  "report",
+  "evidence",
+  "rewind",
+  "records",
+  "provenance",
+  "explanations",
+  "local",
+  "keyboard",
+  "cli",
+  "environment",
+  "limits",
+];
+
+test("server-renders the documentation index", async () => {
   const response = await fetchSite("http://localhost/docs", { accept: "text/html" });
   assert.equal(response.status, 200);
 
   const html = await response.text();
   assert.match(html, /<title>Salidium Docs<\/title>/i);
-  assert.match(html, /aria-label="Salidium home"[\s\S]*brand-divider[\s\S]*brand-section">Docs/);
-  assert.match(html, /Set up Salidium/);
-  assert.match(html, /Node 24 or newer[\s\S]*npx salidium/);
+  assert.match(html, /Salidium documentation/);
 
-  // The two trust levels stay separated: derived facts, then generated explanation.
-  assert.match(html, /Derived from the record[\s\S]*Generated, and labelled as such/);
-  assert.match(html, /A command name is not proof/);
-  assert.match(
-    html,
-    /Turn generated explanations off and Changed, Verified, Left, Needs you/,
+  // Every page is in the index and in the navigation, both built from one list.
+  for (const slug of DOC_SLUGS) {
+    assert.equal(
+      html.match(new RegExp(`href="/docs/${slug}"`, "g"))?.length,
+      2,
+      `${slug} should appear once in the contents and once in the navigation`,
+    );
+  }
+
+  /*
+   * No invented grouping. The product has no route table, no navigation and no section constant,
+   * so a group name here could only be this site's opinion wearing the product's name. These three
+   * were exactly that.
+   */
+  for (const invented of ["Going deeper", "Your machine", "The report</"]) {
+    assert.doesNotMatch(html, new RegExp(invented), `docs: invented group name ${invented}`);
+  }
+
+  assertHouseRules(html, "docs index");
+});
+
+test("server-renders every documentation page, and none of them is a stub", async () => {
+  for (const slug of DOC_SLUGS) {
+    const response = await fetchSite(`http://localhost/docs/${slug}`, { accept: "text/html" });
+    assert.equal(response.status, 200, `/docs/${slug} should render`);
+    const html = await response.text();
+
+    /*
+     * A page has to be worth being a page. Half of them were once a single paragraph behind their
+     * own route, which made the navigation look like a document and read like a stub.
+     */
+    const words = html
+      .replace(/<script[\s\S]*?<\/script>/g, "")
+      .replace(/<[^>]+>/g, " ")
+      .split(/\s+/)
+      .filter(Boolean).length;
+    assert.ok(words > 120, `/docs/${slug} has only ${words} words of content`);
+
+    // The page's place in the set is what the navigation shows. An eyebrow above the title is not.
+    assert.doesNotMatch(html, /doc-kicker/, `/docs/${slug}: eyebrow above the title`);
+
+    assertHouseRules(html, `docs/${slug}`);
+  }
+});
+
+test("documentation states what the product does, not what an earlier draft said", async () => {
+  const report = await (await fetchSite("http://localhost/docs/report")).text();
+  const provenance = await (await fetchSite("http://localhost/docs/provenance")).text();
+  const limits = await (await fetchSite("http://localhost/docs/limits")).text();
+  const install = await (await fetchSite("http://localhost/docs/install")).text();
+
+  // All five trust classes. The page used to list four and omit `planned`.
+  assert.match(provenance, /Observed[\s\S]*Reported[\s\S]*Derived[\s\S]*Planned[\s\S]*Generated/);
+
+  // The seven-day import default is the likeliest first-run surprise, so it stays on the page.
+  assert.match(install, /last seven days/i);
+  assert.match(install, /SALIDIUM_HISTORY_DAYS/);
+
+  /*
+   * Four claims an earlier version of this page made that the product does not support. Each one
+   * read perfectly well and was wrong, which is the only kind that survives a proofread.
+   */
+  // There is no diff anywhere in the shipped interface: `DiffView` is reachable only from
+  // `ChangesSection`, which nothing renders.
+  assert.doesNotMatch(report, /with the diff/i, "docs: claims the report shows a diff");
+  // `partial` means the summary said pass and the exit code disagreed, not a narrowed run.
+  assert.doesNotMatch(report, /ran on a subset/i, "docs: mis-defines a partial outcome");
+  // The transcript tailer is platform-agnostic; Windows loses the hook relay, not live updates.
+  assert.doesNotMatch(
+    limits,
+    /live updates during a run do not/i,
+    "docs: overstates the Windows limit",
   );
+  // "Changed" is a view inside Evidence, not a lane beside Verified, Left and Needs you.
+  assert.doesNotMatch(report, /Changed, Verified, Left/, "docs: lists Changed as a top-level lane");
+});
 
-  assert.match(html, /never leave your machine/);
-  assert.match(html, /SALIDIUM_EXPLAINER=off/);
-  assert.match(html, /Salidium says unknown[\s\S]*rather than guessing/);
-  assert.match(html, /Windows[\s\S]*history works[\s\S]*live updates during a run do not/);
-  assert.match(
-    html,
-    /salidium doctor[\s\S]*salidium status[\s\S]*salidium restart[\s\S]*salidium stop/,
+test("serves the docs as Markdown for anything that would rather read text", async () => {
+  const response = await fetchSite("https://salidium.com/docs.md");
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("content-type") ?? "", /^text\/markdown\b/);
+
+  const markdown = await response.text();
+  assert.doesNotMatch(
+    markdown,
+    /<\/[a-z]+>|<(div|p|span|section|h[1-6])[\s>]/i,
+    "markdown should carry no markup",
   );
+  assert.match(markdown, /^# Salidium documentation/);
+  assert.match(markdown, /^Source: https:\/\/salidium\.com\/docs$/m);
+  assert.match(markdown, /```sh\nnpx salidium\n```/);
+  for (const slug of DOC_SLUGS) {
+    assert.match(markdown, new RegExp(`^Source: https://salidium\\.com/docs/${slug}$`, "m"));
+  }
 
-  // The eyebrow above the docs title is gone.
-  assert.doesNotMatch(html, /translation-label/);
+  // One page on its own, for a fetcher that wants one thing.
+  const one = await fetchSite("https://salidium.com/docs/report.md");
+  assert.equal(one.status, 200);
+  const onePage = await one.text();
+  assert.match(onePage, /^## 4\. Reading a report$/m);
+  assert.doesNotMatch(onePage, /^## 1\. Install$/m);
 
-  assertHouseRules(html, "docs");
+  /*
+   * The page and this file come from one tree, so a claim cannot be true in one and absent from
+   * the other. Checking a few is what keeps that from being merely the intention.
+   */
+  const html = await (await fetchSite("http://localhost/docs/report")).text();
+  for (const claim of ["A command name is not proof", "partial scope"]) {
+    assert.match(onePage, new RegExp(claim));
+    assert.match(html, new RegExp(claim));
+  }
+
+  assertHouseRules(markdown, "docs.md");
+});
+
+test("the machine-readable routes carry the host they were asked on", async () => {
+  /*
+   * Every URL in `llms.txt` and in the Markdown is absolute, and it is built from the request
+   * rather than from a constant, so a preview deployment points at itself. The thing that must
+   * never happen is a development host reaching production, which is what a hard-coded origin or a
+   * value captured at build time would do.
+   */
+  for (const path of ["/llms.txt", "/docs.md", "/docs/report.md"]) {
+    const response = await fetchSite(`https://salidium.com${path}`);
+    assert.equal(response.status, 200, `${path} should be served`);
+    const body = await response.text();
+
+    /*
+     * Hosts of actual URLs, not every occurrence of an address. The documentation says the daemon
+     * listens on 127.0.0.1, which is a fact about the product rather than somewhere this site
+     * points.
+     */
+    const hosts = [...new Set([...body.matchAll(/https?:\/\/[^/\s)]+/g)].map((m) => m[0]))];
+    assert.deepEqual(hosts, ["https://salidium.com"], `${path} should only name the canonical host`);
+  }
+
+  // The index names every page, and each name it gives is a route that exists.
+  const llms = await (await fetchSite("https://salidium.com/llms.txt")).text();
+  for (const slug of DOC_SLUGS) {
+    assert.match(llms, new RegExp(`https://salidium\\.com/docs/${slug}\\.md`), `llms.txt omits ${slug}`);
+    const one = await fetchSite(`https://salidium.com/docs/${slug}.md`);
+    assert.equal(one.status, 200, `/docs/${slug}.md should be served`);
+  }
+
+  // And every page advertises its own text, which is how a fetcher finds it without being told.
+  const html = await (await fetchSite("https://salidium.com/docs/report", { accept: "text/html" })).text();
+  assert.match(html, /rel="alternate"[^>]*\/docs\/report\.md"[^>]*type="text\/markdown"/);
 });
 
 test("redirects www requests to the canonical HTTPS domain", async () => {
