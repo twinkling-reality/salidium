@@ -139,3 +139,105 @@ test('narrow session navigation is a contained modal across resize', async ({
   await expect(page.getByRole('dialog', { name: 'Salidium' })).toBeVisible();
   await expect(close).toBeFocused();
 });
+
+/*
+ * Everything that arrives with motion leaves the same way, which is a rule no unit test can hold:
+ * it is a claim about what the stylesheet does across two frames of a real compositor.
+ *
+ * The assertion is deliberately about the mechanism rather than about a duration. A surface has
+ * left properly when three things are true at once: it is still painted on the frame it was
+ * dismissed, a transition is actually running on it, and once that has settled it is
+ * `display: none` and therefore gone from the tab order without anything having marked it so.
+ * The failure this guards against is the one the whole pass was about, and it looks identical in
+ * a screenshot to a correct exit: the element simply is not there on the next frame.
+ */
+test('a surface that arrives with motion also leaves with it', async ({
+  page,
+  daemon,
+}, testInfo) => {
+  test.skip(testInfo.project.name.includes('narrow'), 'desktop flow');
+  await openSalidium(page, daemon);
+
+  const leaving = (selector: string) =>
+    page.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      if (!el) return { found: false };
+      const running = el
+        .getAnimations()
+        .filter((a) => a.constructor.name === 'CSSTransition')
+        .map((a) => (a as CSSTransition).transitionProperty);
+      return {
+        found: true,
+        display: getComputedStyle(el).display,
+        running,
+      };
+    }, selector);
+
+  const settled = (selector: string) =>
+    page.evaluate(async (sel) => {
+      const el = document.querySelector(sel) as HTMLElement | null;
+      if (!el) return { found: false };
+      await Promise.allSettled(el.getAnimations().map((a) => a.finished));
+      return {
+        found: true,
+        display: getComputedStyle(el).display,
+        focusable: [...el.querySelectorAll('a[href], button, input')].filter(
+          (node) => node.getClientRects().length > 0,
+        ).length,
+      };
+    }, selector);
+
+  // The panel over the page.
+  await page.getByRole('button', { name: 'Evidence' }).click();
+  await expect(page.getByRole('dialog', { name: 'Evidence' })).toBeVisible();
+  await page.getByTitle('Close (Esc)').click();
+  const panelLeaving = await leaving('.panel-scrim');
+  // Asserted before the two below, which a vanished element would otherwise satisfy by absence.
+  expect(panelLeaving.found, 'the scrim is still in the document while it leaves').toBe(true);
+  expect(panelLeaving.display, 'the scrim is still painted while it leaves').not.toBe('none');
+  expect(panelLeaving.running, 'the scrim leaves over time').toContain('opacity');
+  const panelSettled = await settled('.panel-scrim');
+  expect(panelSettled.display).toBe('none');
+  expect(panelSettled.focusable, 'a closed panel holds nothing focusable').toBe(0);
+
+  // The scrubber at the pane's foot, whose height the document reserves.
+  await page.getByRole('button', { name: 'Rewind' }).click();
+  await expect(page.locator('.rewind')).toBeVisible();
+  await page.getByRole('button', { name: 'Rewind' }).click();
+  const footLeaving = await leaving('.rewind');
+  expect(footLeaving.found, 'the scrubber is still in the document while it leaves').toBe(true);
+  expect(footLeaving.display, 'the scrubber is still painted while it leaves').not.toBe('none');
+  expect(footLeaving.running, 'the scrubber leaves over time').toContain('opacity');
+  const footSettled = await settled('.rewind');
+  expect(footSettled.display).toBe('none');
+
+  /*
+   * The clearance the document keeps under the foot is measured from the foot's own box by
+   * `useFootSpace`, so a surface that lingers to fade has to give that room back when it finally
+   * goes. Left behind, it is a band of empty page below the last thing written on it.
+   */
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const pane = document.querySelector('.session-main') as HTMLElement;
+        const foot = document.querySelector('.session-foot') as HTMLElement;
+        return {
+          reserved: pane.style.getPropertyValue('--foot-space'),
+          actual: `${foot.getBoundingClientRect().height}px`,
+        };
+      }),
+    )
+    .toEqual({ reserved: expect.anything(), actual: expect.anything() });
+
+  const space = await page.evaluate(() => {
+    const pane = document.querySelector('.session-main') as HTMLElement;
+    const foot = document.querySelector('.session-foot') as HTMLElement;
+    return {
+      reserved: parseFloat(pane.style.getPropertyValue('--foot-space')),
+      actual: foot.getBoundingClientRect().height,
+    };
+  });
+  expect(space.reserved, 'the document stops reserving room the scrubber no longer needs').toBe(
+    space.actual,
+  );
+});
