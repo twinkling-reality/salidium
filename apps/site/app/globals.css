@@ -283,45 +283,13 @@ body:has(.home) {
 
 /* ---- left: the name and the claim ---- */
 
-/*
- * The name at the top and the claim below it, with the gap set rather than maximised.
- * `space-between` made the gap whatever was left over, which at 1512x900 was 689px of a 868px
- * panel: 79% of the surface was one hole, and it grew with the window. The claim still sits low,
- * because that is where the reference puts its supporting line, but it sits at a measured distance
- * instead of against the floor.
- */
 .card-claim {
   position: relative;
-  display: grid;
-  /*
-   * Four rows: the name, air, the claim, air. Splitting the space above and below the claim is
-   * what turns it from a block pushed against the floor into one placed at a distance, and it is
-   * what keeps the proportion steady as the window grows. Under `space-between` the whole surplus
-   * went to a single gap, which was 689px of an 868px panel at 1512x900 and got worse on a larger
-   * screen rather than better.
-   */
-  grid-template-rows: auto minmax(var(--space-12), 0.62fr) auto minmax(var(--space-10), 0.38fr);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
   padding: var(--space-8);
   overflow: hidden;
-}
-
-.card-claim-block {
-  position: relative;
-  grid-row: 3;
-  max-width: 34ch;
-}
-
-/*
- * The three facts that place the product, under the claim they qualify. Set at the reading size
- * rather than the display size: this is the one paragraph on the page and it is here to be read,
- * not to compete with the line above it.
- */
-.card-sub {
-  margin: var(--space-4) 0 0;
-  color: var(--text-secondary);
-  font-size: var(--text-md);
-  line-height: 1.5;
-  text-wrap: pretty;
 }
 
 /* The ruled ground marks where the page begins, and fades out rather than stopping. */
@@ -336,9 +304,9 @@ body:has(.home) {
   mask-image: linear-gradient(to bottom, #000, transparent 92%);
 }
 
-.card-brand-row {
+.card-brand-row,
+.card-claim h1 {
   position: relative;
-  grid-row: 1;
 }
 
 .card-brand-row {

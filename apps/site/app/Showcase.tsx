@@ -204,18 +204,8 @@ export function Showcase() {
           </button>
         </div>
 
-        <div className="card-claim-block">
-          <h1 id="hero-title">Agent output, turned into a visual report.</h1>
-          {/*
-           * Who it reads, what it says, and where it runs. The claim above is the proposition; a
-           * visitor who has never heard of Salidium still needs the three facts that place it, and
-           * they were nowhere on the page.
-           */}
-          <p className="card-sub">
-            It reads a Claude Code or Codex run and says what changed, what was checked, and what
-            needs you. Everything stays on your machine.
-          </p>
-        </div>
+        <h1 id="hero-title">Agent output, turned into a visual report.</h1>
+
       </div>
 
       <div className="card-ways">

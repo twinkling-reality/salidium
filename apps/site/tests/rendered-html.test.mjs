@@ -92,14 +92,6 @@ test("server-renders the Salidium landing page", async () => {
     );
   }
 
-  /*
-   * The page says what the product is and who it is for. It used to carry the claim and nothing
-   * else: "Claude Code", "Codex" and "your machine" appeared only in head metadata, and the
-   * capture is rendered far too small to read any of it off.
-   */
-  assert.match(html, /Claude Code or Codex run/);
-  assert.match(html, /stays on your machine/);
-
   // Three ways in, in order: the thing to do, then the two things to read.
   assert.match(
     html,
