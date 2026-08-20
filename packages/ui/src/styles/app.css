@@ -3714,7 +3714,8 @@ button.cov-cell:hover {
   width: 100%;
   max-width: var(--page-w);
   pointer-events: auto;
-  animation: arrive var(--motion-base) var(--ease);
+  /* `--rise` comes from `.session-foot`: this stands at the pane's foot, so it comes up into
+     place and goes back down out of it. `.arrives` (scale.css) carries both directions. */
 }
 
 .rewind .timeline {

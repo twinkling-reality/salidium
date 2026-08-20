@@ -126,34 +126,15 @@
   mask-image: linear-gradient(to top, transparent, #000 var(--fade));
 }
 
-/* ------------------------------------------------------------------ arriving */
-
 /*
- * Something that was not on screen a moment ago fades in and settles from the direction it came
- * from. One gesture, composed by everything that appears: a popover hangs under its trigger and
- * so comes down (`--rise` negative), the pane's bars stand at the foot and so come up.
+ * Arriving is `.arrives` in `scale.css`, not a keyframe here.
  *
- * Transform and opacity only, and translate rather than scale, for a reason that is not taste.
- * The page's clearance under the floating foot is measured from the foot's own box
- * (`useFootSpace`), so anything that changes that box animates the document's bottom padding with
- * it and fires a ResizeObserver on every frame. A translate leaves the box exactly where layout
- * put it; a scale does not, because `getBoundingClientRect` reports the transformed rectangle.
- *
- * It is achromatic on purpose. Colour in this app means a verdict (app.css, rule 4), and a bar
- * opening is not a verdict — an accent sweeping the border would be the one non-verdict thing on
- * screen wearing the verdict palette. Motion and opacity carry the arrival instead.
- *
- * Reduced motion needs no counterpart here, unlike the loading orb, which holds three static
- * weights because "in progress" is a state that persists and still has to be legible standing
- * still. An arrival is over the moment it finishes; with `tokens.css` switching animation off,
- * the bar is simply there, which is the whole of what the animation was going to say.
+ * It was `@keyframes arrive`, which could only describe the half where something appears: an
+ * animation cannot run on an element that has been removed, so everything using it was animated
+ * in and then deleted in a single frame. A transition can do both halves from one declaration,
+ * and the public site imports `scale.css` and not this file, so putting it there also ended the
+ * second copy the docs menu was running at the wrong speed.
  */
-@keyframes arrive {
-  from {
-    opacity: 0;
-    transform: translateY(var(--rise, -4px));
-  }
-}
 
 /* ---------------------------------------------------------------------- fields */
 
@@ -496,6 +477,9 @@
 .pop-panel.is-up {
   top: auto;
   bottom: calc(100% + 6px);
+  /* Standing above its trigger rather than under it, so it arrives and leaves the other way up.
+     The shared default was written for the usual case and had this one coming down into place. */
+  --rise: 4px;
 }
 
 .pop-panel.is-narrow {

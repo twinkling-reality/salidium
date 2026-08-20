@@ -9,6 +9,7 @@ import { relativeTime, shortHome, shortPath, timeOfDay } from '../lib/format.ts'
 import { providerLabel } from '../lib/providerLabel.ts';
 import { useFootSpace } from '../lib/useFootSpace.ts';
 import { useScrollState } from '../lib/useScrollState.ts';
+import { useStaysMounted } from '../lib/useStaysMounted.ts';
 import { type LiveError, useAppStore } from '../store/appStore.ts';
 import { BrandMark } from './Brand.tsx';
 import { ConnectionBadge, ThemeToggle, ToolButton } from './Controls.tsx';
@@ -74,6 +75,8 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
    * see `useFootSpace`.
    */
   const [paneRef, footRef] = useFootSpace<HTMLDivElement, HTMLDivElement>(`${rewindOpen}`);
+  /* It leaves by retracing its arrival, so it has to still be there while it does. */
+  const rewindMounted = useStaysMounted(rewindOpen);
 
   const liveState: RunState | undefined = live?.state;
   const scrubState: RunState | undefined = live?.scrub?.state;
@@ -387,8 +390,8 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
             It was once inside a panel, where dragging changed a page the reader could no longer
             see. Here the document moves above it and the handle stays under the pointer. */}
         <div className="session-foot" ref={footRef}>
-          {rewindOpen && (
-            <div className="rewind">
+          {rewindMounted && (
+            <div className={`rewind arrives ${rewindOpen ? 'is-open' : ''}`}>
               <button
                 type="button"
                 className="btn btn-float"
