@@ -595,7 +595,26 @@
   background: var(--bg);
 }
 
+/*
+ * The run of controls, pinned to the pane's trailing edge and allowed to be more than one line
+ * high.
+ *
+ * It was a single non-wrapping line, and the auto margin is the only thing holding it against
+ * that edge: once the controls are wider than the space, there is no free space for the margin to
+ * take, the whole group slides back to the leading edge, and both ends are wrong at once. At
+ * 390 px the five controls measure 386 px against 366 px of room, so Evidence started at x=12
+ * underneath the fixed recovery control and the theme toggle ran 8 px past the window, inside an
+ * `.app` that hides its overflow rather than scrolling it. Neither end could be reached.
+ *
+ * Wrapping is what the row does about it, rather than scrolling or dropping the labels: a control
+ * that has moved to a second line is still legible and still one tap away, and a label is the
+ * only thing naming these four on a touch device, where the `title` that would otherwise stand in
+ * is never shown. The lines stay trailing-aligned, so the group reads as one object wherever it
+ * breaks.
+ */
 .session-actions-end {
+  flex-wrap: wrap;
+  justify-content: flex-end;
   margin-left: auto;
 }
 
@@ -2148,8 +2167,9 @@
     position: fixed;
     top: var(--space-2);
     left: var(--space-2);
-    /* The session toolbar is later in the DOM and spans this corner on narrow screens. Keep the
-       recovery control above that toolbar so Evidence cannot intercept its tap. */
+    /* The session toolbar is sticky, opaque and later in the DOM, so at the toolbar's own layer
+       this control would be painted out of sight rather than merely behind something. The rule
+       below keeps the two out of each other's way; this keeps the recovery control visible. */
     z-index: calc(var(--z-toolbar) + 1);
     display: block;
   }
@@ -2157,6 +2177,18 @@
   /* App owns the always-present mobile trigger, including while a session is loading or failed. */
   .app.no-side .session-actions > .btn:first-child {
     display: none;
+  }
+
+  /*
+   * The trigger above is fixed, so it costs the row no width, and the row was laid out straight
+   * underneath it: at 390 px the Evidence button began at x=12 and the icon it paints at 21→35
+   * sat wholly inside the trigger's 8→36 box, so a tap on the icon a reader can see opened the
+   * session list. The stacking order settled which control won that tap; it could not stop the
+   * two being in the same place. The row starts clear of the trigger instead, which also makes
+   * the one control drawn there read as the head of the row rather than as a mark laid over it.
+   */
+  .app.no-side .session-actions {
+    padding-left: calc(var(--space-2) + var(--control-h) + var(--space-2));
   }
 
   /*
