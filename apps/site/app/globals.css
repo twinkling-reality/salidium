@@ -45,6 +45,28 @@
    */
   --stagger: 70ms;
 
+  /*
+   * The height of a control on this site, which had none.
+   *
+   * The application fixes every control at `--control-h`, 28px, and that is not this: 28 is right
+   * for a 13px shell and small under a 16px document. What the site had instead was nothing, so
+   * each control came out at whatever its own padding and leading added up to. The two halves of
+   * the agent control measured 36.75px at 1440x900 on 2026-08-20 (8 + 8 of padding, an 18.75px
+   * line, and a border on each edge), standing in the same row as a theme toggle already fixed at
+   * 32. Two controls side by side, four and three quarter pixels apart, and neither number on the
+   * 4px grid the rest of the system is spaced on.
+   *
+   * 32 rather than 36 because the toggle was already there and its reasoning was already recorded:
+   * 32 is the rung of the grid nearest what a control on this site was, and taking it moved
+   * nothing. Choosing 36 would have meant moving the one control that had already been settled in
+   * order to leave the two that had not.
+   *
+   * Its own name rather than a redeclared `--control-h`. The site inherits the scale and does not
+   * overwrite it; the shell's control height still means what it says in `scale.css`, and this
+   * says what a control is under a document.
+   */
+  --doc-control-h: 32px;
+
   /* Fainter than a border, because ruled paper is a ground and a border is an edge. */
   --grid-line: color-mix(in srgb, var(--border) 62%, var(--bg));
 
@@ -375,16 +397,16 @@ body:has(.home) {
 /*
  * The only icon-only control on the page, because it is the only thing here that is not a place.
  *
- * 32, not 34. The grid this whole system is spaced on is 4px and 34 is not on it; the application
- * fixes every control at `--control-h`, 28px, which is right for a 13px shell and small under a
- * 16px document. 32 is the rung of the grid nearest what this already was, so it lands on the
- * system without changing what the panel looks like.
+ * 32, not 34. The grid this whole system is spaced on is 4px and 34 is not on it, and 32 is the
+ * rung nearest what this already was, so it landed on the system without changing what the panel
+ * looks like. That number is now `--doc-control-h`, declared at the head of this file, because the
+ * agent control in the same row was reaching a different one.
  */
 .theme-toggle {
   display: grid;
   flex-shrink: 0;
-  width: 32px;
-  height: 32px;
+  width: var(--doc-control-h);
+  height: var(--doc-control-h);
   place-items: center;
   border-radius: var(--radius-sm);
   color: var(--text-tertiary);
@@ -1056,10 +1078,16 @@ h1 {
  * other ways out. Split, because copying is the common case and a menu that has to be opened to
  * reach it costs a click on every visit.
  */
+/*
+ * One height, declared once and shared by both halves. `align-items: stretch` is what carries it
+ * to the second half, which is the job it was already doing when the first half's own padding was
+ * deciding the number.
+ */
 .doc-agent {
   position: relative;
   display: flex;
   align-items: stretch;
+  height: var(--doc-control-h);
 }
 
 .doc-agent-copy,
@@ -1076,8 +1104,9 @@ h1 {
     color var(--motion-fast) var(--ease);
 }
 
+/* Inset only. The height is the row's, above, so vertical padding would only fight it. */
 .doc-agent-copy {
-  padding: var(--space-2) var(--space-3);
+  padding: 0 var(--space-3);
   border-radius: var(--radius-sm) 0 0 var(--radius-sm);
 }
 
