@@ -2,8 +2,8 @@
   "evidence": {
     "width": 880,
     "height": 232,
-    "light": "evidence-light-28dc73eb.png",
-    "dark": "evidence-dark-be0fc114.png"
+    "light": "evidence-light-8f006b86.png",
+    "dark": "evidence-dark-82ff02c3.png"
   },
   "gate": {
     "width": 485,
@@ -14,8 +14,8 @@
   "history": {
     "width": 1064,
     "height": 560,
-    "light": "history-light-6cbbe7aa.png",
-    "dark": "history-dark-30b1ac33.png"
+    "light": "history-light-bb6204b9.png",
+    "dark": "history-dark-44561803.png"
   },
   "masthead": {
     "width": 892,
@@ -26,25 +26,25 @@
   "quantities": {
     "width": 320,
     "height": 412,
-    "light": "quantities-light-dbd7eba4.png",
-    "dark": "quantities-dark-cab6c499.png"
+    "light": "quantities-light-36a25eaf.png",
+    "dark": "quantities-dark-20046d80.png"
   },
   "record": {
     "width": 760,
     "height": 381,
-    "light": "record-light-3881d3e7.png",
-    "dark": "record-dark-ee9b9a45.png"
+    "light": "record-light-6c10ae0a.png",
+    "dark": "record-dark-e4e42922.png"
   },
   "rewind": {
     "width": 744,
     "height": 69,
-    "light": "rewind-light-740d95b7.png",
-    "dark": "rewind-dark-086ebb47.png"
+    "light": "rewind-light-afae774c.png",
+    "dark": "rewind-dark-ea28d353.png"
   },
   "sessions": {
     "width": 940,
     "height": 560,
-    "light": "sessions-light-e495ea3b.png",
-    "dark": "sessions-dark-98285b02.png"
+    "light": "sessions-light-c358889d.png",
+    "dark": "sessions-dark-648f39d8.png"
   }
 }
