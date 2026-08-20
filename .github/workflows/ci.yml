@@ -78,6 +78,22 @@ jobs:
 
           node "$RUNNER_TEMP/install/bundle/salidium.mjs" stop
 
+      # The sync contract is the only separately published package, and its packed shape is a
+      # promise to consumers outside this repository. Checking it only in the release workflow
+      # would surface a broken export map or a missing fixture at the moment of an irreversible
+      # publish rather than on the pull request that caused it.
+      - name: Pack and consume the sync contract outside the monorepo
+        run: |
+          set -euo pipefail
+          pnpm --filter @salidium/sync-contract exec npm pack --pack-destination "$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/contract-consumer"
+          cd "$RUNNER_TEMP/contract-consumer"
+          echo '{"type":"module"}' > package.json
+          npm install "$RUNNER_TEMP"/salidium-sync-contract-*.tgz --ignore-scripts --no-audit --no-fund
+          cp "$GITHUB_WORKSPACE/scripts/verify-sync-contract-package.mjs" check.mjs
+          node check.mjs
+          node --conditions=development check.mjs
+
   platform-smoke:
     name: Platform smoke (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

@@ -183,7 +183,7 @@ This protects the local service from ordinary cross-origin access and accidental
 not a sandbox against another process already running with the same operating-system user account.
 
 There is no Salidium telemetry in the local product. A future hosted service must be an explicit,
-separate trust boundary; see [open-core.md](open-core.md).
+separate trust boundary; see [open-source-boundary.md](open-source-boundary.md).
 
 ## Extension boundaries
 
@@ -208,6 +208,37 @@ would make transactions, replay, migrations, retention, and raw-evidence guarant
 plug-in. Future external storage should therefore consume a versioned outbox, export, or replication
 stream while SQLite retains local authority, rather than substitute an arbitrary backend.
 
+### Intelligence sync foundation
+
+Store schema 6 adds empty `sync_*` and `intelligence_*` tables. The migration performs no historical
+backfill, creates no identity or destination, and enables no network activity. A destination creates
+a stable random replica identity and two independently ordered durable lanes: data for puts and
+control for consent, revocation, deletion, and scope fences. Control can therefore overtake data
+that was queued while a device was offline. Senders read only committed SQLite rows; live registry
+listeners are not an authority because they can fire before the local transaction commits.
+
+The export unit is never a canonical event, checkpoint, `RunState`, or provider record. Those forms
+contain prompts, commands, diffs, output, working directories, transcript paths, and source
+identifiers. A strict allowlisted intelligence item contains bounded semantic fields and opaque
+evidence descriptors. The local evidence map retains the provider lookup separately. Unknown fields
+are rejected, not silently stripped. Secret redaction remains defense in depth and is not treated as
+export minimization.
+
+The contract vocabulary distinguishes observations, attributed claims, decisions, intentions,
+commitments, outcomes, entities, relationships, explicit and inferred preferences, durable memory,
+and inference. It separates verification state from calibrated probability, and working memory is
+not durable. Phase 0 deliberately produces only explicit user-confirmed decision threads: selected
+option, rejected alternatives, rationale, owner, scope, status, lifecycle, and corrections or
+supersessions. Existing agent-message classification and model output cannot promote themselves to
+a decision.
+
+Every operation has a local stream and replica namespace, lane position, stable operation id,
+predecessor, and canonical content digest. A receiver must treat the same position and same digest as
+replay, and the same position with different content as a security conflict. Batch acknowledgement
+means durable transport acceptance only. Deletion completion is a separate receipt covering hosted
+projections, search, embeddings, caches, and the backup restore fence; local tombstones remain until
+that fact can be reconciled.
+
 Reusable contracts needed by a future hosted service belong in this repository. Accounts, billing,
 team synchronization, hosted retention, organization administration, and managed-service operations
 do not.
@@ -227,6 +258,11 @@ do not.
 - The installed CLI does not yet load third-party provider packages. The descriptor and store
   factory surfaces are internal and embedding contracts, not an executable plug-in marketplace.
 - Large per-session change histories are served as a whole rather than cursor-paged.
+- The schema-6 outbox has no destination UI or network sender yet and syncs nothing by default.
+- Raw evidence is local. A second device may receive the confirmed decision and an explicit
+  source-unavailable state, never a claim that an opaque evidence reference is remote proof.
+- Phase 0 defines transport and lifecycle invariants, not demonstrated retrieval quality or product
+  value. Cross-device recall remains gated on a released contract and an evaluated hosted consumer.
 
 These limitations are product constraints, not reasons to weaken the evidence model. Until a case
 can be supported, the report should say less or say unknown.

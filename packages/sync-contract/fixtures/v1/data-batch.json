@@ -1,0 +1,130 @@
+{
+  "contract": "salidium.sync-batch",
+  "contractVersion": 1,
+  "streamId": "30000000-0000-4000-8000-000000000004",
+  "replicaId": "30000000-0000-4000-8000-000000000005",
+  "replicaGeneration": 1,
+  "lane": "data",
+  "afterPosition": -1,
+  "operations": [
+    {
+      "contract": "salidium.sync-operation",
+      "contractVersion": 1,
+      "streamId": "30000000-0000-4000-8000-000000000004",
+      "replicaId": "30000000-0000-4000-8000-000000000005",
+      "replicaGeneration": 1,
+      "lane": "data",
+      "position": 0,
+      "operationId": "30000000-0000-4000-8000-000000000020",
+      "occurredAt": "2026-08-19T12:00:00.000Z",
+      "contentDigest": "sha256:70e25496db2a2386f01b792bc17c346fad0651bfce0d0ec4e284749c35df2178",
+      "type": "item.put",
+      "grant": {
+        "grantId": "30000000-0000-4000-8000-000000000001",
+        "revision": 1
+      },
+      "item": {
+        "contract": "salidium.intelligence-item",
+        "contractVersion": 1,
+        "itemId": "30000000-0000-4000-8000-000000000010",
+        "originReplicaId": "30000000-0000-4000-8000-000000000005",
+        "revision": 2,
+        "scope": {
+          "kind": "project",
+          "projectId": "30000000-0000-4000-8000-000000000003"
+        },
+        "capturedAt": "2026-08-19T12:00:00.000Z",
+        "effectiveFrom": "2026-08-19T12:00:00.000Z",
+        "effectiveUntil": "2026-09-01T12:00:00.000Z",
+        "epistemic": "reported",
+        "assessment": {
+          "mode": "verification",
+          "state": "verified",
+          "method": {
+            "id": "explicit-user-confirmation",
+            "version": "1"
+          }
+        },
+        "sensitivity": "internal",
+        "lifecycle": {
+          "state": "active",
+          "validFrom": "2026-08-19T12:00:00.000Z",
+          "validUntil": "2026-09-01T12:00:00.000Z",
+          "retention": {
+            "policyId": "consent-30d",
+            "expiresAt": "2026-09-18T12:00:00.000Z",
+            "deleteWithEvidence": true
+          }
+        },
+        "consent": {
+          "grantId": "30000000-0000-4000-8000-000000000001",
+          "revision": 1
+        },
+        "evidence": [
+          {
+            "evidenceId": "30000000-0000-4000-8000-000000000012",
+            "role": "supports",
+            "authority": "user-explicit",
+            "capturedAt": "2026-08-19T12:00:00.000Z",
+            "independenceId": "30000000-0000-4000-8000-000000000014"
+          },
+          {
+            "evidenceId": "30000000-0000-4000-8000-000000000013",
+            "role": "supports",
+            "authority": "provider-record",
+            "capturedAt": "2026-08-19T12:00:00.000Z",
+            "independenceId": "30000000-0000-4000-8000-000000000014"
+          },
+          {
+            "evidenceId": "30000000-0000-4000-8000-000000000016",
+            "role": "contradicts",
+            "authority": "model",
+            "capturedAt": "2026-08-19T12:00:00.000Z",
+            "independenceId": "30000000-0000-4000-8000-000000000015"
+          }
+        ],
+        "links": [
+          {
+            "relation": "corrects",
+            "target": {
+              "itemId": "30000000-0000-4000-8000-000000000010",
+              "revision": 1
+            }
+          },
+          {
+            "relation": "about",
+            "target": {
+              "itemId": "30000000-0000-4000-8000-000000000011",
+              "revision": 1
+            }
+          }
+        ],
+        "redactionPolicyVersion": "secrets-v1",
+        "minimizationPolicyVersion": "decision-v1",
+        "kind": "decision",
+        "question": "What crosses the local boundary?",
+        "selected": "Only a minimized, user-confirmed decision thread.",
+        "rationale": "Raw provider evidence stays local; the marker ghp_[GITHUB_TOKEN] shows a redacted secret is not linkable.",
+        "owner": "authenticated-user",
+        "status": "active",
+        "alternatives": [
+          {
+            "label": "Upload canonical events",
+            "disposition": "rejected",
+            "rationale": "They carry prompts, paths, commands, diffs, and output."
+          },
+          {
+            "label": "Upload session summaries",
+            "disposition": "deferred",
+            "rationale": "A generated summary is not evidence of a decision."
+          },
+          {
+            "label": "Upload nothing at all",
+            "disposition": "unknown",
+            "rationale": "Kept so a rejected option can never render as the chosen one."
+          }
+        ]
+      }
+    }
+  ]
+}

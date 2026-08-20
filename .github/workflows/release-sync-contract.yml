@@ -1,0 +1,153 @@
+name: Release sync contract
+
+# A contract release changes what private consumers may legally and technically depend on. It is
+# manual-only and publishes an existing, reviewed tag after a protected environment approval.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing tag, for example sync-contract-v0.1.0
+        required: true
+        type: string
+      npm_tag:
+        description: npm distribution tag
+        required: true
+        default: next
+        type: choice
+        options: [next, latest]
+      authentication:
+        description: OIDC normally; token only for the first package version
+        required: true
+        default: trusted-publisher
+        type: choice
+        options: [trusted-publisher, bootstrap-token]
+      confirm:
+        description: Type publish @salidium/sync-contract@VERSION, or bootstrap for first publish
+        required: true
+        type: string
+
+concurrency:
+  group: release-sync-contract
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      package_sha256: ${{ steps.pack.outputs.package_sha256 }}
+    steps:
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ inputs.release_tag }}
+          fetch-depth: 0
+      - uses: pnpm/action-setup@d15e628ca66d93ee5f352c71671a7bc6a97af5c9 # v6.0.8
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Verify the explicit release request
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          AUTHENTICATION: ${{ inputs.authentication }}
+        run: |
+          node <<'NODE'
+          const { execFileSync } = require('node:child_process');
+          const pkg = require('./packages/sync-contract/package.json');
+          const expectedTag = `sync-contract-v${pkg.version}`;
+          const verb = process.env.AUTHENTICATION === 'bootstrap-token' ? 'bootstrap' : 'publish';
+          const expectedConfirmation = `${verb} @salidium/sync-contract@${pkg.version}`;
+          if (process.env.RELEASE_TAG !== expectedTag) throw new Error(`release tag must be ${expectedTag}`);
+          if (process.env.CONFIRM !== expectedConfirmation)
+            throw new Error(`confirmation must be exactly: ${expectedConfirmation}`);
+          const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+          const tagged = execFileSync('git', ['rev-list', '-n', '1', expectedTag], { encoding: 'utf8' }).trim();
+          const main = execFileSync('git', ['rev-parse', 'refs/remotes/origin/main'], { encoding: 'utf8' }).trim();
+          if (tagged !== head || main !== head) throw new Error('release tag must point at current main');
+          if (process.env.GITHUB_REF !== 'refs/heads/main' || process.env.GITHUB_SHA !== head)
+            throw new Error('dispatch from current main so provenance identifies the source');
+          NODE
+
+      - name: Require successful CI for the release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_sha=$(git rev-parse HEAD)
+          successful=$(gh api -H 'Accept: application/vnd.github+json' \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$release_sha&status=success&per_page=20" \
+            --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")] | length')
+          test "$successful" -gt 0
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level high
+      - run: pnpm lint
+      - run: pnpm build
+      - run: pnpm test
+
+      - name: Pack and consume outside the monorepo
+        id: pack
+        run: |
+          pnpm --filter @salidium/sync-contract exec npm pack --pack-destination "$RUNNER_TEMP"
+          package=$(find "$RUNNER_TEMP" -maxdepth 1 -name 'salidium-sync-contract-*.tgz' -type f -print -quit)
+          test -n "$package"
+          echo "package=$package" >> "$GITHUB_OUTPUT"
+          echo "package_sha256=$(sha256sum "$package" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          mkdir "$RUNNER_TEMP/consumer"
+          npm install --prefix "$RUNNER_TEMP/consumer" "$package" --ignore-scripts --no-audit --no-fund
+          cd "$RUNNER_TEMP/consumer"
+          cp "$GITHUB_WORKSPACE/scripts/verify-sync-contract-package.mjs" check.mjs
+          node check.mjs
+          node --conditions=development check.mjs
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: salidium-sync-contract-release-package
+          path: ${{ steps.pack.outputs.package }}
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm-release
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: salidium-sync-contract-release-package
+          path: ${{ runner.temp }}/release
+      - name: Verify package crossing the job boundary
+        env:
+          EXPECTED_SHA256: ${{ needs.verify.outputs.package_sha256 }}
+        run: |
+          package=$(find "$RUNNER_TEMP/release" -name 'salidium-sync-contract-*.tgz' -type f -print -quit)
+          test "$(sha256sum "$package" | cut -d ' ' -f 1)" = "$EXPECTED_SHA256"
+      - name: Publish through the trusted publisher
+        if: inputs.authentication == 'trusted-publisher'
+        run: npm publish "$RUNNER_TEMP"/release/salidium-sync-contract-*.tgz --access public --provenance --tag "${{ inputs.npm_tag }}"
+      - name: Bootstrap the first npm version
+        if: inputs.authentication == 'bootstrap-token'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
+        run: |
+          test -n "$NODE_AUTH_TOKEN"
+          if npm view @salidium/sync-contract version >/dev/null 2>&1; then
+            echo "@salidium/sync-contract already exists; use trusted publishing"
+            exit 1
+          fi
+          npm publish "$RUNNER_TEMP"/release/salidium-sync-contract-*.tgz --access public --provenance --tag "${{ inputs.npm_tag }}"

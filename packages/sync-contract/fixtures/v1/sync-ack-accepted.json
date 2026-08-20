@@ -1,0 +1,8 @@
+{
+  "contract": "salidium.sync-ack",
+  "contractVersion": 1,
+  "streamId": "30000000-0000-4000-8000-000000000004",
+  "replicaGeneration": 1,
+  "lane": "control",
+  "acceptedThrough": 3
+}

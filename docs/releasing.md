@@ -1,8 +1,8 @@
 # Releasing and rollback
 
-The only public npm artifact is `salidium` from `packages/cli`; the private workspace packages and
-UI are bundled into it. The website is a separate artifact and is not deployed by the release
-workflow.
+The public npm artifacts are the bundled `salidium` CLI and the narrow
+`@salidium/sync-contract` interoperability package. All other workspace packages remain private.
+The website is separate and neither release workflow deploys it.
 
 ## Prepare
 
@@ -46,6 +46,33 @@ Afterward, verify from an anonymous shell with `npm view salidium@<version>` and
 home with `npx salidium@<version> --version`. Verify public documentation and repository links
 separately before promoting the website; the workflow does not change repository visibility or
 deploy the site.
+
+### Sync contract
+
+The contract has an independent `0.x` version and tag `sync-contract-v<version>`. Before tagging,
+review schema compatibility, retain old fixtures, and run the full suite. Dispatch **Release sync
+contract** from current `main` with `next` while the API is experimental and type
+`publish @salidium/sync-contract@<version>` exactly. Its verification job packs the library, installs
+it into a directory outside the monorepo, rejects workspace dependencies, checks that every
+`exports` condition resolves to a file the tarball actually contains, imports the public runtime
+surface under both the default and `development` resolution paths, and validates every retained
+fixture and every sync operation type before a protected publisher receives the checksummed tarball.
+
+Both resolution paths matter because the failure they catch is invisible to a single import: a
+condition whose target is missing from `files` installs cleanly and breaks only for the consumer
+that requests that condition.
+
+Fixtures under `packages/sync-contract/fixtures/<wire version>/` are write-once. They record what a
+released wire version accepted, so they are added while that version is being prepared and are never
+edited or regenerated afterwards. A fixture produced by the code under test proves only that the
+code agrees with itself, and a fixture written after publication cannot testify about what shipped.
+
+For the first scoped package version, use the same short-lived bootstrap process and exact
+confirmation `bootstrap @salidium/sync-contract@<version>`, then configure npm trusted publishing
+for workflow `release-sync-contract.yml` and remove the token. Publishing, tagging, pushing, or
+promoting a distribution tag always requires explicit maintainer approval. Private consumers must
+pin a released version and digest and must never depend on a sibling path, tarball from an
+unreleased checkout, branch, or copied source.
 
 ## Roll back
 

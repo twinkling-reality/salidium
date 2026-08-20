@@ -2,7 +2,7 @@
   "name": "salidium-monorepo",
   "private": true,
   "version": "0.1.0",
-  "description": "Salidium: translates coding-agent work into a trustworthy, structured, visual explanation.",
+  "description": "Turn Claude Code and Codex sessions into a clear, evidence-linked report of what changed, why, what was verified, and what needs you.",
   "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@11.22.0",

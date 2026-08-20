@@ -1,0 +1,15 @@
+{
+  "contract": "salidium.sync-ack",
+  "contractVersion": 1,
+  "streamId": "30000000-0000-4000-8000-000000000004",
+  "replicaGeneration": 1,
+  "lane": "data",
+  "acceptedThrough": 4,
+  "retryAfterMs": 30000,
+  "rejection": {
+    "position": 5,
+    "code": "grant-revoked",
+    "retryable": false
+  },
+  "reconciliationRequired": "inventory-mismatch"
+}

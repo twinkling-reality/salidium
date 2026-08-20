@@ -1,12 +1,14 @@
 {
   "files": [],
   "references": [
+    { "path": "packages/sync-contract" },
     { "path": "packages/protocol" },
     { "path": "packages/core" },
     { "path": "packages/adapter-kit" },
     { "path": "packages/adapters/claude-code" },
     { "path": "packages/adapters/codex" },
     { "path": "packages/daemon" },
+    { "path": "packages/sync" },
     { "path": "packages/ui" },
     { "path": "packages/cli" }
   ]
