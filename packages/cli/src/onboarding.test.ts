@@ -51,7 +51,18 @@ describe('first-run onboarding', () => {
     expect(first.prompts()).toBe(1);
     expect(result.consent).toBe('approved');
     expect(result.changed.map((change) => change.provider)).toEqual(['claude-code', 'codex']);
-    expect(result.validations.every((validation) => validation.level === 'ok')).toBe(true);
+    /*
+     * Nothing needs attention. Not "every validation is ok": Codex also carries a standing `info`
+     * caveat, because a hook it has not been shown is configured on disk and inert in the agent,
+     * and that is a fact about a healthy install rather than a problem with one.
+     */
+    expect(result.validations.some((validation) => validation.level === 'attention')).toBe(false);
+    expect(
+      result.validations.some(
+        (validation) =>
+          validation.level === 'info' && /open \/hooks in Codex/.test(validation.message),
+      ),
+    ).toBe(true);
     expect(first.output()).toMatch(/Detected: Claude Code, Codex/);
     expect(first.output()).toMatch(/Permission requested/);
     expect(first.output()).toMatch(/Codex requires one more action/);

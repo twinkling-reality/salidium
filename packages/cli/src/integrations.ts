@@ -49,6 +49,13 @@ interface ProviderDefinition {
   id: HookProviderId;
   name: string;
   command: string;
+  /*
+   * Something true whenever this provider is connected, which Salidium cannot verify for itself.
+   * It is reported every time rather than once, because the alternative is a one-shot line printed
+   * at install time and recoverable from nowhere: `doctor` said "configured" while the hooks sat
+   * untrusted and nothing fired.
+   */
+  standingNote?: string;
   stateDirectory(context: IntegrationContext): string;
   historyDirectories(context: IntegrationContext): string[];
   install(context: IntegrationContext, remove: boolean): InstallResult;
@@ -104,7 +111,13 @@ function createIntegration(definition: ProviderDefinition): ProviderIntegration 
         ];
       }
       if (inspection.status === 'configured') {
-        return [{ level: 'ok', message: `${definition.name} connection is configured` }];
+        const ok: IntegrationValidation = {
+          level: 'ok',
+          message: `${definition.name} connection is configured`,
+        };
+        return definition.standingNote
+          ? [ok, { level: 'info', message: definition.standingNote }]
+          : [ok];
       }
       if (inspection.status === 'partial') {
         return [
@@ -149,6 +162,8 @@ const codex = createIntegration({
   id: 'codex',
   name: 'Codex',
   command: 'codex',
+  standingNote:
+    'Codex honours a hook only once it has been trusted there: open /hooks in Codex. Salidium cannot tell whether that has been done',
   stateDirectory(context) {
     return environment(context).CODEX_HOME ?? join(context.userHome, '.codex');
   },

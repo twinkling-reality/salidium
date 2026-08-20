@@ -346,6 +346,10 @@ async function main(argv: string[]): Promise<number> {
           for (const validation of provider.validate(context)) {
             if (validation.level === 'attention')
               process.stdout.write(`  needs attention: ${validation.message}\n`);
+            // Someone who typed `install-hooks codex` is asking about the hooks, so the standing
+            // caveat belongs in the answer whether or not this run changed a file.
+            else if (validation.level === 'info')
+              process.stdout.write(`  note: ${validation.message}\n`);
           }
         }
       }
