@@ -138,7 +138,14 @@ code {
   position: absolute;
   top: var(--space-2);
   left: var(--space-2);
-  z-index: 20;
+  /*
+   * A rung, not a number between two of them. This was 20, which lands between `--z-float` and
+   * `--z-panel` with nothing saying why, and the point of a declared scale is that reading it
+   * tells you the order. This page has no panel and no drawer, so it takes the panel's rung as
+   * the only thing here that is summoned over the document rather than part of it, and it clears
+   * the head and the agent menu, which are the two layers it has to beat.
+   */
+  z-index: var(--z-panel);
   padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-sm);
   background: var(--bg);
@@ -933,7 +940,9 @@ h1 {
 .doc-head {
   position: sticky;
   top: 0;
-  z-index: 5;
+  /* The rungs come from `scale.css`, which this file imports, rather than being restated as the
+     numbers they happen to be. The comment there records the bug that came of writing them out. */
+  z-index: var(--z-toolbar);
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -1031,7 +1040,7 @@ h1 {
 
 .doc-agent-menu {
   position: absolute;
-  z-index: 6;
+  z-index: var(--z-float);
   top: calc(100% + var(--space-2));
   right: 0;
   display: grid;

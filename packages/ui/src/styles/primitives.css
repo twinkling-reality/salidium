@@ -518,7 +518,9 @@
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  z-index: 40;
+  /* The record drawer's rung, by name. This file's own header says components must not redeclare
+     what the scale declares, and this was the one place in it that did. */
+  z-index: var(--z-drawer);
   width: max-content;
   max-width: 320px;
   min-width: 236px;
