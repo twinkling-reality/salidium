@@ -3292,7 +3292,15 @@
   align-items: center;
   justify-content: center;
   padding: var(--space-5);
-  animation: panel-in var(--motion-fast) var(--ease);
+  /*
+   * No `--rise`: a surface this size travelling even a few pixels reads as the page moving under
+   * the reader rather than as a card arriving, so it only fades. `.arrives` (scale.css) carries
+   * both directions.
+   *
+   * It was 120ms in and one frame out. A scrim across the whole window is the definition of
+   * "anything that changes the shape of the page", which the doctrine puts on `base`, and the
+   * shared idiom is on `base`, so taking it fixes the duration as well as the exit.
+   */
 }
 
 /* The dimmed page behind the card, and the control that closes it by clicking away. */
@@ -3442,18 +3450,6 @@
 /* The panel already names the section in its head; the column must not say it again. */
 .rp-cols.is-single > .rp-block > .rp-title {
   display: none;
-}
-
-@keyframes panel-in {
-  from {
-    opacity: 0;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .panel-scrim {
-    animation: none;
-  }
 }
 
 /*

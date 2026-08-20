@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useModalFocus } from '../lib/useModalFocus.ts';
+import { useStaysMounted } from '../lib/useStaysMounted.ts';
 import { type PanelId, useAppStore } from '../store/appStore.ts';
 import { Icon } from './Icon.tsx';
 
@@ -52,6 +53,7 @@ export function Panel({
   const active = sections?.find((s) => s.key === current) ?? sections?.[0];
 
   useModalFocus({ active: open, containerRef: cardRef, onClose: closePanel });
+  const mounted = useStaysMounted(open);
 
   // Live events and rewind both replace the section descriptors. Never retain a selection whose
   // renderer has disappeared; the first surviving section becomes the concrete selection.
@@ -60,9 +62,13 @@ export function Panel({
     if (current !== section) setSection(current);
   }, [open, current, section]);
 
-  if (!open) return null;
+  /*
+   * Not `!open`: the scrim fades out rather than disappearing, and a subtree React has already
+   * removed has nothing left to fade. It stays from the first time it is opened.
+   */
+  if (!mounted) return null;
   return (
-    <div className="panel-scrim">
+    <div className={`panel-scrim arrives ${open ? 'is-open' : ''}`}>
       {/* The close control is inside the dialog. The backdrop is pointer affordance only, so it
           stays out of the tab order and the modal has exactly one keyboard boundary. */}
       <div className="panel-backdrop" aria-hidden="true" onClick={closePanel} />
