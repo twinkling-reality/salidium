@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { readToken, rememberToken, resolveToken } from './api/client.ts';
 import { BrandLockup, BrandMark } from './components/Brand.tsx';
-import { ConnectionBadge, ToolButton } from './components/Controls.tsx';
+import { ConnectionBadge, DOCS, ToolButton } from './components/Controls.tsx';
 import { Icon } from './components/Icon.tsx';
 import { RawDrawer } from './components/RawDrawer.tsx';
 import { MarksKey, SessionList } from './components/SessionList.tsx';
@@ -13,12 +13,6 @@ import { useAppStore } from './store/appStore.ts';
 
 /** The one command that ends up back here with a token attached, named once because it is quoted twice. */
 const COMMAND = 'salidium open';
-
-/**
- * The only link in the application. The product had none at all, so a reader who wanted to know
- * what a word on a report meant had nowhere to go from inside the thing that printed it.
- */
-const DOCS = 'https://salidium.com/docs';
 
 /** Named for the platform, because "press the copy key" is not something anyone has ever pressed. */
 const COPY_KEY = /Mac|iPhone|iPad/.test(navigator.platform ?? '') ? '\u2318C' : 'Ctrl+C';
@@ -223,9 +217,9 @@ export function App() {
       <main className="main" inert={mobileSidebarOpen} aria-hidden={mobileSidebarOpen || undefined}>
         {selectedId ? (
           <SessionView key={selectedId} sessionId={selectedId} now={now} />
-        ) : (
+        ) : sessionCount === 0 ? (
           <div className="main-empty">
-            {sessionCount === 0 ? (
+            {
               /*
                * The first screen anyone sees, and it used to be "Nothing to show yet." on its own:
                * a state described, in the larger half of a window whose smaller half was already
@@ -246,11 +240,22 @@ export function App() {
                   Read the documentation
                 </a>
               </div>
-            ) : (
-              <p className="muted">Pick a session to see what its agent did.</p>
-            )}
+            }
           </div>
-        )}
+        ) : /*
+         * Nothing, deliberately, and only ever for one frame.
+         *
+         * This branch used to print "Pick a session to see what its agent did." and no reader has
+         * ever seen it: the effect above selects the most recent session the moment nothing is
+         * selected, so `selectedId` is never empty while the list has anything in it, and when it
+         * has nothing the first-run screen takes the other branch. A sentence that cannot be
+         * reached is a sentence nobody maintains against the product it describes.
+         *
+         * What is left is the gap between the render that finds no selection and the effect that
+         * makes one, which is a frame. Printing the first-run copy there would tell a reader with
+         * twenty-four sessions that a report appears when their agent runs.
+         */
+        null}
       </main>
       <div
         className="raw-layer"
