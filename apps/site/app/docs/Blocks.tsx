@@ -83,7 +83,19 @@ export function Blocks({ blocks }: { blocks: Block[] }) {
         const s = (SHOTS as Record<string, Shot>)[block.name];
         if (!s) return null;
         return (
-          <figure className={block.cropped ? "doc-shot is-cropped" : "doc-shot"} key={i}>
+          /*
+           * Focusable, and named. On a narrow window the figure is a horizontal scroller holding
+           * 870px of picture in 350px of column, and with nothing focusable in it a keyboard could
+           * not reach the right-hand two thirds of any capture on the site. `tabindex` and a role
+           * are what make a scroll container a place the keyboard can go.
+           */
+          <figure
+            className={block.cropped ? "doc-shot is-cropped" : "doc-shot"}
+            key={i}
+            tabIndex={0}
+            role="group"
+            aria-label={block.alt}
+          >
             <img
               className="shot-light"
               src={`/docs/${s.light}`}

@@ -35,6 +35,19 @@ const eslintConfig = defineConfig([
         version: "detect",
       },
     },
+    rules: {
+      /*
+       * A scroll container is a place a keyboard has to be able to go. On a narrow window a
+       * documentation capture holds 870px of picture in a 350px column, and with no tab stop in it
+       * the right-hand two thirds of every capture on the site were unreachable without a pointer.
+       * `tabindex="0"` with a role and a label is the pattern for that; the rule allows it only
+       * for `tabpanel` out of the box, so `group` is named here rather than the check disabled.
+       */
+      "jsx-a11y/no-noninteractive-tabindex": [
+        "error",
+        { tags: [], roles: ["group", "tabpanel"], allowExpressionValues: true },
+      ],
+    },
   },
 ]);
 
