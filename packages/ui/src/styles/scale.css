@@ -248,7 +248,9 @@
  * component has to remember to arrange, and which reaches the end of the fade rather than the
  * start of it: `visibility` is the one property whose interpolation was always defined this way,
  * so a surface on its way to `hidden` stays `visible` for the whole duration and flips on the
- * last frame. `@starting-style` supplies the frame before the open one.
+ * last frame. `@starting-style` still earns its place: a surface whose subtree React only mounts
+ * on the first open is inserted already carrying `.is-open`, and an element that has just entered
+ * the document has no before-change style of its own to fade from.
  *
  * This was `display: none` held through the fade by `transition-behavior: allow-discrete`, which
  * is the idiom the specification is written around and the one every article recommends. It does
@@ -258,11 +260,12 @@
  * painted at opacity 0.5. The cause is below CSS and no rewriting of these rules reaches it:
  * `display` is not in Gecko's animatable set at all, so `element.animate([{ display: 'block' },
  * { display: 'none' }])` comes back with the `display` key stripped, `@keyframes` drops it too,
- * and a `block` to `flex` change is refused as flatly as a change to `none`. Twenty-nine
- * arrangements were tried, including the one this file used to have, the textbook pairing of a
- * base `display: none` with an open `.is-open` rule, `transition: all`, a delayed discrete step,
- * popover, dialog, `::after` and shadow DOM. None of them produced a single `transitionrun` for
- * `display` in Firefox, and the same harness fired in twenty of twenty-one under Blink.
+ * and a `block` to `flex` change is refused as flatly as a change to `none`. Every arrangement
+ * tried failed the same way: the one this file used to have, the textbook pairing of a base
+ * `display: none` with an open `.is-open` rule, longhands, `transition: all`, a delayed discrete
+ * step, `var()` in the value, `:has()`, a container query, popover, dialog, `::after` and shadow
+ * DOM. Not one produced a `transitionrun` for `display` in Firefox, while the same harness saw
+ * one under Blink and WebKit for every arrangement that should have had one.
  *
  * `@supports` cannot gate it either, and that is worth stating because it looks like it should:
  * Gecko implements `allow-discrete` properly for other properties, so every honest query about
