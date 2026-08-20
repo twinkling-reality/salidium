@@ -44,39 +44,37 @@ export function HistoryFilter() {
         <span>Filter</span>
         <span className="btn-pill">{allOn ? 'All' : `${on.size}/${ALL_FACETS.length}`}</span>
       </button>
-      {open && (
-        <div className="pop-panel is-left is-narrow">
-          <div className="pop-head">
-            <span>Show</span>
-            {!allOn && (
-              <button
-                type="button"
-                className="pop-help"
-                onClick={() => setKinds([...ALL_FACETS])}
-                title="Show every kind again"
-              >
-                <Icon name="reset" />
-                <span className="sr-only">Show every kind again</span>
-              </button>
-            )}
-          </div>
-          <fieldset className="opts">
-            <legend className="sr-only">Kinds of change to show</legend>
-            {ALL_FACETS.map((f) => (
-              <label className={`opt is-tight ${on.has(f) ? 'is-on' : ''}`} key={f}>
-                <input
-                  className="sr-only"
-                  type="checkbox"
-                  checked={on.has(f)}
-                  onChange={() => toggle(f)}
-                />
-                <span className={`opt-swatch facet-${f}`} aria-hidden="true" />
-                <span className="opt-name">{FACET_LABEL[f]}</span>
-              </label>
-            ))}
-          </fieldset>
+      <div className={`pop-panel is-left is-narrow arrives ${open ? 'is-open' : ''}`}>
+        <div className="pop-head">
+          <span>Show</span>
+          {!allOn && (
+            <button
+              type="button"
+              className="pop-help"
+              onClick={() => setKinds([...ALL_FACETS])}
+              title="Show every kind again"
+            >
+              <Icon name="reset" />
+              <span className="sr-only">Show every kind again</span>
+            </button>
+          )}
         </div>
-      )}
+        <fieldset className="opts">
+          <legend className="sr-only">Kinds of change to show</legend>
+          {ALL_FACETS.map((f) => (
+            <label className={`opt is-tight ${on.has(f) ? 'is-on' : ''}`} key={f}>
+              <input
+                className="sr-only"
+                type="checkbox"
+                checked={on.has(f)}
+                onChange={() => toggle(f)}
+              />
+              <span className={`opt-swatch facet-${f}`} aria-hidden="true" />
+              <span className="opt-name">{FACET_LABEL[f]}</span>
+            </label>
+          ))}
+        </fieldset>
+      </div>
     </div>
   );
 }

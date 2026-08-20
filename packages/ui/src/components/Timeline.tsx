@@ -356,21 +356,19 @@ export function TimelineKey() {
         <Icon name="help" />
         <span className="sr-only">What the track shows</span>
       </button>
-      {open && (
-        <div className="pop-panel is-narrow is-up">
-          <div className="pop-head">
-            <span>On the track</span>
-          </div>
-          <p className="pop-note">
-            One step per change, not per minute. The clock is in the two end labels and in the
-            readout while you drag.
-          </p>
-          <p className="pop-note">
-            A mark is a check or a commit, red where a check failed. Marks too close to draw apart
-            are merged, and a merged mark takes the worst outcome in it.
-          </p>
+      <div className={`pop-panel is-narrow is-up arrives ${open ? 'is-open' : ''}`}>
+        <div className="pop-head">
+          <span>On the track</span>
         </div>
-      )}
+        <p className="pop-note">
+          One step per change, not per minute. The clock is in the two end labels and in the readout
+          while you drag.
+        </p>
+        <p className="pop-note">
+          A mark is a check or a commit, red where a check failed. Marks too close to draw apart are
+          merged, and a merged mark takes the worst outcome in it.
+        </p>
+      </div>
     </div>
   );
 }

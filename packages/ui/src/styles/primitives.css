@@ -517,7 +517,9 @@
   box-shadow:
     0 4px 16px rgb(0 0 0 / 12%),
     0 1px 3px rgb(0 0 0 / 8%);
-  animation: arrive var(--motion-base) var(--ease);
+  /* Hangs under its trigger, so it comes down from it and goes back up into it. `.arrives`
+     (scale.css) carries both directions; this states only which direction is which. */
+  --rise: -4px;
 }
 
 /* Title row, tight to the top: a popover this small has no room for a margin above its heading. */

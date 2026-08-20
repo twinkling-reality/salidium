@@ -82,99 +82,97 @@ export function ExplainerSettings() {
         <Icon name="sliders" />
         <span className="sr-only">When Salidium explains</span>
       </button>
-      {open && (
-        <div className="pop-panel">
-          <div className="pop-head">
-            <span>Explaining</span>
-            <button
-              type="button"
-              className={`pop-help ${explain ? 'is-on' : ''}`}
-              onClick={() => setExplain((e) => !e)}
-              aria-expanded={explain}
-              title="What this control does"
-            >
-              <span aria-hidden="true">?</span>
-              <span className="sr-only">What this control does</span>
-            </button>
-          </div>
-          {explain && (
-            <p className="pop-note">
-              Everything else on the page is observed or derived from what was observed. The
-              explanation is the one part a model writes, on the subscription you already have.
-            </p>
-          )}
-          {/* Real radios in a real fieldset, as the depth control does: arrow keys, grouping and
-              announcement all come from the platform. */}
-          <fieldset className="opts">
-            <legend className="sr-only">When Salidium explains</legend>
-            {STOPS.map((s) => (
-              <label className={`opt ${s.value === cadence ? 'is-on' : ''}`} key={s.value}>
-                <input
-                  className="sr-only"
-                  type="radio"
-                  name="salidium-explainer"
-                  checked={s.value === cadence}
-                  // Inert until the daemon has answered. The stop is its state, not this window's,
-                  // and a radio that could be pressed before the current one is known would be
-                  // offering to change something it cannot yet show.
-                  disabled={cadence === undefined}
-                  // The depth control closes on a choice because the page behind it changes and you
-                  // want to see it. Nothing here changes behind the panel, and what is worth reading
-                  // next — what this has already cost — is inside it, so it stays open.
-                  onChange={() => setCadence(s.value)}
-                />
-                <span className="opt-mark" aria-hidden="true" />
-                <span className="opt-text">
-                  <span className="opt-name">{s.name}</span>
-                  <span className="opt-adds">{s.adds}</span>
-                </span>
-              </label>
-            ))}
-          </fieldset>
-          {/*
-           * A control that quietly does nothing is worse than no control. The kill switch in the
-           * daemon's environment outranks whatever is chosen here, so when it is set the panel says
-           * so — and still shows the stop that was chosen, because that is the one that comes back
-           * when the variable goes away.
-           */}
-          {explainer?.envOff && (
-            <p className="pop-note">
-              The daemon was started with the explainer switched off in its environment, so nothing
-              is generated whichever stop is chosen here.
-            </p>
-          )}
-          {/*
-           * What it has cost, when Salidium has seen it cost anything — never a heading over
-           * nothing. Tokens only: they were observed and are printed as fact, whereas a figure in
-           * dollars is arithmetic over a price table and, on a subscription, no dollar is charged
-           * at all. Neither of those two sentences fits in 236 px, so the money does not go here.
-           *
-           * The whole section is omitted when nothing was observed, but a zero inside it is kept:
-           * these four are read against each other, and a list whose rows come and go with the data
-           * makes "none of this kind" indistinguishable from "this kind was not counted". Zero
-           * cache reads is a real and interesting thing to have measured.
-           */}
-          {usage && (
-            <>
-              <div className="pop-head">
-                <span>Consumed</span>
-              </div>
-              <dl className="usage">
-                <div>
-                  <dt>responses</dt>
-                  <dd className="mono">{usage.messages.toLocaleString()}</dd>
-                </div>
-                {TOKENS.map((t) => (
-                  <div key={t.key}>
-                    <dt>{t.label}</dt>
-                    <dd className="mono">{usage[t.key].toLocaleString()}</dd>
-                  </div>
-                ))}
-              </dl>
-            </>
-          )}
+      <div className={`pop-panel arrives ${open ? 'is-open' : ''}`}>
+        <div className="pop-head">
+          <span>Explaining</span>
+          <button
+            type="button"
+            className={`pop-help ${explain ? 'is-on' : ''}`}
+            onClick={() => setExplain((e) => !e)}
+            aria-expanded={explain}
+            title="What this control does"
+          >
+            <span aria-hidden="true">?</span>
+            <span className="sr-only">What this control does</span>
+          </button>
         </div>
-      )}
+        {explain && (
+          <p className="pop-note">
+            Everything else on the page is observed or derived from what was observed. The
+            explanation is the one part a model writes, on the subscription you already have.
+          </p>
+        )}
+        {/* Real radios in a real fieldset, as the depth control does: arrow keys, grouping and
+              announcement all come from the platform. */}
+        <fieldset className="opts">
+          <legend className="sr-only">When Salidium explains</legend>
+          {STOPS.map((s) => (
+            <label className={`opt ${s.value === cadence ? 'is-on' : ''}`} key={s.value}>
+              <input
+                className="sr-only"
+                type="radio"
+                name="salidium-explainer"
+                checked={s.value === cadence}
+                // Inert until the daemon has answered. The stop is its state, not this window's,
+                // and a radio that could be pressed before the current one is known would be
+                // offering to change something it cannot yet show.
+                disabled={cadence === undefined}
+                // The depth control closes on a choice because the page behind it changes and you
+                // want to see it. Nothing here changes behind the panel, and what is worth reading
+                // next — what this has already cost — is inside it, so it stays open.
+                onChange={() => setCadence(s.value)}
+              />
+              <span className="opt-mark" aria-hidden="true" />
+              <span className="opt-text">
+                <span className="opt-name">{s.name}</span>
+                <span className="opt-adds">{s.adds}</span>
+              </span>
+            </label>
+          ))}
+        </fieldset>
+        {/*
+         * A control that quietly does nothing is worse than no control. The kill switch in the
+         * daemon's environment outranks whatever is chosen here, so when it is set the panel says
+         * so — and still shows the stop that was chosen, because that is the one that comes back
+         * when the variable goes away.
+         */}
+        {explainer?.envOff && (
+          <p className="pop-note">
+            The daemon was started with the explainer switched off in its environment, so nothing is
+            generated whichever stop is chosen here.
+          </p>
+        )}
+        {/*
+         * What it has cost, when Salidium has seen it cost anything — never a heading over
+         * nothing. Tokens only: they were observed and are printed as fact, whereas a figure in
+         * dollars is arithmetic over a price table and, on a subscription, no dollar is charged
+         * at all. Neither of those two sentences fits in 236 px, so the money does not go here.
+         *
+         * The whole section is omitted when nothing was observed, but a zero inside it is kept:
+         * these four are read against each other, and a list whose rows come and go with the data
+         * makes "none of this kind" indistinguishable from "this kind was not counted". Zero
+         * cache reads is a real and interesting thing to have measured.
+         */}
+        {usage && (
+          <>
+            <div className="pop-head">
+              <span>Consumed</span>
+            </div>
+            <dl className="usage">
+              <div>
+                <dt>responses</dt>
+                <dd className="mono">{usage.messages.toLocaleString()}</dd>
+              </div>
+              {TOKENS.map((t) => (
+                <div key={t.key}>
+                  <dt>{t.label}</dt>
+                  <dd className="mono">{usage[t.key].toLocaleString()}</dd>
+                </div>
+              ))}
+            </dl>
+          </>
+        )}
+      </div>
     </div>
   );
 }

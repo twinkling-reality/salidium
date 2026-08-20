@@ -56,13 +56,25 @@
    * locally — a transition written by hand in a component file is a transition that will not match
    * the one beside it.
    *
-   * Both are one-shot: something happened, and the interface catches up. A **continuous
-   * indicator's period is not one of these** and is deliberately not tokenised — the loading orb
-   * pulses at 1.4s and the skeleton shimmers at 2.4s, and there is no reason those two should
-   * agree, because the rule above exists so that things standing next to each other match, and a
-   * loop matches nothing. Their periods are stated at their own keyframes with the reason. Tokenising
-   * them would make `--motion-base` mean two unrelated things; adding a third loop token would
-   * invite the next loop to be a fourth. `panel-in` was the real violation and is fixed.
+   * Both are one-shot: something happened, and the interface catches up.
+   *
+   * **A state that arrives with motion leaves with the same motion reversed.** Nothing appears
+   * over 180ms and vanishes in a frame. This was the rule the doctrine never said, so nothing
+   * followed it: every anchored panel, the scrim over the page and the scrubber at its foot were
+   * animated in and then simply deleted, which reads as the interface losing its place rather
+   * than as the reader putting something away. `.arrives` below is how it is said once, and the
+   * reason it is a transition rather than a pair of keyframes is that a keyframe can only
+   * describe arriving: something removed from the document cannot animate, so an exit written as
+   * an animation has to be timed in JavaScript, and the reduced-motion switch at the foot of
+   * `tokens.css` would then turn the animation off while the timer still waited for it.
+   *
+   * **A continuous indicator is not held to any of this.** Its period and its curve are its own,
+   * stated where its `animation` is declared, with the reason — the loading orb pulses at 1.4s
+   * and eases, the skeleton shimmers at 2.4s and is `linear` because a sweep that eases has a
+   * moment where it looks stuck. Tokenising the periods would make `--motion-base` mean two
+   * unrelated things, and a shared curve exists so that things standing next to each other match,
+   * which a loop never does. The note belongs at the `animation` line because that is where the
+   * period is written; the keyframes describe a shape and hold no timing at all.
    */
   --ease: cubic-bezier(0.2, 0, 0, 1);
   --motion-fast: 120ms;
@@ -208,5 +220,66 @@
   .opt-mark,
   .pop-help {
     corner-shape: round;
+  }
+}
+
+/*
+ * Arriving, and leaving the same way.
+ *
+ * Something that was not on screen a moment ago fades in and settles from the direction it came
+ * from, and when it goes it retraces that exactly. One gesture, composed by everything that
+ * appears: a popover hangs under its trigger and so comes down (`--rise` negative), the scrubber
+ * stands at the pane's foot and so comes up. The surface states its own `--rise`; a surface that
+ * only fades states none.
+ *
+ * Transform and opacity only, and translate rather than scale, for a reason that is not taste.
+ * The page's clearance under the floating foot is measured from the foot's own box
+ * (`useFootSpace`), so anything that changes that box animates the document's bottom padding with
+ * it and fires a ResizeObserver on every frame. A translate leaves the height exactly where
+ * layout put it; a scale does not, because `getBoundingClientRect` reports the transformed
+ * rectangle.
+ *
+ * It is achromatic on purpose. Colour in this app means a verdict (app.css, rule 4), and a panel
+ * opening is not a verdict.
+ *
+ * `display` carries the closed state rather than opacity alone, which is what makes this safe
+ * without any bookkeeping: a closed surface is out of the accessibility tree and out of the tab
+ * order because it is `display: none`, not because something remembered to mark it `inert`.
+ * `allow-discrete` holds that display value until the fade has finished, and `@starting-style`
+ * supplies the frame before the open one, which a surface coming back from `display: none` has no
+ * other way to get.
+ *
+ * Here rather than in `primitives.css` because the public site imports this file and not that
+ * one, and a docs menu opening at a different speed from the same panel in the product was the
+ * whole of what a second copy bought. Reduced motion needs no counterpart: with `tokens.css`
+ * switching transitions off, a surface is simply there and then simply gone, which is the whole
+ * of what the motion was going to say.
+ */
+.arrives {
+  opacity: 0;
+  transform: translateY(var(--rise, 0));
+  transition:
+    opacity var(--motion-base) var(--ease),
+    transform var(--motion-base) var(--ease),
+    display var(--motion-base) allow-discrete;
+}
+
+/*
+ * Out-specifies the surface's own `display`, so each surface keeps stating what it is when it is
+ * open and none of them has to restate what it is when it is closed.
+ */
+.arrives:not(.is-open) {
+  display: none;
+}
+
+.arrives.is-open {
+  opacity: 1;
+  transform: none;
+}
+
+@starting-style {
+  .arrives.is-open {
+    opacity: 0;
+    transform: translateY(var(--rise, 0));
   }
 }

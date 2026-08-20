@@ -56,34 +56,32 @@ export function MarksKey() {
         <Icon name="help" />
         <span className="sr-only">What the marks on a row mean</span>
       </button>
-      {open && (
-        <div className="pop-panel is-narrow marks-key">
-          <div className="pop-head">
-            <span>On a row</span>
-          </div>
-          <dl>
-            {KEYED.map((status) => {
-              const st = statusGlyph(status);
-              return (
-                <div key={status}>
-                  <dt className={`status-dot ${st.cls}`} aria-hidden="true">
-                    {st.glyph}
-                  </dt>
-                  <dd>{st.label.toLowerCase()}</dd>
-                </div>
-              );
-            })}
-            <div>
-              <dt aria-hidden="true">
-                <span className="attn-badge num is-live">
-                  <Icon name="flag" />1
-                </span>
-              </dt>
-              <dd>to review</dd>
-            </div>
-          </dl>
+      <div className={`pop-panel is-narrow marks-key arrives ${open ? 'is-open' : ''}`}>
+        <div className="pop-head">
+          <span>On a row</span>
         </div>
-      )}
+        <dl>
+          {KEYED.map((status) => {
+            const st = statusGlyph(status);
+            return (
+              <div key={status}>
+                <dt className={`status-dot ${st.cls}`} aria-hidden="true">
+                  {st.glyph}
+                </dt>
+                <dd>{st.label.toLowerCase()}</dd>
+              </div>
+            );
+          })}
+          <div>
+            <dt aria-hidden="true">
+              <span className="attn-badge num is-live">
+                <Icon name="flag" />1
+              </span>
+            </dt>
+            <dd>to review</dd>
+          </div>
+        </dl>
+      </div>
     </div>
   );
 }
