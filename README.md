@@ -3,7 +3,8 @@
 **Visualize your agent's work with diagrams and plain explanations, not walls of text.**
 
 Reading back a Claude Code or Codex run means scrolling the whole transcript. Salidium reads it and
-draws what happened.
+draws what happened. You do not have to wait for the run to end. The report updates while the agent
+is still working, and an explanation is written at the end of each turn.
 
 ```bash
 npx salidium

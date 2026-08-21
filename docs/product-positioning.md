@@ -41,7 +41,8 @@ Recommended short description for npm, GitHub, and social metadata:
 Lead public entry points in this order:
 
 1. The problem: coding-agent sessions are verbose and difficult to audit quickly.
-2. The outcome: a clear report of changes, reasons, verification, and human attention.
+2. The outcome: a clear report of changes, reasons, verification, and human attention,
+   updating while the agent is still working rather than only once it has stopped.
 3. The trial: `npx salidium`.
 4. The trust model: MIT-licensed, open source, local-first, raw transcripts local, no Salidium
    telemetry.

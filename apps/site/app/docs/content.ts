@@ -178,6 +178,9 @@ const RAW: Array<Omit<Page, "n">> = [
       p(
         "A session opens as a report, and the report is built to answer one question first: can you leave this alone, or does it need you? Everything else is underneath that answer.",
       ),
+      p(
+        "The report does not wait for the run to end. It updates while the agent is still working, and the verdict moves with it. An [explanation](/docs/explanations) is the one part that arrives at the end of a turn rather than as things happen.",
+      ),
       shot("masthead", "The top of a Salidium report: the session title, its tags, and the verdict reading 4 files changed, unverified."),
       h("The verdict"),
       p(
@@ -287,7 +290,7 @@ const RAW: Array<Omit<Page, "n">> = [
       ),
       h("Rewind"),
       p(
-        "Rewind puts a scrubber at the foot of the session. Drag it and the page becomes the session as it stood at that moment, with everything later hidden.",
+        "Rewind puts a scrubber at the foot of the session. Until you move it, it sits at the live end and follows the run as it happens. Drag it and the page becomes the session as it stood at that moment, with everything later hidden.",
       ),
       shot("rewind", "The Salidium rewind scrubber under a report, with marks for checks and commits along the track."),
       p(
