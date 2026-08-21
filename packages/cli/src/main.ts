@@ -38,7 +38,7 @@ import { renderReport } from './render.ts';
 import { resolveBrowserLaunch, validateSalidiumPort } from './runtime.ts';
 import { providerDisplayName, sessionSearchQuery } from './showSession.ts';
 
-const HELP = `salidium: see what your coding agent did, why, how, what is verified, what is left, and what it flagged for a human.
+const HELP = `salidium: what changed, why, what was verified, and what it flagged for a human.
 
 Usage:
   salidium                      Connect detected agents on first run, then start and open Salidium
@@ -342,7 +342,7 @@ async function main(argv: string[]): Promise<number> {
         const unavailable = targets.filter((provider) => !provider.liveHooksSupported(context));
         for (const provider of unavailable) {
           process.stdout.write(
-            `${provider.name}: skipped — native Windows uses transcript history only; POSIX live hooks were not installed\n`,
+            `${provider.name}: skipped. Native Windows uses transcript history only; POSIX live hooks were not installed\n`,
           );
         }
         targets = targets.filter((provider) => provider.liveHooksSupported(context));
@@ -441,14 +441,14 @@ async function main(argv: string[]): Promise<number> {
           const counts = new Map(statuses.map((status) => [status, 0]));
           for (const job of jobs) counts.set(job.status, (counts.get(job.status) ?? 0) + 1);
           process.stdout.write(
-            `Re-ingestion: ${jobs.length} jobs — ${statuses.map((status) => `${counts.get(status) ?? 0} ${status}`).join(', ')}.\n`,
+            `Re-ingestion: ${jobs.length} jobs, ${statuses.map((status) => `${counts.get(status) ?? 0} ${status}`).join(', ')}.\n`,
           );
           const visible = argv.includes('--verbose')
             ? jobs
             : jobs.filter((job) => job.status === 'missing' || job.status === 'failed');
           for (const job of visible)
             process.stdout.write(
-              `${job.status.padEnd(9)} ${job.sessionId} ${job.path} (attempts ${job.attempts}, parser ${job.parserRevision})${job.error ? ` — ${job.error}` : ''}\n`,
+              `${job.status.padEnd(9)} ${job.sessionId} ${job.path} (attempts ${job.attempts}, parser ${job.parserRevision})${job.error ? `: ${job.error}` : ''}\n`,
             );
           if (!argv.includes('--verbose') && visible.length < jobs.length)
             process.stdout.write('Use --status --verbose to list every job.\n');
