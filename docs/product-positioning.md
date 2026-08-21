@@ -46,9 +46,9 @@ Recommended short description for npm, GitHub, and social metadata:
 > Turn Claude Code and Codex sessions into a clear, evidence-linked report: what changed, why,
 > what was verified, and what it flagged for a human.
 
-npm serves the description of the last published version, so `salidium@0.2.0` still shows "what
-needs you" where `package.json` shows the line above. That is release lag rather than drift, the
-next publish resolves it, and it is not to be corrected by changing the packages back.
+npm serves the description of the last published version, so between releases the repository can
+be ahead of what npm shows. That is release lag rather than drift, the next publish resolves it,
+and it is not to be corrected by changing the packages back.
 
 ## Communication order
 
