@@ -38,7 +38,7 @@ import { renderReport } from './render.ts';
 import { resolveBrowserLaunch, validateSalidiumPort } from './runtime.ts';
 import { providerDisplayName, sessionSearchQuery } from './showSession.ts';
 
-const HELP = `salidium: what changed, why, what was verified, and what it flagged for a human.
+const HELP = `salidium: turn a Claude Code or Codex run into a visual report, not a transcript to scroll.
 
 Usage:
   salidium                      Connect detected agents on first run, then start and open Salidium
