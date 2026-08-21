@@ -158,8 +158,13 @@ async function main(argv: string[]): Promise<number> {
     }
     case 'show': {
       const d = readDaemonJson(salidiumHome);
-      if (!d || !(await alive(d))) {
-        process.stderr.write('daemon is not running; start it with `salidium start`\n');
+      const presence = await presenceOf(d);
+      if (!d || presence !== 'reachable') {
+        process.stderr.write(
+          d && presence === 'unresponsive'
+            ? `daemon pid ${d.pid} is running but did not answer; try again once it has caught up\n`
+            : 'daemon is not running; start it with `salidium start`\n',
+        );
         return 1;
       }
       const flag = (name: string) =>
@@ -294,9 +299,11 @@ async function main(argv: string[]): Promise<number> {
     }
     case 'status': {
       const d = readDaemonJson(salidiumHome);
-      const ok = d ? await alive(d) : false;
+      const presence = await presenceOf(d);
       process.stdout.write(
-        ok && d ? `running: pid ${d.pid}, port ${d.port}, since ${d.startedAt}\n` : 'not running\n',
+        d && presence !== 'absent'
+          ? `running: pid ${d.pid}, port ${d.port}, since ${d.startedAt}${presence === 'unresponsive' ? '; not answering' : ''}\n`
+          : 'not running\n',
       );
       const context: IntegrationContext = { userHome, salidiumHome };
       for (const provider of providerIntegrations) {
@@ -308,7 +315,12 @@ async function main(argv: string[]): Promise<number> {
             : 'history-only (native Windows; live hooks unavailable)';
         process.stdout.write(`${provider.name}: ${status}\n`);
       }
-      return ok ? 0 : 1;
+      /*
+       * Zero still means the daemon answered, not merely that it is there. The line above gained a
+       * third thing to say; a script asking whether it can talk to the daemon is asking the same
+       * question it always was, and a silent daemon is not an answer.
+       */
+      return presence === 'reachable' ? 0 : 1;
     }
     case 'install-hooks':
     case 'uninstall-hooks': {
@@ -494,7 +506,7 @@ async function main(argv: string[]): Promise<number> {
       try {
         if (arg === 'apply') {
           const running = readDaemonJson(salidiumHome);
-          if (running && (await alive(running))) {
+          if (await storeHasWriter(running)) {
             process.stderr.write(
               'stop Salidium before applying cleanup manually; the running daemon applies the configured policy safely\n',
             );
@@ -597,7 +609,7 @@ async function main(argv: string[]): Promise<number> {
         return 2;
       }
       const running = readDaemonJson(salidiumHome);
-      if (running && (await alive(running))) {
+      if (await storeHasWriter(running)) {
         process.stderr.write('stop Salidium before forgetting a session\n');
         return 2;
       }
@@ -647,6 +659,42 @@ async function alive(d: DaemonJson): Promise<boolean> {
 }
 
 /**
+ * What `daemon.json` describes, as three states rather than two.
+ *
+ * `alive` answers one question, whether the tokened endpoint confirms this PID, and inside that
+ * answer a timeout is indistinguishable from an absence. The probe allows a second; a daemon
+ * importing a history does not reply inside it. So every caller that read `false` as "there is
+ * nothing there" was wrong for exactly the stretch a first run occupies: `doctor` reported no
+ * daemon while one was listening on the port it had just named, and the offline-maintenance guards
+ * would have let a store be rewritten under a live writer.
+ *
+ * Signal 0 separates the two. A PID that is gone is an absence. A PID that is present and silent
+ * is a daemon that has not answered yet, which is a different sentence and a different decision.
+ *
+ * `unresponsive` is deliberately not proof of identity: after a crash and a PID reuse it may name
+ * something else entirely. Nothing signals or replaces on the strength of it. `stopDaemon` still
+ * requires the tokened endpoint before it touches a process, which is why this sits beside `alive`
+ * rather than replacing it.
+ */
+type Presence = 'reachable' | 'unresponsive' | 'absent';
+
+async function presenceOf(d: DaemonJson | undefined): Promise<Presence> {
+  if (!d) return 'absent';
+  if (await alive(d)) return 'reachable';
+  return gone(d.pid) ? 'absent' : 'unresponsive';
+}
+
+/**
+ * Whether the store already has a writer that offline maintenance must not join.
+ *
+ * Silence counts. The question here is not who is there, it is whether this process may take the
+ * store for itself, and the only safe reading of an unanswered probe is that it may not.
+ */
+async function storeHasWriter(d: DaemonJson | undefined): Promise<boolean> {
+  return (await presenceOf(d)) !== 'absent';
+}
+
+/**
  * Ask the running daemon to stop, and wait until its process is actually gone.
  *
  * `undefined` if there was nothing running. Otherwise the pid, whether it was safely signaled, and
@@ -681,7 +729,7 @@ function gone(pid: number): boolean {
 
 async function liveStoreWriteBlocked(action: string): Promise<boolean> {
   const daemon = readDaemonJson(salidiumHome);
-  if (!daemon || !(await alive(daemon))) return false;
+  if (!(await storeHasWriter(daemon))) return false;
   process.stderr.write(
     `stop Salidium before you ${action}; offline maintenance will not migrate or rewrite a store under a running daemon\n`,
   );
@@ -689,8 +737,23 @@ async function liveStoreWriteBlocked(action: string): Promise<boolean> {
 }
 
 async function ensureDaemon(): Promise<DaemonJson> {
-  const existing = readDaemonJson(salidiumHome);
-  if (existing && (await alive(existing))) {
+  let existing = readDaemonJson(salidiumHome);
+  let presence = await presenceOf(existing);
+  /*
+   * A present but silent daemon is usually a busy one, and the probe's second is shorter than a
+   * large import. Waiting briefly is what stops a first run from spawning a replacement into the
+   * port the busy daemon is already holding, which surfaced as `daemon did not start`.
+   *
+   * Bounded, and it falls through unchanged when the silence outlasts it: a `daemon.json` left by
+   * a crash can name a PID that now belongs to something else, and starting a fresh daemon is the
+   * recovery from that. Waiting forever would turn a stale file into a product that will not run.
+   */
+  for (let i = 0; presence === 'unresponsive' && i < 3; i++) {
+    await sleep(300);
+    existing = readDaemonJson(salidiumHome);
+    presence = await presenceOf(existing);
+  }
+  if (existing && presence === 'reachable') {
     const runtimeCompatible =
       existing.version === VERSION &&
       existing.protocolVersion === PROTOCOL_VERSION &&
@@ -878,8 +941,14 @@ async function doctor(): Promise<number> {
     if (validation.level === 'attention') problems++;
   }
   const d = readDaemonJson(salidiumHome);
-  const running = d ? await alive(d) : false;
-  lines.push(`daemon ${running && d ? `running on ${d.port}` : 'not running'}`);
+  const presence = await presenceOf(d);
+  lines.push(
+    d && presence === 'reachable'
+      ? `daemon running on ${d.port}`
+      : d && presence === 'unresponsive'
+        ? `daemon pid ${d.pid} is running on ${d.port} but did not answer; it may be importing history`
+        : 'daemon not running',
+  );
   let settingsProblem: string | undefined;
   readSettings(salidiumHome, (reason) => {
     settingsProblem = reason;

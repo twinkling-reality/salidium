@@ -79,6 +79,37 @@ function overStartup(home: string, result: { elapsed: number }): number {
   return result.elapsed - run(home, ['--version'], '0').elapsed;
 }
 
+/**
+ * A `daemon.json` naming a live process and a port nothing is listening on.
+ *
+ * "Present and silent" made deterministic. A refused connection and a timed-out one are the same
+ * `false` to the CLI's probe, so this reproduces a busy daemon without having to make one busy.
+ */
+function silentDaemon(home: string) {
+  const sleeper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60_000)'], {
+    stdio: 'ignore',
+  });
+  if (!sleeper.pid) throw new Error('disposable child has no pid');
+  writeFileSync(
+    join(home, 'daemon.json'),
+    JSON.stringify({
+      pid: sleeper.pid,
+      port: 1,
+      token: 'a'.repeat(64),
+      startedAt: new Date().toISOString(),
+      version: VERSION,
+    }),
+  );
+  return sleeper;
+}
+
+async function dispose(sleeper: ReturnType<typeof spawn>): Promise<void> {
+  if (!sleeper.pid || !processExists(sleeper.pid)) return;
+  const exited = new Promise<void>((resolve) => sleeper.once('exit', () => resolve()));
+  sleeper.kill('SIGTERM');
+  await exited;
+}
+
 function processExists(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -189,6 +220,80 @@ describe('detached daemon launch failures', () => {
         await exited;
       }
     }
+  });
+
+  /*
+   * A daemon that is there and has not answered yet.
+   *
+   * The probe allows one second, and every caller used to read its `false` as an absence, so a
+   * daemon busy with a first import was reported as not running while it held the port it had
+   * just been told about. The PID is what tells the two apart.
+   *
+   * Split in two, and given a ceiling rather than a budget: each of these is a whole Node process
+   * loading this CLI from TypeScript source, and four of them in one test does not fit inside
+   * vitest's default five seconds on any machine.
+   */
+  it('reports a live but silent daemon as running rather than absent', async () => {
+    const home = temporaryHome();
+    const sleeper = silentDaemon(home);
+    try {
+      const doctor = run(home, ['doctor'], '0');
+      expect(doctor.stdout).toMatch(new RegExp(`daemon pid ${sleeper.pid} is running on 1`));
+      expect(doctor.stdout).not.toMatch(/daemon not running/);
+
+      const status = run(home, ['status'], '0');
+      expect(status.stdout).toMatch(new RegExp(`running: pid ${sleeper.pid}.*not answering`));
+      // Zero still means the daemon answered, which this one did not.
+      expect(status.status).toBe(1);
+    } finally {
+      await dispose(sleeper);
+    }
+  }, 20_000);
+
+  /*
+   * The half that was never cosmetic. An unanswered probe used to read as a store with nobody on
+   * it, and these two would have rewritten one under a live writer.
+   */
+  it('keeps offline store maintenance closed against a live but silent daemon', async () => {
+    const home = temporaryHome();
+    const sleeper = silentDaemon(home);
+    // Both guards run before the store is opened, so its existence is all they need.
+    writeFileSync(join(home, 'salidium.db'), '');
+    try {
+      const reingest = run(home, ['reingest', '--all'], '0');
+      expect(reingest.status).toBe(2);
+      expect(reingest.stderr).toMatch(/stop Salidium.*offline maintenance/);
+
+      const retention = run(home, ['retention', '30'], '0');
+      expect(retention.status).toBe(2);
+      expect(retention.stderr).toMatch(/stop Salidium.*offline maintenance/);
+    } finally {
+      await dispose(sleeper);
+    }
+  }, 20_000);
+
+  /*
+   * The other half, without which the fix above is just "always say it is running". A PID that has
+   * exited is an absence, and it has to keep reading as one.
+   */
+  it('still reports a daemon.json whose process has exited as not running', () => {
+    const home = temporaryHome();
+    const dead = spawnSync(process.execPath, ['-e', '0'], { stdio: 'ignore' });
+    if (!dead.pid) throw new Error('probe child has no pid');
+    expect(processExists(dead.pid)).toBe(false);
+    writeFileSync(
+      join(home, 'daemon.json'),
+      JSON.stringify({
+        pid: dead.pid,
+        port: 1,
+        token: 'a'.repeat(64),
+        startedAt: new Date().toISOString(),
+        version: VERSION,
+      }),
+    );
+
+    expect(run(home, ['doctor'], '0').stdout).toMatch(/daemon not running/);
+    expect(run(home, ['status'], '0').stdout).toMatch(/^not running$/m);
   });
 
   it('authenticates and replaces a running daemon whose version differs from the CLI', () => {
