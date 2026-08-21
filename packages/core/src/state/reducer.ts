@@ -1226,7 +1226,7 @@ export function describeVerification(v: {
         const skipped = c.skipped ? `, ${c.skipped} skipped` : '';
         return `${c.passed ?? 0}/${c.total} tests passed${skipped}${runner}${partial}`;
       }
-      return `Tests passed${runner}${partial}${v.caveats?.includes('exit-inferred') ? ' — exit inferred' : ''}`;
+      return `Tests passed${runner}${partial}${v.caveats?.includes('exit-inferred') ? ' (exit inferred)' : ''}`;
     }
     if (v.outcome === 'fail') {
       if (c?.failed !== undefined && c.failed > 0)
@@ -1246,7 +1246,7 @@ export function describeVerification(v: {
           : 'Check';
   if (v.outcome === 'pass') return `${label} passed${runner}`;
   if (v.outcome === 'fail')
-    return `${label} failed${runner}${c?.failed ? ` — ${c.failed} error${c.failed === 1 ? '' : 's'}` : ''}`;
+    return `${label} failed${runner}${c?.failed ? ` (${c.failed} error${c.failed === 1 ? '' : 's'})` : ''}`;
   if (v.outcome === 'partial') return `${label} partially passed${runner}`;
   return `${label} result unknown${runner}`;
 }
@@ -1456,10 +1456,10 @@ function onPlanUpdated(state: RunState, e: StoredEventOf<'plan.updated'>, log: C
   if (isNewPlan) {
     log.add(
       'how',
-      `Plan: ${items.length} steps — ${items
+      `Plan: ${items.length} steps (${items
         .slice(0, 3)
         .map((i) => i.text)
-        .join('; ')}`,
+        .join('; ')})`,
       'planned',
       { items: items.length },
     );

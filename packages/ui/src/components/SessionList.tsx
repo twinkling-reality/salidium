@@ -471,7 +471,7 @@ function SessionRow({
         onClick={onSelect}
         aria-current={selected ? 'true' : undefined}
         aria-label={label}
-        title={showRepo ? `${name} — ${repo}` : name}
+        title={showRepo ? `${name} (${repo})` : name}
       >
         <span className={`status-dot ${st.cls}`} aria-hidden="true">
           {st.glyph}
@@ -497,7 +497,7 @@ function SessionRow({
             className={`attn-badge num ${attention ? 'is-live' : ''}`}
             title={
               attention
-                ? `${s.counts.reviewOpen} to review — needs you now`
+                ? `${s.counts.reviewOpen} to review, needs you now`
                 : `${s.counts.reviewOpen} flagged during this session; it is no longer running`
             }
           >

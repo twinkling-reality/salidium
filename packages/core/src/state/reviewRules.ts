@@ -289,5 +289,5 @@ function describeFailure(v: {
         : v.method === 'build'
           ? 'Build'
           : 'Check';
-  return `${label} failing${runner}${v.counts?.failed ? ` — ${v.counts.failed} errors` : ''}`;
+  return `${label} failing${runner}${v.counts?.failed ? ` (${v.counts.failed} errors)` : ''}`;
 }

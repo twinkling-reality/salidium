@@ -682,7 +682,7 @@ function changesGlance(state: RunState): string {
 
 function verifiedGlance(state: RunState, latest: VerificationRow | undefined): string {
   if (!latest) return state.counters.filesChanged > 0 ? 'No checks observed' : 'No checks yet';
-  return `${latest.label}${latest.stale ? ' — before latest changes' : ''}`;
+  return `${latest.label}${latest.stale ? ' (before latest changes)' : ''}`;
 }
 
 /**

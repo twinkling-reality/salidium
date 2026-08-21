@@ -156,7 +156,7 @@ export function CheckLanes({
                     key={r.id}
                     className={`checks-tick v-${r.outcome} ${r.epistemic === 'inferred' ? 'is-derived' : ''}`}
                     onClick={() => onOpen(r)}
-                    title={`${timeOfDay(r.at)} — ${r.label}${r.epistemic === 'inferred' ? ' (worked out, not observed)' : ''}`}
+                    title={`${timeOfDay(r.at)}, ${r.label}${r.epistemic === 'inferred' ? ' (worked out, not observed)' : ''}`}
                   >
                     <span className="sr-only">
                       {timeOfDay(r.at)} {r.outcome}
@@ -228,7 +228,7 @@ export function Coverage({
               type="button"
               className={`cov-cell ${f.verifiedAfter ? 'is-covered' : 'is-stale'}`}
               onClick={() => onOpen?.(f)}
-              title={`${f.path} — ${f.verifiedAfter ? (f.verifiedBy ?? 'checked after the last edit') : 'changed after the last passing check'}`}
+              title={`${f.path}: ${f.verifiedAfter ? (f.verifiedBy ?? 'checked after the last edit') : 'changed after the last passing check'}`}
             >
               <span className="sr-only">
                 {f.path}:{' '}

@@ -374,7 +374,7 @@ function Gate({
           {copyState === 'copied'
             ? 'Copied. Run it in a terminal; it opens this page with the token attached.'
             : copyState === 'selected'
-              ? `This window cannot reach the clipboard, so the command is selected — ${COPY_KEY} to take it.`
+              ? `This window cannot reach the clipboard, so the command is selected. ${COPY_KEY} to take it.`
               : 'Run it in a terminal; it opens this page with the token attached.'}
         </p>
 

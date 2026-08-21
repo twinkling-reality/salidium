@@ -390,7 +390,7 @@ export function writeRelayScript(
     limitBytes: MAX_INGEST_PAYLOAD_BYTES,
   });
   const script = `#!/bin/sh
-# Salidium hook relay — installed by \`salidium install-hooks\`. Safe to delete; hooks then no-op.
+# Salidium hook relay, installed by \`salidium install-hooks\`. Safe to delete; hooks then no-op.
 # Reads the hook JSON from stdin, then hands off to a detached child so the agent's process
 # teardown (e.g. \`claude -p\`) can never cut the delivery short. Always exits 0.
 umask 077
