@@ -1,7 +1,8 @@
 # Salidium
 
-**Understand what your coding agent did.** Salidium turns Claude Code and Codex sessions into a
-clear, evidence-linked report of what changed, why, what was verified, and what needs you.
+**Visualize your agent's work with diagrams and plain explanations, not walls of text.** Salidium
+turns Claude Code and Codex sessions into a clear, evidence-linked report of what changed, why,
+what was verified, and what needs you.
 
 ```bash
 npx salidium

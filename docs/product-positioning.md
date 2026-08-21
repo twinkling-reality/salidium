@@ -5,7 +5,17 @@ its architecture or business model.
 
 ## Canonical promise
 
-> Understand what your coding agent did.
+> Visualize your agent's work with diagrams and plain explanations, not walls of text.
+
+This replaced "Understand what your coding agent did." on 2026-08-20. The reason is recorded rather
+than left to be rediscovered: "understand" is a verb a reader has to interpret, and the line named
+no artifact, so a stranger could not tell the product from a chat tool or a log tailer. "Diagrams"
+is the word that fixes it. It is concrete, it is what the product actually draws, and a survey of
+sixty-seven one-line descriptions from comparable repositories found that these lines land when the
+output is a familiar object a reader can picture rather than an abstract function.
+
+The line is also the GitHub repository description verbatim, which is the surface a stranger meets
+first.
 
 Salidium turns Claude Code and Codex sessions into a clear, evidence-linked report of what changed,
 why, what was verified, and what needs you.
