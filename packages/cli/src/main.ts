@@ -38,7 +38,7 @@ import { renderReport } from './render.ts';
 import { resolveBrowserLaunch, validateSalidiumPort } from './runtime.ts';
 import { providerDisplayName, sessionSearchQuery } from './showSession.ts';
 
-const HELP = `salidium — see what your coding agent did, why, how, what's verified, what's left, what needs you.
+const HELP = `salidium: see what your coding agent did, why, how, what is verified, what is left, and what it flagged for a human.
 
 Usage:
   salidium                      Connect detected agents on first run, then start and open Salidium

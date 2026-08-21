@@ -234,7 +234,7 @@ export function App() {
                 <p>A report appears here when your agent runs.</p>
                 <p className="muted">
                   Start a run in Claude Code or Codex. Salidium reads the session it writes and
-                  turns it into what changed, what was checked, and what needs you.
+                  turns it into what changed, what was checked, and what it flagged for a human.
                 </p>
                 <a className="link" href={DOCS} target="_blank" rel="noreferrer">
                   Read the documentation

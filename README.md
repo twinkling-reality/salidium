@@ -1,6 +1,6 @@
 # Salidium
 
-**Visualize your agent's work with diagrams and plain explanations, not walls of text.**
+**Visualize your agent's work with diagrams and evidence you can check, not walls of text.**
 
 Reading back a Claude Code or Codex run means scrolling the whole transcript. Salidium reads it and
 draws what happened. You do not have to wait for the run to end. The report updates while the agent

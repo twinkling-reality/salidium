@@ -3,7 +3,7 @@ import "./globals.css";
 
 const title = "Salidium: Agent output, turned into a visual report";
 const description =
-  "Salidium reads a Claude Code or Codex run and tells you what changed, why, which checks passed, and what needs you. Runs on your machine.";
+  "Salidium reads a Claude Code or Codex run and tells you what changed, why, which checks passed, and what it flagged for a human. Runs on your machine.";
 
 /*
  * The link card. It is a capture of the running interface at 1200x630, written by
