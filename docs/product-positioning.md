@@ -17,16 +17,24 @@ output is a familiar object a reader can picture rather than an abstract functio
 The line is also the GitHub repository description verbatim, which is the surface a stranger meets
 first.
 
-Salidium turns Claude Code and Codex sessions into a clear, evidence-linked report of what changed,
-why, what was verified, and what needs you.
+Salidium turns Claude Code and Codex sessions into a clear, evidence-linked report: what changed,
+why, what was verified, and what it flagged for a human.
+
+"What it flagged for a human" replaced "what needs you" on 2026-08-20. "Needs you" is the label on
+the sessions list and it is right there: a heading with a count beside it, read by someone already
+looking at the product. Lifted into a sentence it becomes a noun phrase nobody says out loud, and a
+reader who has never seen the group stops on it. The replacement is not new wording. It is the
+product's own gloss of the same bucket, from the tooltip on the review badge in
+`packages/ui/src/components/Report.tsx`, which is where the product already had to explain the
+label to a person. The label itself is unchanged.
 
 Use this promise consistently in the README, website hero, npm description, GitHub description, and
 social metadata. Channel constraints may change the grammar, but not the product claim.
 
 Recommended short description for npm, GitHub, and social metadata:
 
-> Turn Claude Code and Codex sessions into a clear, evidence-linked report of what changed, why,
-> what was verified, and what needs you.
+> Turn Claude Code and Codex sessions into a clear, evidence-linked report: what changed, why,
+> what was verified, and what it flagged for a human.
 
 ## Communication order
 

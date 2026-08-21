@@ -20,6 +20,17 @@ Changes to provider adapters should include synthetic provider records and tests
 identifiers, provenance, redaction, and hook/session-file reconciliation. Changes to reduction or
 history semantics should include replay tests and, when required, a reducer-version update.
 
+### Screenshots
+
+Every image in the README and the documentation is a screenshot of the running product, produced by
+`scripts/capture-demo.mjs`, `scripts/capture-docs.mjs` and `scripts/capture-tour.mjs`. Each boots
+the seeded fixture in `scripts/demo-daemon.mjs`, drives the real interface, and writes into
+`apps/site/public`. Read `scripts/capture-context.mjs` before changing any of them: the fixture's
+clock, timezone and locale are pinned and the shutter refuses a frame until two agree, so two runs
+of unchanged code produce identical bytes. Prove that before committing a capture change, and do
+not commit churn you cannot attribute to a real change. The tour needs an ffmpeg with GIF support
+on the path; the one Playwright bundles is built without it.
+
 ## Data and repository hygiene
 
 Never commit real provider transcripts, rollout files, hook payloads, SQLite databases, logs,

@@ -14,7 +14,7 @@
   "bin": {
     "salidium": "bundle/salidium.mjs"
   },
-  "description": "Turn Claude Code and Codex sessions into a clear, evidence-linked report of what changed, why, what was verified, and what needs you.",
+  "description": "Turn Claude Code and Codex sessions into a clear, evidence-linked report: what changed, why, what was verified, and what it flagged for a human.",
   "license": "MIT",
   "author": "Glendon Chin",
   "homepage": "https://github.com/twinkling-reality/salidium#readme",

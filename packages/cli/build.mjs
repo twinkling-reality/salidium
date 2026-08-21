@@ -59,7 +59,21 @@ cpSync(uiDist, join(out, 'ui'), { recursive: true });
  * where they belong. Copied in at pack time and gitignored, so there is one copy under version
  * control and the published tarball still carries the licence it claims in its metadata.
  */
-for (const f of ['README.md', 'LICENSE']) cpSync(join(repoRoot, f), join(here, f));
+cpSync(join(repoRoot, 'LICENSE'), join(here, 'LICENSE'));
+
+/*
+ * The README's screenshots, made absolute on the way into the tarball.
+ *
+ * They are written as repository-relative paths because that is the form that works everywhere the
+ * file is actually read as a file: on the repository page, in an editor's preview, on a branch, and
+ * in a fork. npm resolves a relative path against `repository.directory`, which is `packages/cli`,
+ * so the same paths there point at a directory that does not exist and every image is broken.
+ */
+const RAW = 'https://raw.githubusercontent.com/twinkling-reality/salidium/main/';
+const readme = readFileSync(join(repoRoot, 'README.md'), 'utf8');
+const absolute = readme.replaceAll(/(src|srcset)="(apps\/site\/public\/)/g, `$1="${RAW}$2`);
+if (absolute === readme) throw new Error('README.md has no relative image paths left to rewrite');
+writeFileSync(join(here, 'README.md'), absolute);
 
 const bytes = Object.values(result.metafile.outputs).reduce((n, o) => n + o.bytes, 0);
 process.stdout.write(`salidium bundle: ${(bytes / 1024).toFixed(0)} KB + ui\n`);
