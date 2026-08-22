@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test as base, expect } from '@playwright/test';
 import { EventBuilder } from '../../packages/core/dist/testing/eventBuilders.js';
@@ -27,10 +27,21 @@ export const test = base.extend<Record<string, never>, WorkerFixtures>({
   daemon: [
     async ({ browserName: _browserName }, use) => {
       const temporary = await mkdtemp(join(tmpdir(), 'salidium-browser-e2e-'));
+      const originalPath = process.env.PATH;
       let handle: DaemonHandle | undefined;
       try {
         const salidiumHome = join(temporary, 'salidium');
+        const providerBin = join(temporary, 'providers-bin');
         await mkdir(salidiumHome, { recursive: true });
+        await mkdir(providerBin, { recursive: true });
+        // The settings surface needs both provider routes to exist on every test machine. These
+        // trusted-path stand-ins are never invoked because the fixture keeps explanations Off.
+        for (const command of ['claude', 'codex']) {
+          const path = join(providerBin, command);
+          await writeFile(path, '#!/bin/sh\nexit 0\n');
+          await chmod(path, 0o700);
+        }
+        process.env.PATH = [providerBin, originalPath].filter(Boolean).join(delimiter);
         // Browser fixtures exercise the explanation controls, not a real paid helper invocation.
         // Start at Off so a developer's locally installed CLI can never be called by a test run.
         await writeFile(
@@ -116,6 +127,8 @@ export const test = base.extend<Record<string, never>, WorkerFixtures>({
         });
       } finally {
         await handle?.stop();
+        if (originalPath === undefined) delete process.env.PATH;
+        else process.env.PATH = originalPath;
         await rm(temporary, { recursive: true, force: true });
       }
     },
