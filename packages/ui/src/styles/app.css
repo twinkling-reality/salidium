@@ -2716,6 +2716,21 @@
   font-weight: 600;
 }
 
+.mu-choice[data-choice="Written Why + How"] button[data-value="off"].is-on {
+  box-shadow: inset 0 0 0 1px var(--ok);
+  color: var(--ok);
+}
+
+.mu-cadence-note {
+  margin: calc(var(--space-1) * -1) 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.mu-cadence-note.is-off {
+  color: var(--ok);
+}
+
 .mu-choice-set button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;

@@ -8,6 +8,7 @@ import { MarksKey, SessionList } from './components/SessionList.tsx';
 import { SessionView } from './components/SessionView.tsx';
 import { ExplanationSettings } from './components/Settings.tsx';
 import { useSessionList } from './hooks/useLiveSession.ts';
+import { activeExplanationMode } from './lib/explanationMode.ts';
 import { useModalFocus } from './lib/useModalFocus.ts';
 import { useAppStore } from './store/appStore.ts';
 
@@ -51,6 +52,7 @@ export function App() {
   const listConnection = useAppStore((s) => s.listConnection);
   const sidebarOpen = useAppStore((s) => s.sidebarOpen);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
+  const loadExplainer = useAppStore((s) => s.loadExplainer);
   const sideRef = useRef<HTMLElement>(null);
   const mobileSideTriggerRef = useRef<HTMLDivElement>(null);
   const narrow = useNarrowLayout();
@@ -67,6 +69,10 @@ export function App() {
     window.addEventListener('hashchange', apply);
     return () => window.removeEventListener('hashchange', apply);
   }, [setToken]);
+
+  useEffect(() => {
+    if (api) loadExplainer();
+  }, [api, loadExplainer]);
 
   // Hash routing: #/s/<sessionId>
   useEffect(() => {
@@ -245,6 +251,8 @@ export function App() {
 function FirstRun() {
   const statsOpen = useAppStore((state) => state.statsOpen);
   const toggleStats = useAppStore((state) => state.toggleStats);
+  const explainer = useAppStore((state) => state.explainer);
+  const explanationMode = activeExplanationMode(explainer);
   return (
     <div className={`first-run ${statsOpen ? 'has-inspector' : ''}`}>
       <div className="main-empty first-run-main">
@@ -252,8 +260,9 @@ function FirstRun() {
           <ToolButton
             icon="stats"
             label="Models & Usage"
+            value={explanationMode?.label}
             on={statsOpen}
-            title="Show explanation models, token usage and defaults"
+            title={`Show explanation models and token usage${explanationMode ? `. ${explanationMode.label}: ${explanationMode.detail}.` : ''}`}
             onClick={toggleStats}
           />
         </div>

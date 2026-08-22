@@ -90,6 +90,32 @@ describe('built-in backend invocations', () => {
     }
   });
 
+  it('kills a provider process when the explanation is canceled', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'salidium-explainer-abort-'));
+    const command = join(root, 'claude');
+    const previousHome = process.env.SALIDIUM_HOME;
+    try {
+      writeFileSync(command, '#!/bin/sh\nexec /bin/sleep 30\n');
+      chmodSync(command, 0o700);
+      process.env.SALIDIUM_HOME = join(root, 'state');
+      const backend = resolveExplainerBackend('claude-code', {
+        PATH: root,
+        SALIDIUM_EXPLAINER: 'claude',
+      });
+      expect(backend).toBeDefined();
+      const controller = new AbortController();
+      const startedAt = Date.now();
+      const pending = backend?.generate({ ...request, signal: controller.signal });
+      setTimeout(() => controller.abort(), 20);
+      await expect(pending).rejects.toThrow('explainer canceled');
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+    } finally {
+      if (previousHome === undefined) delete process.env.SALIDIUM_HOME;
+      else process.env.SALIDIUM_HOME = previousHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('runs Codex ephemerally and tool-free, and reads the prompt from stdin', () => {
     const invocation = buildCodexInvocation(
       request,

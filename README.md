@@ -4,7 +4,7 @@
 
 Reading back a Claude Code or Codex run means scrolling the whole transcript. Salidium reads it and
 draws what happened. You do not have to wait for the run to end. The report updates while the agent
-is still working, and an explanation is written at the end of each turn.
+is still working. Optional written Why and How start in Local only mode, with no model calls.
 
 ```bash
 npx salidium
@@ -18,7 +18,7 @@ npx salidium
 Salidium is [MIT-licensed](LICENSE), open source, and local-first. The report, event store, and
 interface run on your machine with no Salidium telemetry. Raw transcripts stay local. Optional
 generated explanations send a bounded, redacted excerpt through your installed agent CLI, which
-may contact its provider; they can be turned off.
+may contact its provider; the first run asks before enabling them.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="apps/site/public/report-dark.png">
@@ -27,7 +27,8 @@ may contact its provider; they can be turned off.
 
 Supported agents: Claude Code and Codex. Node.js 24 or newer is required. On first run Salidium
 finds the agents, shows the local settings it wants to update, asks permission, and opens the
-interface.
+interface. It also asks whether written explanations should stay local-only, run when a session is
+done, or update after each reply. Local only is the default.
 
 ## Documentation
 

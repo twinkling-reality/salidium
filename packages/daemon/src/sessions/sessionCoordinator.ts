@@ -48,7 +48,7 @@ export interface CoordinatorOptions {
   /** How long a `session`-stop session must be silent before it counts as over. */
   idleEndMs?: number;
   /** Injected only by tests or a future backend registry. */
-  explainSession?: (state: RunState) => Promise<ExplanationAttempt>;
+  explainSession?: (state: RunState, signal?: AbortSignal) => Promise<ExplanationAttempt>;
   /**
    * What time it is, for the one derivation that asks: `effectiveStatus` calls a session that has
    * been silent for fifteen minutes idle however open its last turn is. `summarizeSession` already
@@ -142,6 +142,8 @@ export class SessionCoordinator {
   private closed = false;
   private flushFailures = 0;
   private explanationStatus: ExplanationStatus | undefined;
+  /** Owns the one provider call this coordinator may have in flight. */
+  private explanationAbort: AbortController | undefined;
   /** The stop in force for this session; the registry pushes a change to every live coordinator. */
   private cadence: ExplainerCadence;
   private idleEndTimer: NodeJS.Timeout | undefined;
@@ -189,11 +191,11 @@ export class SessionCoordinator {
       flushThreshold: 250,
       checkpointEvery: 500,
       explain: envAllows,
-      // The registry passes the stored stop; a coordinator loaded without one keeps the behaviour
-      // that shipped, which is a fresh explanation at every turn end.
-      cadence: envAllows ? 'turn' : 'off',
+      // Fail closed when a caller does not pass a stored preference. Model work must always be an
+      // explicit opt-in, including in future coordinator call sites that bypass the registry.
+      cadence: 'off',
       idleEndMs: IDLE_END_MS,
-      explainSession: explainWithStatus,
+      explainSession: (state, signal) => explainWithStatus(state, { signal }),
       now: Date.now,
       ...args.options,
     };
@@ -390,6 +392,7 @@ export class SessionCoordinator {
     this.cadence = cadence;
     if (cadence === 'off') {
       this.clearIdleEnd();
+      this.explanationAbort?.abort();
       this.explanationStatus = 'disabled';
     } else if (wasOff) {
       // `disabled` was this coordinator's answer to the old stop, not an outcome it observed.
@@ -453,16 +456,19 @@ export class SessionCoordinator {
       return;
     }
     if (this.state.internal) return;
-    if (this.explanationStatus === 'generating') return;
+    if (this.explanationAbort) return;
     if (this.explainedSeq === this.state.latestSeq) return;
     if (this.explanationIsCurrent()) return;
     if (this.state.turns.length === 0) return;
     this.explanationStatus = 'generating';
     this.scheduleSummary();
     const seq = this.state.latestSeq;
+    const controller = new AbortController();
+    this.explanationAbort = controller;
     void this.opts
-      .explainSession(this.state)
+      .explainSession(this.state, controller.signal)
       .then((result) => {
+        if (controller.signal.aborted) return;
         // Marked done either way: a session whose evidence the agent cannot turn into an
         // explanation would otherwise be retried, and paid for, on every open.
         if (result.status === 'generated') this.ingest([result.event]);
@@ -472,9 +478,11 @@ export class SessionCoordinator {
         this.explainedSeq = result.status === 'generated' ? this.state.latestSeq : seq;
       })
       .catch(() => {
+        if (controller.signal.aborted) return;
         this.explanationStatus = 'failed';
       })
       .finally(() => {
+        if (this.explanationAbort === controller) this.explanationAbort = undefined;
         this.scheduleSummary();
       });
   }
@@ -554,6 +562,7 @@ export class SessionCoordinator {
   close(): void {
     this.closed = true;
     this.clearIdleEnd();
+    this.explanationAbort?.abort();
     if (this.summaryTimer) clearTimeout(this.summaryTimer);
     this.checkpoint();
     this.listener.onSummary(this.summary);

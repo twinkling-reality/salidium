@@ -20,6 +20,7 @@ import {
   DEFAULT_PORT,
   daemonPaths,
   defaultUiDist,
+  effectiveCadence,
   getExplainerStatus,
   readDaemonJson,
   readSettings,
@@ -28,15 +29,29 @@ import {
   SqliteStore,
   startDaemon,
   validateSalidiumHistoryDays,
+  writeSettings,
 } from '@salidium/daemon';
-import { type DaemonInfo, PROTOCOL_VERSION } from '@salidium/protocol';
+import {
+  type DaemonInfo,
+  type ExplainerCadence,
+  type ExplainerSettings,
+  ExplainerSettingsSchema,
+  PROTOCOL_VERSION,
+} from '@salidium/protocol';
 import { auditClaims, renderAudit } from './auditClaims.ts';
+import { explanationMode, parseExplanationMode } from './explanationMode.ts';
 import type { IntegrationContext, IntegrationValidation } from './integrations.ts';
 import { integrationById, providerIntegrations } from './integrations.ts';
 import { runFirstRunOnboarding } from './onboarding.ts';
 import { renderReport } from './render.ts';
 import { resolveBrowserLaunch, validateSalidiumPort } from './runtime.ts';
 import { providerDisplayName, sessionSearchQuery } from './showSession.ts';
+import {
+  consentKeyResult,
+  selectionKeyResult,
+  supportsTerminalColor,
+  TerminalUi,
+} from './terminalUi.ts';
 
 const HELP = `salidium: turn a Claude Code or Codex run into a visual report, not a transcript to scroll.
 
@@ -47,6 +62,9 @@ Usage:
   salidium stop                 Stop the background daemon
   salidium restart              Stop it, start it again, and open the UI (--no-open to skip)
   salidium status               Show daemon status
+  salidium explanations         Show whether written explanations can call a model
+  salidium explanations off|when-done|each-reply
+                                Change model-call frequency without stopping local reports
   salidium open                 Open the UI in your browser
   salidium show [session]       Print the report for a session as text (default: most recent)
                                 --detail=summary|detail|source, --width=N
@@ -123,32 +141,67 @@ async function main(argv: string[]): Promise<number> {
     }
     case 'start': {
       const running = await ensureDaemon();
+      const explanations = await currentExplanationState(running, 'reachable');
       process.stdout.write(
-        `daemon running on http://127.0.0.1:${running.port} (pid ${running.pid})\n`,
+        `daemon running on http://127.0.0.1:${running.port} (pid ${running.pid})\nExplanations: ${explanationStateLabel(explanations)}\n`,
       );
       return 0;
     }
     case 'up': {
       const context: IntegrationContext = { userHome, salidiumHome };
-      await runFirstRunOnboarding(
+      const color = supportsTerminalColor(Boolean(process.stdout.isTTY));
+      const firstRun = !existsSync(daemonPaths(salidiumHome).db);
+      const onboarding = await runFirstRunOnboarding(
         context,
         {
           interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
-          confirm: confirmSetup,
+          color,
+          confirm: (question) => confirmSetup(question, color),
+          select: (question, options, selectedIndex) =>
+            selectTerminalOption(question, options, selectedIndex, color),
           write: (text) => process.stdout.write(text),
         },
         {
           assumeYes,
-          firstRun: !existsSync(daemonPaths(salidiumHome).db),
+          firstRun,
         },
       );
-      for (const validation of essentialValidations()) {
-        if (validation.level === 'attention')
+      if (onboarding.explainerCadence) {
+        writeSettings(salidiumHome, {
+          ...readSettings(salidiumHome),
+          explainerCadence: onboarding.explainerCadence,
+        });
+      }
+      const systemAttention = essentialValidations().filter(
+        (validation) => validation.level === 'attention',
+      );
+      if (systemAttention.length > 0 && onboarding.presented) {
+        const ui = new TerminalUi(color);
+        process.stdout.write(ui.section('System'));
+        for (const validation of systemAttention.slice(0, -1))
+          process.stdout.write(ui.item('!', validation.message, 'warn'));
+        const last = systemAttention.at(-1);
+        if (last) process.stdout.write(ui.close('!', last.message, 'warn'));
+      } else {
+        for (const validation of systemAttention)
           process.stdout.write(`Needs attention: ${validation.message}.\n`);
       }
       const running = await ensureDaemon();
       if (!noOpen && process.stdout.isTTY) openBrowser(uiUrl(running));
-      process.stdout.write(`${uiUrl(running)}\n`);
+      const url = uiUrl(running);
+      const ui = new TerminalUi(color);
+      const state = await currentExplanationState(running, 'reachable');
+      if (onboarding.presented) {
+        process.stdout.write(
+          ui.open(url, !noOpen && Boolean(process.stdout.isTTY), Boolean(firstRun)),
+        );
+      } else if (process.stdout.isTTY) {
+        const mode = explanationMode(state.effective);
+        process.stdout.write(ui.running(mode.label, mode.detail));
+        process.stdout.write(ui.open(url, !noOpen));
+      } else {
+        process.stdout.write(`${url}\n`);
+      }
       return 0;
     }
     case 'open': {
@@ -257,6 +310,12 @@ async function main(argv: string[]): Promise<number> {
               ? `stopped daemon (pid ${stopped.pid})\n`
               : `daemon (pid ${stopped.pid}) was asked to stop and is still running\n`,
       );
+      const storedMode = readSettings(salidiumHome).explainerCadence;
+      if (storedMode !== 'off') {
+        process.stdout.write(
+          `Explanations remain set to ${explanationMode(storedMode).label} for the next start. Disable them with: salidium explanations off\n`,
+        );
+      }
       return stopped === undefined || (stopped.signaled && stopped.exited) ? 0 : 1;
     }
     /*
@@ -294,7 +353,10 @@ async function main(argv: string[]): Promise<number> {
        * `--no-open` for a script, which wants the daemon and not a browser window.
        */
       if (!noOpen) openBrowser(uiUrl(running));
-      process.stdout.write(`daemon running (pid ${running.pid})\n${uiUrl(running)}\n`);
+      const explanations = await currentExplanationState(running, 'reachable');
+      process.stdout.write(
+        `daemon running (pid ${running.pid})\nExplanations: ${explanationStateLabel(explanations)}\n${uiUrl(running)}\n`,
+      );
       return 0;
     }
     case 'status': {
@@ -305,6 +367,8 @@ async function main(argv: string[]): Promise<number> {
           ? `running: pid ${d.pid}, port ${d.port}, since ${d.startedAt}${presence === 'unresponsive' ? '; not answering' : ''}\n`
           : 'not running\n',
       );
+      const explanations = await currentExplanationState(d, presence);
+      process.stdout.write(`Explanations: ${explanationStateLabel(explanations)}\n`);
       const context: IntegrationContext = { userHome, salidiumHome };
       for (const provider of providerIntegrations) {
         const detection = provider.detect(context);
@@ -321,6 +385,70 @@ async function main(argv: string[]): Promise<number> {
        * question it always was, and a silent daemon is not an answer.
        */
       return presence === 'reachable' ? 0 : 1;
+    }
+    case 'explanations': {
+      const d = readDaemonJson(salidiumHome);
+      const presence = await presenceOf(d);
+      if (!arg) {
+        const state = await currentExplanationState(d, presence);
+        const mode = explanationMode(state.effective);
+        process.stdout.write(
+          `Explanations: ${explanationStateLabel(state)}\n${mode.detail}. Reports, evidence, and quantities stay local.\nChange with: salidium explanations off|when-done|each-reply\n`,
+        );
+        return 0;
+      }
+      const cadence = parseExplanationMode(arg);
+      if (!cadence) {
+        process.stderr.write(
+          'Choose off, when-done, or each-reply. Example: salidium explanations off\n',
+        );
+        return 2;
+      }
+      if (presence === 'unresponsive') {
+        process.stderr.write(
+          `daemon pid ${d?.pid ?? 'unknown'} is running but did not answer; the setting was not changed\n`,
+        );
+        return 1;
+      }
+
+      let state: ExplanationState;
+      if (d && presence === 'reachable') {
+        try {
+          const response = await fetch(`http://127.0.0.1:${d.port}/api/settings/explainer`, {
+            method: 'PUT',
+            headers: {
+              Authorization: `Bearer ${d.token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ cadence }),
+            signal: AbortSignal.timeout(2_000),
+          });
+          if (!response.ok) {
+            process.stderr.write(`daemon refused the explanation setting (${response.status})\n`);
+            return 1;
+          }
+          const settings = ExplainerSettingsSchema.parse(await response.json());
+          state = explanationStateFromApi(settings);
+        } catch {
+          process.stderr.write(
+            'daemon stopped answering; the explanation setting was not changed\n',
+          );
+          return 1;
+        }
+      } else {
+        writeSettings(salidiumHome, {
+          ...readSettings(salidiumHome),
+          explainerCadence: cadence,
+        });
+        state = localExplanationState();
+      }
+      const chosen = explanationMode(cadence);
+      process.stdout.write(`Saved: ${chosen.label} · ${chosen.detail}\n`);
+      if (state.effective !== cadence)
+        process.stdout.write(
+          'Local only is active because the daemon environment prevents model calls.\n',
+        );
+      return 0;
     }
     case 'install-hooks':
     case 'uninstall-hooks': {
@@ -644,6 +772,50 @@ function uiUrl(d: DaemonJson): string {
   return `http://127.0.0.1:${d.port}/#token=${d.token}`;
 }
 
+interface ExplanationState {
+  stored: ExplainerCadence;
+  effective: ExplainerCadence;
+  envOff: boolean;
+}
+
+function explanationStateFromApi(settings: ExplainerSettings): ExplanationState {
+  return {
+    stored: settings.cadence,
+    effective: settings.envOff ? 'off' : settings.cadence,
+    envOff: settings.envOff,
+  };
+}
+
+function localExplanationState(): ExplanationState {
+  const stored = readSettings(salidiumHome).explainerCadence;
+  const effective = effectiveCadence(stored);
+  return { stored, effective, envOff: effective !== stored };
+}
+
+async function currentExplanationState(
+  daemon: DaemonJson | undefined,
+  presence: Presence,
+): Promise<ExplanationState> {
+  if (daemon && presence === 'reachable') {
+    try {
+      const response = await fetch(`http://127.0.0.1:${daemon.port}/api/settings/explainer`, {
+        headers: { Authorization: `Bearer ${daemon.token}` },
+        signal: AbortSignal.timeout(2_000),
+      });
+      if (response.ok)
+        return explanationStateFromApi(ExplainerSettingsSchema.parse(await response.json()));
+    } catch {
+      /* A pre-settings daemon still has the stored file as a safe local answer. */
+    }
+  }
+  return localExplanationState();
+}
+
+function explanationStateLabel(state: ExplanationState): string {
+  const mode = explanationMode(state.effective);
+  return `${mode.label}${state.envOff && state.stored !== 'off' ? ' (forced by environment)' : ''} · ${mode.detail}`;
+}
+
 async function alive(d: DaemonJson): Promise<boolean> {
   try {
     const res = await fetch(`http://127.0.0.1:${d.port}/api/info`, {
@@ -874,14 +1046,109 @@ function openBrowser(url: string): void {
   }
 }
 
-async function confirmSetup(question: string): Promise<boolean> {
-  const prompt = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    const answer = await prompt.question(question);
-    return /^(y|yes)$/i.test(answer.trim());
-  } finally {
-    prompt.close();
+async function confirmSetup(question: string, color: boolean): Promise<boolean> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    const prompt = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      const answer = await prompt.question(`${question} [y/N] `);
+      return /^(y|yes)$/i.test(answer.trim());
+    } finally {
+      prompt.close();
+    }
   }
+
+  const ui = new TerminalUi(color);
+  const input = process.stdin;
+  const output = process.stdout;
+  const wasRaw = Boolean(input.isRaw);
+  let selected = false;
+
+  const render = () => output.write(`\u001b[?25l\r\u001b[2K${ui.choice(question, selected)}`);
+
+  return new Promise<boolean>((resolve, reject) => {
+    const finish = (decision: boolean) => {
+      input.off('data', onData);
+      input.setRawMode(wasRaw);
+      if (!wasRaw) input.pause();
+      render();
+      output.write('\u001b[?25h\n');
+      resolve(decision);
+    };
+    const onData = (data: Buffer | string) => {
+      const result = consentKeyResult(String(data), selected);
+      selected = result.selected;
+      if (result.aborted) {
+        input.off('data', onData);
+        input.setRawMode(wasRaw);
+        if (!wasRaw) input.pause();
+        output.write('\u001b[?25h\n');
+        reject(new Error('Aborted with Ctrl+C'));
+        return;
+      }
+      if (result.decision !== undefined) {
+        finish(result.decision);
+        return;
+      }
+      render();
+    };
+
+    input.setRawMode(true);
+    input.resume();
+    input.on('data', onData);
+    render();
+  });
+}
+
+async function selectTerminalOption(
+  question: string,
+  options: readonly string[],
+  initialIndex: number,
+  color: boolean,
+): Promise<number> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return initialIndex;
+
+  const ui = new TerminalUi(color);
+  const input = process.stdin;
+  const output = process.stdout;
+  const wasRaw = Boolean(input.isRaw);
+  let selectedIndex = initialIndex;
+
+  const render = () =>
+    output.write(`\u001b[?25l\r\u001b[2K${ui.choices(question, options, selectedIndex)}`);
+
+  return new Promise<number>((resolve, reject) => {
+    const finish = (decision: number) => {
+      input.off('data', onData);
+      input.setRawMode(wasRaw);
+      if (!wasRaw) input.pause();
+      selectedIndex = decision;
+      render();
+      output.write('\u001b[?25h\n');
+      resolve(decision);
+    };
+    const onData = (data: Buffer | string) => {
+      const result = selectionKeyResult(String(data), selectedIndex, options.length);
+      selectedIndex = result.selectedIndex;
+      if (result.aborted) {
+        input.off('data', onData);
+        input.setRawMode(wasRaw);
+        if (!wasRaw) input.pause();
+        output.write('\u001b[?25h\n');
+        reject(new Error('Aborted with Ctrl+C'));
+        return;
+      }
+      if (result.decision !== undefined) {
+        finish(result.decision);
+        return;
+      }
+      render();
+    };
+
+    input.setRawMode(true);
+    input.resume();
+    input.on('data', onData);
+    render();
+  });
 }
 
 function essentialValidations(): IntegrationValidation[] {
@@ -957,6 +1224,7 @@ async function doctor(): Promise<number> {
     lines.push('settings file is invalid; optional explanations are safely off until it is fixed');
     problems++;
   }
+  lines.push(`explanations ${explanationStateLabel(localExplanationState())}`);
   const context: IntegrationContext = { userHome, salidiumHome };
   for (const provider of providerIntegrations) {
     const detection = provider.detect(context);

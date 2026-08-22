@@ -200,6 +200,7 @@ export interface ExplainerOptions {
   environment?: NodeJS.ProcessEnv;
   model?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 /** The evidence handed to the model: what Salidium already knows, bounded and redacted. */
@@ -261,6 +262,7 @@ export async function explainWithStatus(
       schema: SCHEMA,
       model,
       timeoutMs,
+      signal: opts.signal,
     });
     raw = result.output;
     generatedBy = result.model;

@@ -124,6 +124,38 @@ afterEach(() => {
 });
 
 describe('detached daemon launch failures', () => {
+  it('keeps explanations local by default and changes the persisted setting while stopped', () => {
+    const home = temporaryHome();
+    const initial = run(home, ['explanations'], '0');
+    expect(initial.status).toBe(0);
+    expect(initial.stdout).toMatch(/Explanations: Local only · No model calls/);
+
+    const changed = run(home, ['explanations', 'when-done'], '0');
+    expect(changed.status).toBe(0);
+    expect(changed.stdout).toMatch(/Saved: When done · One model call after a session ends/);
+    expect(JSON.parse(readFileSync(join(home, 'settings.json'), 'utf8'))).toMatchObject({
+      explainerCadence: 'session',
+    });
+  });
+
+  it('changes explanations immediately while running and reports the active state', () => {
+    const home = temporaryHome();
+    expect(start(home, '0').status).toBe(0);
+    try {
+      const changed = run(home, ['explanations', 'each-reply'], '0');
+      expect(changed.status).toBe(0);
+      expect(changed.stdout).toMatch(/Saved: Each reply/);
+
+      const status = run(home, ['status'], '0');
+      expect(status.stdout).toMatch(
+        /Explanations: Each reply · One model call after each agent reply/,
+      );
+    } finally {
+      run(home, ['explanations', 'off'], '0');
+      run(home, ['stop'], '0');
+    }
+  }, 30_000);
+
   it('prints the installed version without starting the daemon', () => {
     const home = temporaryHome();
     const result = run(home, ['--version'], '0');

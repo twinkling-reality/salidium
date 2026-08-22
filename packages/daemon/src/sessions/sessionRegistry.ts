@@ -63,17 +63,19 @@ export class SessionRegistry {
    * The stop every coordinator is loaded with. Held here rather than read from the store on each
    * load: it is one value for the whole daemon, and a coordinator is created on the ingest path.
    */
-  private explainerCadence: ExplainerCadence = 'turn';
+  private explainerCadence: ExplainerCadence = 'off';
   /** Handed to every coordinator this registry loads; see `CoordinatorOptions.now`. */
   private readonly now: (() => number) | undefined;
   /** Reads the daemon's current helper routing at call time, so settings apply without a restart. */
-  private readonly explainSession: ((state: RunState) => Promise<ExplanationAttempt>) | undefined;
+  private readonly explainSession:
+    | ((state: RunState, signal?: AbortSignal) => Promise<ExplanationAttempt>)
+    | undefined;
 
   constructor(
     store: SalidiumStore,
     opts: {
       explainerCadence?: ExplainerCadence;
-      explainSession?: (state: RunState) => Promise<ExplanationAttempt>;
+      explainSession?: (state: RunState, signal?: AbortSignal) => Promise<ExplanationAttempt>;
       now?: () => number;
     } = {},
   ) {

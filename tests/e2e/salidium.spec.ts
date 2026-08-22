@@ -222,18 +222,33 @@ test('models and usage keeps both ledgers and explanation controls in one rail',
   test.skip(testInfo.project.name.includes('narrow'), 'desktop flow');
   await openSalidium(page, daemon);
 
-  await page.getByRole('button', { name: 'Models & Usage' }).click();
+  const modelsButton = page.locator('.session-actions-end .btn[data-value]');
+  await expect(modelsButton).toContainText('Local only');
+  await modelsButton.click();
   const models = page.getByRole('complementary', { name: 'Models & Usage' });
   await expect(models.getByRole('heading', { name: 'Models' })).toBeVisible();
   await expect(models).toContainText('test-model');
   await expect(models).toContainText('No token data');
   await expect(models.getByRole('heading', { name: 'Explanation' })).toBeVisible();
+  await expect(models.getByRole('button', { name: 'Local only' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await expect(models).toContainText('No model calls');
+  await expect(models.getByRole('button', { name: 'Same as coding' })).toHaveCount(0);
+  await expect(models.getByRole('button', { name: 'Choose a model' })).toHaveCount(0);
+
+  await models.getByRole('button', { name: 'When done' }).click();
+  await expect(modelsButton).toContainText('When done');
   await expect(models).toContainText('claude-haiku-4-5-20251001');
   await expect(models.getByRole('button', { name: 'Same as coding' })).toHaveAttribute(
     'aria-pressed',
     'true',
   );
-  await expect(models.getByRole('button', { name: 'Off' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(models.getByRole('button', { name: 'When done' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
   await expect(models.getByRole('textbox', { name: 'Model name' })).toHaveCount(0);
   await models.getByRole('button', { name: 'Choose a model' }).click();
   const modelChoices = models.getByRole('list', { name: 'Explanation model choices' });

@@ -60,7 +60,7 @@ const RAW: Array<Omit<Page, "n">> = [
       p("Salidium needs Node 24 or newer. There is nothing else to install first."),
       command("npx salidium"),
       p(
-        "On first run it looks for Claude Code and Codex, prints the files it wants to change, and asks once. Answer anything but yes and nothing is written.",
+        "On first run it looks for Claude Code and Codex, prints the files it wants to change, and asks before adding hooks. It then asks whether the optional written Why and How should make model calls. Local only is selected by default.",
       ),
       h("What it changes"),
       terms([
@@ -82,7 +82,10 @@ const RAW: Array<Omit<Page, "n">> = [
       list(
         "Run the same command later and it reopens whatever is already running.",
         "If the CLI is newer than the running daemon, it stops and restarts it.",
-        "In a terminal that is not interactive it prints the address instead of opening a browser, and without `--yes` it changes nothing at all.",
+        "In a terminal that is not interactive it prints the address instead of opening a browser, and without `--yes` it changes no agent settings.",
+      ),
+      p(
+        "`salidium stop` stops the background service but keeps your saved explanation choice. To prevent model calls while keeping local reports live, run `salidium explanations off`. `salidium status` shows both the service and explanation state.",
       ),
     ],
   },
@@ -309,15 +312,15 @@ const RAW: Array<Omit<Page, "n">> = [
       ),
       h("Models & Usage"),
       p(
-        "One compact rail for the work and explanation models, explanation controls, and exact token usage.",
+        "One compact rail for the work and explanation models, explanation controls, and exact token usage. Its toolbar button always shows Local only, When done, or Each reply.",
       ),
       shot(
         "models-usage",
         "The Salidium Models & Usage rail, showing the coding and explanation models, explanation controls, and separate usage totals.",
       ),
       terms([
-        ["Models", "The work model and the model used for the explanation."],
-        ["Explanation", "Which agent writes it, when it runs, and an optional model choice."],
+        ["Models", "The work model and, when enabled, the model used for the explanation."],
+        ["Explanation", "Whether model calls are off, run once when done, or run after each reply. Agent and model choices appear only when they can be used."],
         ["Usage", "Exact session tokens and the separate all-time explanation ledger."],
       ]),
       note(
@@ -400,12 +403,15 @@ const RAW: Array<Omit<Page, "n">> = [
       ),
       h("When it runs"),
       terms([
-        ["Off", "The page Salidium derives, and nothing else. No model is ever called."],
-        ["When done", "One explanation after the session finishes or goes quiet."],
-        ["Each reply", "Refresh the explanation after every reply."],
+        ["Local only", "The full deterministic page, with no model calls. This is the default."],
+        ["When done", "One model call after the session finishes or goes quiet."],
+        ["Each reply", "One model call after every agent reply."],
       ]),
       p(
-        "Open Models & Usage in the session toolbar. It names the work and explanation models, and lets you choose which agent writes explanations and when. Choose a model opens a short list that adapts to the selected agent; Other model keeps manual entry available as a fallback. The same control is available before the first session exists.",
+        "The Models & Usage button shows the active mode before you open it. The panel names the work and explanation models, and lets you choose which agent writes explanations and when. Choose a model opens a short list that adapts to the selected agent; Other model keeps manual entry available as a fallback. The same control is available before the first session exists.",
+      ),
+      note(
+        "Stopping the daemon does not erase the saved mode. Use `salidium explanations off` as the persistent no-model-call control; local reports keep working and an explanation already generating is canceled.",
       ),
       h("What it uses"),
       p(
@@ -508,6 +514,7 @@ const RAW: Array<Omit<Page, "n">> = [
         ["`salidium`", "Start it and open the page. This is what `npx salidium` runs."],
         ["`salidium open`", "Open the page with the current token attached."],
         ["`salidium status`", "Show the daemon and connection state."],
+        ["`salidium explanations`", "Show the active model-call mode, or set `off`, `when-done`, or `each-reply`."],
         ["`salidium doctor`", "Check the local setup and report problems."],
         ["`salidium show`", "Print a session as a report in the terminal."],
         ["`salidium restart`", "Restart it and reopen the page."],

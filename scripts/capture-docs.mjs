@@ -113,8 +113,13 @@ const SHOTS = [
     click: 'Models & Usage',
     waitFor: "[aria-label='Models & Usage']",
     next: {
-      click: 'Choose a model',
-      waitFor: 'Salidium default',
+      click: 'When done',
+      exact: true,
+      waitFor: 'Choose a model',
+      next: {
+        click: 'Choose a model',
+        waitFor: 'Salidium default',
+      },
     },
     clip: "[aria-label='Models & Usage']",
     pad: 0,
@@ -181,10 +186,8 @@ async function record(name, theme, buffer) {
 await mkdir(OUT, { recursive: true });
 const demo = await startDemo({ at: CAPTURE_INSTANT });
 /*
- * The demo boots with the explainer disabled so seeding can never call an installed agent. The
- * scheduler has already inherited that stop and no more events are added, so the docs process can
- * release the environment lock before opening the static settings capture. This shows the controls
- * a reader can actually use without making the fixture nondeterministic or spending provider quota.
+ * The demo boots in Local only mode and no more events are added. The settings capture can select
+ * When done to reveal its agent and model choices without scheduling a provider call.
  */
 delete process.env.SALIDIUM_EXPLAINER;
 delete process.env.SALIDIUM_EXPLAIN_MODEL;
@@ -227,10 +230,14 @@ try {
         await page.getByText(shot.sessionReady).first().waitFor({ timeout: 15_000 });
       }
 
-      for (const step of [shot, shot.next].filter((s) => s && (s.click || s.clickSelector))) {
+      const steps = [];
+      for (let step = shot; step; step = step.next) {
+        if (step.click || step.clickSelector) steps.push(step);
+      }
+      for (const step of steps) {
         const control = step.clickSelector
           ? page.locator(step.clickSelector)
-          : page.getByRole('button', { name: step.click, exact: false });
+          : page.getByRole('button', { name: step.click, exact: step.exact ?? false });
         await control.first().click();
         const after = /^[.[#]/.test(step.waitFor)
           ? page.locator(step.waitFor)

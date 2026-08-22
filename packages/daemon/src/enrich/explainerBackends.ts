@@ -21,6 +21,8 @@ export interface ExplainerBackendRequest {
   schema: unknown;
   model?: string;
   timeoutMs: number;
+  /** Cancels a provider process when the user disables explanations or stops Salidium. */
+  signal?: AbortSignal;
 }
 
 export interface ExplainerBackendResult {
@@ -56,7 +58,11 @@ function explainerCwd(): string {
   return dir;
 }
 
-function runProcess(invocation: ProcessInvocation, timeoutMs: number): Promise<string> {
+function runProcess(
+  invocation: ProcessInvocation,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const path = trustedPathEntries().join(delimiter);
     const child = spawn(invocation.command, invocation.args, {
@@ -71,13 +77,27 @@ function runProcess(invocation: ProcessInvocation, timeoutMs: number): Promise<s
     let err = '';
     let outBytes = 0;
     let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+    };
     const fail = (error: Error) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      cleanup();
       reject(error);
     };
-    const timer = setTimeout(() => {
+    const abort = () => {
+      child.kill('SIGKILL');
+      fail(new Error('explainer canceled'));
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    timer = setTimeout(() => {
       child.kill('SIGKILL');
       fail(new Error(`explainer timed out after ${timeoutMs}ms`));
     }, timeoutMs);
@@ -99,7 +119,7 @@ function runProcess(invocation: ProcessInvocation, timeoutMs: number): Promise<s
     child.on('close', (code) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      cleanup();
       if (code === 0) resolve(out);
       else reject(new Error(`${invocation.command} exited ${code}: ${err.trim().slice(0, 200)}`));
     });
@@ -203,7 +223,7 @@ function createClaudeExplainerBackend(resolvedCommand?: string): ExplainerBacken
       if (!command) throw new Error('trusted claude command is unavailable');
       const invocation = buildClaudeInvocation(request, command);
       return {
-        output: await runProcess(invocation, request.timeoutMs),
+        output: await runProcess(invocation, request.timeoutMs, request.signal),
         model: invocation.model,
       };
     },
@@ -221,7 +241,7 @@ function createCodexExplainerBackend(resolvedCommand?: string): ExplainerBackend
       writeFileSync(schemaPath, JSON.stringify(request.schema), { mode: 0o600 });
       const invocation = buildCodexInvocation(request, schemaPath, command);
       return {
-        output: await runProcess(invocation, request.timeoutMs),
+        output: await runProcess(invocation, request.timeoutMs, request.signal),
         model: invocation.model,
       };
     },

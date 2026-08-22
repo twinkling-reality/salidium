@@ -16,9 +16,9 @@ import { fileURLToPath } from 'node:url';
 import { EventBuilder } from '../packages/core/dist/testing/eventBuilders.js';
 import { startDaemon } from '../packages/daemon/dist/index.js';
 
-const SESSION = 'claude-code:demo-checkout';
 const CWD = '/Users/dev/acme/checkout';
-const MODEL = 'claude-opus-5';
+const DEFAULT_PROVIDER = 'claude-code';
+const DEFAULT_MODEL = 'claude-opus-5';
 
 /*
  * The instant this fixture calls now.
@@ -88,6 +88,10 @@ function titled(event, title) {
   return event.kind === 'session.started' ? { ...event, title } : event;
 }
 
+function fromProvider(event, provider) {
+  return { ...event, source: { ...event.source, provider } };
+}
+
 /*
  * The generated explanation is an event like any other, so the Why and How diagrams are drawn by
  * the product from data rather than posed. Two lanes make Why converge, which is the shape the
@@ -97,16 +101,16 @@ function titled(event, title) {
  * never heard of Salidium needs no glossary to understand "some customers were charged twice", and
  * the harm is in the first sentence rather than four boxes into the diagram.
  */
-function explanation(sessionId, ts, basedOnSeq) {
+function explanation(sessionId, ts, basedOnSeq, provider, model) {
   return {
     id: `${sessionId}#explanation:${basedOnSeq}`,
     sessionId,
     ts,
     tsSource: 'provider',
-    source: { provider: 'claude-code', channel: 'salidium' },
+    source: { provider, channel: 'salidium' },
     kind: 'salidium.explanation',
     basedOnSeq,
-    model: MODEL,
+    model,
     what: {
       summary: 'Some customers were charged twice when checkout retried a payment.',
       currently: null,
@@ -154,23 +158,22 @@ const temporary = await mkdtemp(join(tmpdir(), 'salidium-demo-'));
  * `at` is what the fixture and the daemon both call now. A capture passes `CAPTURE_INSTANT`; a
  * person browsing passes nothing and gets the wall clock.
  */
-export async function startDemo({ at = Date.now() } = {}) {
+export async function startDemo({
+  at = Date.now(),
+  provider = DEFAULT_PROVIDER,
+  model = DEFAULT_MODEL,
+} = {}) {
   /*
    * No model call, and nothing appended after the seeding.
    *
-   * The shipped default is `explainerCadence: 'turn'`, and a fresh home takes it, so booting this
-   * fixture spawned a real `claude -p` for every session whose turn had ended and ingested a
-   * `salidium.explanation` stamped at the wall clock. Measured on 2026-08-20: thirteen of the
-   * twenty-four sessions had their last event rewritten to "now" over the first sixty seconds, so
-   * the Recent group re-sorted and re-labelled itself underneath whatever was being photographed,
-   * and the featured report changed while the capture was still running. It also made the site's
-   * pictures depend on what a model happened to write that minute, which is the opposite of the
-   * claim they carry. Everything the interface shows here is derived by the product from the
-   * event log below, and the one explanation in it is written here on purpose.
+   * Fresh homes now start in Local only mode, so this fixture cannot spawn a provider call. Keep
+   * that invariant visible here: screenshot generation must never depend on what a model happens
+   * to write that minute. Everything the interface shows is derived by the product from the event
+   * log below, and the one explanation in it is written here on purpose.
    */
-  process.env.SALIDIUM_EXPLAINER = 'off';
-
   anchor = at;
+  const session = `${provider}:demo-checkout`;
+  const sessionId = (slug) => `${provider}:demo-${slug}`;
 
   const handle = await startDaemon({
     /*
@@ -192,10 +195,10 @@ export async function startDemo({ at = Date.now() } = {}) {
   });
 
   // Anchored to now, so every relative time in the interface reads honestly in a screenshot.
-  const b = new EventBuilder(SESSION, ago(26));
+  const b = new EventBuilder(session, ago(26));
 
   const events = [
-    titled(b.sessionStarted(CWD, MODEL), 'Fix double charges on checkout retry'),
+    titled(b.sessionStarted(CWD, model), 'Fix double charges on checkout retry'),
 
     b.turnStarted(
       'Some customers are charged twice when checkout retries, and support has to refund by hand. Fix it.',
@@ -229,16 +232,38 @@ export async function startDemo({ at = Date.now() } = {}) {
     b.turnEnded('Docs and mock updated. All tests pass.'),
   ];
 
+  if (provider === 'codex') {
+    events.push(
+      b.raw({
+        id: 'usage:demo-response',
+        kind: 'agent.usage',
+        messageId: 'demo-response',
+        model,
+        inputTokens: 8420,
+        outputTokens: 2180,
+        cacheReadTokens: 64_000,
+        cacheWriteTokens: 0,
+      }),
+    );
+  }
+
   /*
    * Stamped at the wall clock, and load-bearing: `needsYou` keeps an idle session in the group only
    * while its last event is under 30 minutes old, so this timestamp is what holds the hero there.
    * Moving it back to the run's own clock would silently drop the hero out of Needs you.
    */
   const lastSeq = events[events.length - 1].seq;
-  events.push({ ...explanation(SESSION, ago(1), lastSeq), seq: lastSeq + 1 });
+  events.push({
+    ...explanation(session, ago(1), lastSeq, provider, model),
+    seq: lastSeq + 1,
+  });
 
-  handle.registry.ingest(SESSION, events, { cwd: CWD });
-  handle.registry.flush(SESSION);
+  handle.registry.ingest(
+    session,
+    events.map((event) => fromProvider(event, provider)),
+    { cwd: CWD },
+  );
+  handle.registry.flush(session);
 
   /*
    * The rest of the list, and what puts a session in each group:
@@ -250,9 +275,11 @@ export async function startDemo({ at = Date.now() } = {}) {
    *              that, effectiveStatus downgrades it to idle and it falls through to Recent.
    *   Recent     everything finished and clean.
    */
-  function other({ id, cwd, title, startedAgo, model = MODEL, build }) {
+  function other({ id, cwd, title, startedAgo, model: sessionModel = model, build }) {
     const eb = new EventBuilder(id, ago(startedAgo));
-    const list = [titled(eb.sessionStarted(cwd, model), title), ...build(eb)];
+    const list = [titled(eb.sessionStarted(cwd, sessionModel), title), ...build(eb)].map((event) =>
+      fromProvider(event, provider),
+    );
     handle.registry.ingest(id, list, { cwd });
     handle.registry.flush(id);
   }
@@ -260,7 +287,7 @@ export async function startDemo({ at = Date.now() } = {}) {
   // --- Needs you: stopped on a person, or already broken -------------------
 
   other({
-    id: 'claude-code:demo-coupon',
+    id: sessionId('coupon'),
     cwd: '/Users/dev/acme/checkout',
     title: 'Add a coupon field to the checkout form',
     startedAgo: 7,
@@ -273,7 +300,7 @@ export async function startDemo({ at = Date.now() } = {}) {
   });
 
   other({
-    id: 'claude-code:demo-migrate',
+    id: sessionId('migrate'),
     cwd: '/Users/dev/acme/api',
     title: 'Drop the legacy sessions table',
     startedAgo: 13,
@@ -290,7 +317,7 @@ export async function startDemo({ at = Date.now() } = {}) {
    * Working with a flag on it, and gets hoisted because a check has gone red mid-turn.
    */
   other({
-    id: 'claude-code:demo-cdn',
+    id: sessionId('cdn'),
     cwd: '/Users/dev/acme/web',
     title: 'Move product images to the CDN',
     startedAgo: 3,
@@ -305,7 +332,7 @@ export async function startDemo({ at = Date.now() } = {}) {
   // --- Working: an open turn, still moving, nothing flagged ----------------
 
   other({
-    id: 'claude-code:demo-webhooks',
+    id: sessionId('webhooks'),
     cwd: '/Users/dev/acme/billing',
     title: 'Retry failed Stripe webhooks',
     startedAgo: 4,
@@ -317,7 +344,7 @@ export async function startDemo({ at = Date.now() } = {}) {
   });
 
   other({
-    id: 'claude-code:demo-redis',
+    id: sessionId('redis'),
     cwd: '/Users/dev/acme/api',
     title: 'Cache the product list in Redis',
     startedAgo: 8,
@@ -333,7 +360,7 @@ export async function startDemo({ at = Date.now() } = {}) {
    * while visibly having run a check. A second, quieter demonstration of the scope rule.
    */
   other({
-    id: 'claude-code:demo-search',
+    id: sessionId('search'),
     cwd: '/Users/dev/acme/web',
     title: 'Port the search box to the new field',
     startedAgo: 9,
@@ -358,7 +385,7 @@ export async function startDemo({ at = Date.now() } = {}) {
    * session so nothing about the featured one moves.
    */
   other({
-    id: 'claude-code:demo-timeline',
+    id: sessionId('timeline'),
     cwd: '/Users/dev/acme/api',
     title: 'Move invoice numbering off the sequence',
     startedAgo: 26,
@@ -403,7 +430,7 @@ export async function startDemo({ at = Date.now() } = {}) {
    * genuinely passed, the command genuinely failed, and neither reading is wrong.
    */
   other({
-    id: 'claude-code:demo-coverage',
+    id: sessionId('coverage'),
     cwd: '/Users/dev/acme/billing',
     title: 'Bring the payments module up to the coverage floor',
     startedAgo: 17,
@@ -433,7 +460,7 @@ export async function startDemo({ at = Date.now() } = {}) {
    * appear on a session the documentation actually shows.
    */
   other({
-    id: 'claude-code:demo-fanout',
+    id: sessionId('fanout'),
     cwd: '/Users/dev/acme/api',
     title: 'Find every unbounded query in the API',
     startedAgo: 19,
@@ -489,7 +516,7 @@ export async function startDemo({ at = Date.now() } = {}) {
 
   for (const [slug, repo, title, startedAgo] of finished) {
     other({
-      id: `claude-code:demo-${slug}`,
+      id: sessionId(slug),
       cwd: `/Users/dev/acme/${repo}`,
       title,
       startedAgo,
@@ -506,7 +533,7 @@ export async function startDemo({ at = Date.now() } = {}) {
 
   return {
     url: `http://127.0.0.1:${handle.port}/#token=${handle.token}`,
-    session: SESSION,
+    session,
     /* The instant every seeded timestamp is measured back from, and the daemon's own. */
     now: at,
     async stop() {

@@ -13,9 +13,25 @@ It shows the settings files it wants to update and asks one combined permission 
 connections are merged with existing settings; unrelated hooks are preserved. If Salidium changes
 Codex hooks, approve them once in `/hooks` before Codex runs them.
 
+The same setup asks about the optional written Why and How. **Local only** is selected by default
+and makes no model calls. **When done** makes one call after a session ends or goes quiet. **Each
+reply** refreshes the explanation after every agent reply.
+
 Later runs start or find the daemon and reopen the interface. A non-interactive terminal never waits
 for input or changes provider settings unless `--yes` is present. Use `--no-open` when a browser
 should not open.
+
+## Running and stopping
+
+Run `npx salidium` again the next day. It starts the background service if needed, reuses it if it is
+already running, and opens the page with its current token. `salidium status` reports both the service
+and the active explanation mode.
+
+`salidium stop` stops the background service. It does not change the saved explanation mode, and
+agent events can wait locally for the next start. To prevent model calls without stopping local
+reports, run `salidium explanations off`. The change applies immediately and survives restarts.
+It also cancels an explanation already generating. `salidium explanations when-done` and
+`salidium explanations each-reply` opt back in.
 
 ## Read a report
 
@@ -42,11 +58,12 @@ has no telemetry. Existing provider transcripts from the last seven days are imp
 set `SALIDIUM_HISTORY_DAYS` to a whole number zero or greater to change that window. State lives in
 `~/.salidium` with private directory and file permissions.
 
-Optional visual explanations use the installed Claude Code or Codex CLI you select. Once per
-completed turn, Salidium sends that CLI a bounded, locally redacted summary of the ask, attributed
-statements, file names, and check outcomes. The CLI may contact its provider and consume your plan or
-API allowance. The invocation disables tools, treats evidence as untrusted data, and accepts only a
-bounded runtime-validated result. Generated text cannot decide Verified, Left, or Review.
+Optional visual explanations use the installed Claude Code or Codex CLI you select. When enabled,
+Salidium sends that CLI a bounded, locally redacted summary of the ask, attributed statements, file
+names, and check outcomes at the cadence you chose. The CLI may contact its provider and consume
+your plan or API allowance. The invocation disables tools, treats evidence as untrusted data, and
+accepts only a bounded runtime-validated result. Generated text cannot decide Verified, Left, or
+Review.
 
 Open **Models & Usage** in the session toolbar. **Models** names the work and explanation models.
 **Explanation** chooses which agent writes it and when. **Choose a model** opens a short list that
@@ -54,6 +71,10 @@ adapts to that agent: the current coding model and known provider choices are sh
 Typing a model name is kept under **Other model** for installations with a model Salidium has not
 seen. **Usage** keeps session tokens separate from the explanation ledger across all runs. The same
 control is available before the first session exists, so defaults can be set up front.
+
+The Models & Usage button always shows **Local only**, **When done**, or **Each reply**, so the mode
+is visible without opening the panel. In Local only mode the agent and model controls stay hidden
+because neither can be used.
 
 Claude explanations default to the named Haiku model shown in the panel. Without an exact choice,
 Codex chooses its own model and Salidium labels the result **Automatic** instead of exposing CLI
@@ -82,6 +103,7 @@ nothing is sent to an agent and the deterministic report remains available.
 | `salidium pin [session]` | Exempt a session from automatic retention. |
 | `salidium forget <id>` | Remove a session and prevent source-file resurrection. |
 | `salidium status` | Show daemon and connection state. |
+| `salidium explanations` | Show or change model-call frequency. |
 | `salidium restart` | Restart Salidium and reopen the interface. |
 | `salidium stop` | Stop the local daemon. |
 

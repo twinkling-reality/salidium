@@ -69,6 +69,7 @@ describe('explanation runtime status', () => {
         listener: { onEvents: () => {}, onSummary: (summary) => summaries.push(summary) },
         options: {
           explain: true,
+          cadence: 'turn',
           flushDelayMs: 10_000,
           explainSession: async () => ({ status }),
         },
@@ -126,6 +127,7 @@ describe('explanation runtime status', () => {
       listener: { onEvents: () => {}, onSummary: () => {} },
       options: {
         explain: true,
+        cadence: 'turn',
         flushDelayMs: 10_000,
         explainSession: async (state) => generated(sessionId, state.latestSeq),
       },

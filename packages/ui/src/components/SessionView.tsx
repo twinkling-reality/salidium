@@ -5,6 +5,7 @@ import {
 } from '@salidium/core';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLiveSession } from '../hooks/useLiveSession.ts';
+import { activeExplanationCadence, activeExplanationMode } from '../lib/explanationMode.ts';
 import { relativeTime, shortHome, shortPath, timeOfDay } from '../lib/format.ts';
 import { providerLabel } from '../lib/providerLabel.ts';
 import { useFootSpace } from '../lib/useFootSpace.ts';
@@ -59,6 +60,9 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const statsOpen = useAppStore((s) => s.statsOpen);
   const toggleStats = useAppStore((s) => s.toggleStats);
+  const explainer = useAppStore((s) => s.explainer);
+  const explanationMode = activeExplanationMode(explainer);
+  const explanationCadence = activeExplanationCadence(explainer);
   const historyMode = useAppStore((s) => s.historyMode);
   const setHistoryMode = useAppStore((s) => s.setHistoryMode);
   /**
@@ -292,8 +296,9 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
             <ToolButton
               icon="stats"
               label="Models & Usage"
+              value={explanationMode?.label}
               on={statsOpen}
-              title="Show models, token usage and explanation defaults"
+              title={`Show models and token usage${explanationMode ? `. ${explanationMode.label}: ${explanationMode.detail}.` : ''}`}
               onClick={toggleModels}
             />
             <ToolButton
@@ -400,7 +405,11 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
               {ex ? (
                 <Explained ex={ex} />
               ) : (
-                <ExplanationPending turns={view.turns.length} status={summary?.explanationStatus} />
+                <ExplanationPending
+                  turns={view.turns.length}
+                  status={summary?.explanationStatus}
+                  cadence={explanationCadence}
+                />
               )}
 
               {/*
@@ -576,9 +585,11 @@ function ModelsUsageRail({
 function ExplanationPending({
   turns,
   status,
+  cadence,
 }: {
   turns: number;
   status: 'generating' | 'generated' | 'disabled' | 'unavailable' | 'failed' | undefined;
+  cadence: 'off' | 'session' | 'turn' | undefined;
 }) {
   if (turns === 0)
     return (
@@ -601,8 +612,8 @@ function ExplanationPending({
   if (status === 'disabled')
     return (
       <section className="ex-pending" role="status">
-        <p className="ex-pending-main">Visual explanations are off.</p>
-        <p>No evidence was sent to an agent. Observed facts are still available in Evidence.</p>
+        <p className="ex-pending-main">No model-written Why or How.</p>
+        <p>Local only makes no model calls. Change it in Models &amp; Usage.</p>
       </section>
     );
   if (status === 'unavailable')
@@ -628,7 +639,13 @@ function ExplanationPending({
   return (
     <section className="ex-pending" role="status">
       <p className="ex-pending-main">No explanation yet.</p>
-      <p>One is written when the agent finishes its next turn.</p>
+      <p>
+        {cadence === 'session'
+          ? 'One is written after this session ends or goes quiet.'
+          : cadence === 'turn'
+            ? 'One is written after the agent finishes its next reply.'
+            : 'Choose when to write one in Models & Usage.'}
+      </p>
     </section>
   );
 }

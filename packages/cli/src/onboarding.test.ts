@@ -19,15 +19,22 @@ function contextFor(...providers: Array<'claude-code' | 'codex'>): IntegrationCo
   };
 }
 
-function outputHarness(interactive = true, answer = true) {
+function outputHarness(interactive = true, answer = true, explanationIndex = 0) {
   let output = '';
   let prompts = 0;
+  let selections = 0;
   return {
     io: {
       interactive,
-      async confirm() {
+      async confirm(question: string) {
         prompts++;
+        output += `${question}${answer ? 'y' : 'n'}\n`;
         return answer;
+      },
+      async select(question: string, options: readonly string[]) {
+        selections++;
+        output += `${question}${options[explanationIndex]}\n`;
+        return explanationIndex;
       },
       write(text: string) {
         output += text;
@@ -35,6 +42,7 @@ function outputHarness(interactive = true, answer = true) {
     },
     output: () => output,
     prompts: () => prompts,
+    selections: () => selections,
   };
 }
 
@@ -50,6 +58,7 @@ describe('first-run onboarding', () => {
 
     expect(first.prompts()).toBe(1);
     expect(result.consent).toBe('approved');
+    expect(result.explainerCadence).toBe('off');
     expect(result.changed.map((change) => change.provider)).toEqual(['claude-code', 'codex']);
     /*
      * Nothing needs attention. Not "every validation is ok": Codex also carries a standing `info`
@@ -63,9 +72,18 @@ describe('first-run onboarding', () => {
           validation.level === 'info' && /open \/hooks in Codex/.test(validation.message),
       ),
     ).toBe(true);
-    expect(first.output()).toMatch(/Detected: Claude Code, Codex/);
-    expect(first.output()).toMatch(/Permission requested/);
-    expect(first.output()).toMatch(/Codex requires one more action/);
+    expect(first.output()).toMatch(/SALIDIUM\s+FIRST-RUN SETUP/);
+    expect(first.output()).toMatch(
+      /◆ {2}AGENTS[\s\S]*Claude Code\s+Detected[\s\S]*Codex\s+Detected/,
+    );
+    expect(first.output()).toMatch(/◆ {2}PERMISSION[\s\S]*Connect both agents\?y/);
+    expect(first.output()).toMatch(/~\/\.claude\/settings\.json/);
+    expect(first.output()).toMatch(/~\/\.codex\/hooks\.json/);
+    expect(first.output()).toMatch(/◆ {2}READY[\s\S]*Setup checks passed/);
+    expect(first.output()).toMatch(/Codex: Open \/hooks in Codex/);
+    expect(first.output()).toMatch(
+      /◆ {2}EXPLANATIONS[\s\S]*Written Why \+ HowLocal only[\s\S]*Local only · No model calls/,
+    );
     expect(existsSync(join(context.userHome, '.claude', 'settings.json'))).toBe(true);
     expect(existsSync(join(context.userHome, '.codex', 'hooks.json'))).toBe(true);
 
@@ -74,7 +92,18 @@ describe('first-run onboarding', () => {
     expect(repeat.prompts()).toBe(0);
     expect(repeated.consent).toBe('not-needed');
     expect(repeated.changed).toEqual([]);
+    expect(repeated.explainerCadence).toBeUndefined();
     expect(repeat.output()).toBe('');
+  });
+
+  it('makes optional model calls an explicit first-run choice', async () => {
+    const context = contextFor('codex');
+    const harness = outputHarness(true, true, 2);
+    const result = await runFirstRunOnboarding(context, harness.io, { firstRun: true });
+
+    expect(harness.selections()).toBe(1);
+    expect(result.explainerCadence).toBe('turn');
+    expect(harness.output()).toMatch(/Each reply · One model call after each agent reply/);
   });
 
   it.each([
@@ -97,7 +126,7 @@ describe('first-run onboarding', () => {
 
     expect(result.detected).toEqual([]);
     expect(harness.prompts()).toBe(0);
-    expect(harness.output()).toMatch(/no supported coding agents/);
+    expect(harness.output()).toMatch(/No supported coding agents detected/);
     expect(existsSync(join(context.userHome, '.claude'))).toBe(false);
     expect(existsSync(join(context.userHome, '.codex'))).toBe(false);
   });
@@ -110,7 +139,7 @@ describe('first-run onboarding', () => {
     expect(result.consent).toBe('declined');
     expect(result.changed).toEqual([]);
     expect(existsSync(join(context.userHome, '.claude', 'settings.json'))).toBe(false);
-    expect(harness.output()).toMatch(/No provider settings changed/);
+    expect(harness.output()).toMatch(/No changes made/);
     expect(result.validations.some((validation) => validation.level === 'attention')).toBe(true);
   });
 
@@ -147,8 +176,8 @@ describe('first-run onboarding', () => {
     expect(result.changed).toEqual([]);
     expect(result.validations.every((validation) => validation.level === 'info')).toBe(true);
     expect(harness.prompts()).toBe(0);
-    expect(harness.output()).toMatch(/History-only on native Windows/);
-    expect(harness.output()).toMatch(/POSIX live hooks are not installed/);
+    expect(harness.output()).toMatch(/Native Windows imports Claude Code, Codex history/);
+    expect(harness.output()).toMatch(/live POSIX hooks are unavailable/);
     expect(existsSync(join(context.userHome, '.claude', 'settings.json'))).toBe(false);
     expect(existsSync(join(context.userHome, '.codex', 'hooks.json'))).toBe(false);
   });
@@ -163,7 +192,7 @@ describe('first-run onboarding', () => {
     const result = await runFirstRunOnboarding(context, recovery.io);
     expect(recovery.prompts()).toBe(1);
     expect(result.changed.map((change) => change.provider)).toEqual(['codex']);
-    expect(recovery.output()).toMatch(/Already connected: Claude Code/);
+    expect(recovery.output()).toMatch(/Claude Code\s+Connected/);
   });
 
   it('reports a provider write failure without aborting first run', async () => {

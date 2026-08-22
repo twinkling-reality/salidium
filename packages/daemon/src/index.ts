@@ -6,13 +6,14 @@ export {
   resolveDaemonConfig,
   validateSalidiumHistoryDays,
 } from './config/daemonConfig.ts';
-export type { DaemonHandle, DaemonJson, StartDaemonOptions } from './daemon.ts';
+export type { DaemonHandle, DaemonJson, StartDaemonOptions, StoredSettings } from './daemon.ts';
 export {
   defaultUiDist,
   readDaemonJson,
   readSettings,
   startDaemon,
   writeRelayScript,
+  writeSettings,
 } from './daemon.ts';
 export type {
   ExplainerBackend,
@@ -27,6 +28,7 @@ export {
   DEFAULT_LOG_MAX_BYTES,
   rotateLogFile,
 } from './logging/logger.ts';
+export { effectiveCadence } from './sessions/sessionCoordinator.ts';
 export type {
   AuditMessageRow,
   CheckpointRow,

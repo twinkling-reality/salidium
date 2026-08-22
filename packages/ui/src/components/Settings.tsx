@@ -6,13 +6,14 @@ import type {
   ProviderId,
 } from '@salidium/protocol';
 import { useEffect, useRef, useState } from 'react';
+import { activeExplanationCadence, EXPLANATION_MODE_COPY } from '../lib/explanationMode.ts';
 import { isAutomaticModel, modelName } from '../lib/modelName.ts';
 import { useAppStore } from '../store/appStore.ts';
 
 const STOPS: Array<{ value: ExplainerCadence; name: string }> = [
-  { value: 'off', name: 'Off' },
-  { value: 'session', name: 'When done' },
-  { value: 'turn', name: 'Each reply' },
+  { value: 'off', name: EXPLANATION_MODE_COPY.off.label },
+  { value: 'session', name: EXPLANATION_MODE_COPY.session.label },
+  { value: 'turn', name: EXPLANATION_MODE_COPY.turn.label },
 ];
 
 const BACKENDS: Array<{ value: ExplainerBackend; name: string }> = [
@@ -87,6 +88,7 @@ function ChoiceGroup<T extends string>({
             type="button"
             className={option.value === value ? 'is-on' : undefined}
             aria-pressed={option.value === value}
+            data-value={option.value}
             disabled={disabled}
             onClick={() => onChange(option.value)}
             key={option.value}
@@ -185,6 +187,9 @@ export function ExplanationSettings({
         ? explainer.routes.claudeCode
         : undefined;
   const modelChanged = modelDraft.trim() !== (explainer.model ?? '');
+  const activeCadence = activeExplanationCadence(explainer) ?? 'off';
+  const cadenceMode = EXPLANATION_MODE_COPY[activeCadence];
+  const explanationsActive = activeCadence !== 'off';
   const currentExplanationModel = generatedModel ?? route?.model;
   const shownExplanationModel = visibleModel(currentExplanationModel);
   const shownNextModel = visibleModel(route?.model);
@@ -240,17 +245,26 @@ export function ExplanationSettings({
           {provider ? (
             <>
               <ModelRow label="Coding" model={workModel} />
-              <ModelRow
-                label="Explanation"
-                model={shownExplanationModel.name}
-                exact={!shownExplanationModel.automatic}
-                detail={
-                  shownExplanationModel.automatic
-                    ? `${backendName(route?.backend ?? null)} chooses the model`
-                    : undefined
-                }
-              />
-              {nextModelChanged && (
+              {explanationsActive ? (
+                <ModelRow
+                  label="Explanation"
+                  model={shownExplanationModel.name}
+                  exact={!shownExplanationModel.automatic}
+                  detail={
+                    shownExplanationModel.automatic
+                      ? `${backendName(route?.backend ?? null)} chooses the model`
+                      : undefined
+                  }
+                />
+              ) : (
+                <ModelRow
+                  label="Explanation"
+                  model="Local only"
+                  detail="No model calls"
+                  exact={false}
+                />
+              )}
+              {explanationsActive && nextModelChanged && (
                 <ModelRow
                   label="Next"
                   model={shownNextModel.name}
@@ -258,7 +272,7 @@ export function ExplanationSettings({
                 />
               )}
             </>
-          ) : (
+          ) : explanationsActive ? (
             <>
               <ModelRow label="Claude" model={explainer.routes.claudeCode.model} />
               <ModelRow
@@ -267,6 +281,13 @@ export function ExplanationSettings({
                 exact={false}
               />
             </>
+          ) : (
+            <ModelRow
+              label="Explanation"
+              model="Local only"
+              detail="No model calls"
+              exact={false}
+            />
           )}
         </dl>
       </section>
@@ -290,26 +311,29 @@ export function ExplanationSettings({
 
         <div className="mu-control-stack">
           <ChoiceGroup
-            legend="Agent"
-            value={explainer.backend}
-            options={BACKENDS}
-            disabled={explainer.backendLocked}
-            onChange={(backend) => {
-              if (backend === explainer.backend) return;
-              setModelDraft('');
-              setShowCustomModel(false);
-              setExplainer({ backend, model: null });
-            }}
-          />
-          <ChoiceGroup
-            legend="Create"
+            legend="Written Why + How"
             value={explainer.cadence}
             options={STOPS}
             onChange={(cadence) => setExplainer({ cadence })}
           />
+          <p className={`mu-cadence-note is-${activeCadence}`}>{cadenceMode.detail}.</p>
+          {explanationsActive && (
+            <ChoiceGroup
+              legend="Agent"
+              value={explainer.backend}
+              options={BACKENDS}
+              disabled={explainer.backendLocked}
+              onChange={(backend) => {
+                if (backend === explainer.backend) return;
+                setModelDraft('');
+                setShowCustomModel(false);
+                setExplainer({ backend, model: null });
+              }}
+            />
+          )}
         </div>
 
-        {showModelChoices ? (
+        {explanationsActive && showModelChoices ? (
           <div className="mu-model-picker">
             <div className="mu-model-picker-head">
               <span>Model</span>
@@ -406,7 +430,7 @@ export function ExplanationSettings({
               <span className="explain-lock">Locked by the daemon environment.</span>
             )}
           </div>
-        ) : (
+        ) : explanationsActive ? (
           <button
             type="button"
             className="mu-exact-trigger"
@@ -415,7 +439,7 @@ export function ExplanationSettings({
           >
             {explainer.model ? 'Change model…' : 'Choose a model…'}
           </button>
-        )}
+        ) : null}
       </section>
 
       <section className="mu-section" aria-labelledby="mu-usage">

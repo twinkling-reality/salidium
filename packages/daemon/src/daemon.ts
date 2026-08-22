@@ -110,9 +110,9 @@ export interface StoredSettings {
   explainerModel: string | null;
 }
 
-/** The stop that shipped: a fresh explanation at every turn end. */
+/** Safe until the reader explicitly enables optional model calls. */
 const DEFAULT_SETTINGS: StoredSettings = {
-  explainerCadence: 'turn',
+  explainerCadence: 'off',
   explainerBackend: 'auto',
   explainerModel: null,
 };
@@ -251,9 +251,9 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     explainedConfiguration(stored.explainerBackend, stored.explainerModel, process.env);
   const registry = new SessionRegistry(store, {
     explainerCadence: effectiveCadence(stored.explainerCadence),
-    explainSession: (state) => {
+    explainSession: (state, signal) => {
       const active = activeExplainer();
-      return explainWithStatus(state, { mode: active.mode, model: active.model });
+      return explainWithStatus(state, { mode: active.mode, model: active.model, signal });
     },
     ...(overrides.now ? { now: overrides.now } : {}),
   });

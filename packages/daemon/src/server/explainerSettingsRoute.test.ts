@@ -89,11 +89,11 @@ function call(method: string, body?: unknown): Promise<Response> {
 }
 
 describe('the explainer settings route', () => {
-  it('starts at the stop that shipped, and says nothing about usage it has not observed', async () => {
+  it('starts local-only, and says nothing about usage it has not observed', async () => {
     const res = await call('GET');
     expect(res.status).toBe(200);
     const settings = ExplainerSettingsSchema.parse(await res.json());
-    expect(settings.cadence).toBe('turn');
+    expect(settings.cadence).toBe('off');
     expect(settings.backend).toBe('auto');
     expect(settings.routes.codex.model).toBeNull();
     expect(settings.envOff).toBe(false);
@@ -152,9 +152,9 @@ describe('the explainer settings route', () => {
     expect(res.status).toBe(401);
   });
 
-  it('uses the shipped stop when settings are missing and fails closed when they are invalid', () => {
+  it('uses the safe stop when settings are missing and fails closed when they are invalid', () => {
     const empty = mkdtempSync(join(tmpdir(), 'salidium-settings-missing-'));
-    expect(readSettings(empty).explainerCadence).toBe('turn');
+    expect(readSettings(empty).explainerCadence).toBe('off');
     writeSettings(empty, {
       explainerCadence: 'off',
       explainerBackend: 'auto',
@@ -162,6 +162,17 @@ describe('the explainer settings route', () => {
     });
     expect(readSettings(empty).explainerCadence).toBe('off');
     expect(readdirSync(empty).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+
+    writeSettings(empty, {
+      explainerCadence: 'turn',
+      explainerBackend: 'codex',
+      explainerModel: 'gpt-5.6-luna',
+    });
+    expect(readSettings(empty)).toEqual({
+      explainerCadence: 'turn',
+      explainerBackend: 'codex',
+      explainerModel: 'gpt-5.6-luna',
+    });
 
     writeFileSync(join(empty, 'settings.json'), '{not-json');
     const warnings: string[] = [];

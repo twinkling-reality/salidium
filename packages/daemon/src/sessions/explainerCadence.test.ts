@@ -170,6 +170,75 @@ describe('when the explainer runs', () => {
     expect(calls).toHaveLength(2);
   });
 
+  it('cancels a call already in flight when Local only is selected', async () => {
+    const path = mkdtempSync(join(tmpdir(), 'salidium-cadence-abort-'));
+    temporaryDirectories.push(path);
+    const store = new SqliteStore(join(path, 'test.db'));
+    const sessionId = 'claude-code:abort';
+    let signal: AbortSignal | undefined;
+    let finish: ((result: { status: 'failed' }) => void) | undefined;
+    const coordinator = SessionCoordinator.load({
+      sessionId,
+      provider: 'claude-code',
+      providerSessionId: 'abort',
+      store,
+      listener: { onEvents: () => {}, onSummary: () => {} },
+      options: {
+        cadence: 'turn',
+        flushDelayMs: 10_000,
+        explainSession: async (_state, callSignal) => {
+          signal = callSignal;
+          return new Promise((resolve) => {
+            finish = resolve;
+          });
+        },
+      },
+    });
+
+    coordinator.ingest([turnStarted(sessionId, 1), turnEnded(sessionId, 1)]);
+    expect(signal?.aborted).toBe(false);
+    expect(coordinator.summary.explanationStatus).toBe('generating');
+
+    coordinator.setCadence('off');
+    expect(signal?.aborted).toBe(true);
+    expect(coordinator.summary.explanationStatus).toBe('disabled');
+
+    finish?.({ status: 'failed' });
+    await settle();
+    expect(coordinator.summary.explanationStatus).toBe('disabled');
+    coordinator.close();
+    store.close();
+  });
+
+  it('defaults direct coordinator callers to Local only', () => {
+    const path = mkdtempSync(join(tmpdir(), 'salidium-cadence-default-'));
+    temporaryDirectories.push(path);
+    const store = new SqliteStore(join(path, 'test.db'));
+    const sessionId = 'claude-code:safe-default';
+    let calls = 0;
+    const coordinator = SessionCoordinator.load({
+      sessionId,
+      provider: 'claude-code',
+      providerSessionId: 'safe-default',
+      store,
+      listener: { onEvents: () => {}, onSummary: () => {} },
+      options: {
+        flushDelayMs: 10_000,
+        explainSession: async () => {
+          calls += 1;
+          return { status: 'failed' };
+        },
+      },
+    });
+
+    coordinator.ingest([turnStarted(sessionId, 1), turnEnded(sessionId, 1)]);
+    coordinator.requestExplanation();
+    expect(calls).toBe(0);
+    expect(coordinator.summary.explanationStatus).toBe('disabled');
+    coordinator.close();
+    store.close();
+  });
+
   it('keeps `explain: false` meaning never, whatever stop is passed beside it', async () => {
     const path = mkdtempSync(join(tmpdir(), 'salidium-cadence-legacy-'));
     temporaryDirectories.push(path);

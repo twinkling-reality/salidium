@@ -25,9 +25,9 @@
   },
   "models-usage": {
     "width": 320,
-    "height": 683,
-    "light": "models-usage-light-1b775d4b.png",
-    "dark": "models-usage-dark-1d332eaa.png"
+    "height": 708,
+    "light": "models-usage-light-09d9fcad.png",
+    "dark": "models-usage-dark-9aa45577.png"
   },
   "record": {
     "width": 760,
@@ -44,7 +44,7 @@
   "sessions": {
     "width": 940,
     "height": 560,
-    "light": "sessions-light-d1f0d5d1.png",
-    "dark": "sessions-dark-3f2f3bed.png"
+    "light": "sessions-light-7aa167df.png",
+    "dark": "sessions-dark-745000e9.png"
   }
 }

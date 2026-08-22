@@ -45,6 +45,7 @@ export function ToolButton({
       onClick={onClick}
       aria-pressed={on}
       title={title}
+      data-value={value}
     >
       <Icon name={icon} />
       {label && <span>{label}</span>}
