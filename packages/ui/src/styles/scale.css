@@ -18,8 +18,9 @@
    */
   --z-toolbar: 5;
   --z-float: 6;
-  --z-panel: 30;
-  --z-drawer: 40;
+  --z-sidebar: 30;
+  --z-panel: 40;
+  --z-drawer: 50;
 
   --text-xs: 11px;
   --text-sm: 12.5px;

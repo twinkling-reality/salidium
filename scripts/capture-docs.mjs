@@ -108,11 +108,15 @@ const SHOTS = [
     maxHeight: 560,
   },
   {
-    name: 'quantities',
+    name: 'models-usage',
     ready: '4 files changed, unverified',
-    click: 'Quantities',
-    waitFor: "[aria-label='Quantities']",
-    clip: "[aria-label='Quantities']",
+    click: 'Models & Usage',
+    waitFor: "[aria-label='Models & Usage']",
+    next: {
+      click: 'Choose a model',
+      waitFor: 'Salidium default',
+    },
+    clip: "[aria-label='Models & Usage']",
     pad: 0,
     /*
      * A rail runs the height of the window and the counts stop well before that, so it is clipped
@@ -176,6 +180,14 @@ async function record(name, theme, buffer) {
 
 await mkdir(OUT, { recursive: true });
 const demo = await startDemo({ at: CAPTURE_INSTANT });
+/*
+ * The demo boots with the explainer disabled so seeding can never call an installed agent. The
+ * scheduler has already inherited that stop and no more events are added, so the docs process can
+ * release the environment lock before opening the static settings capture. This shows the controls
+ * a reader can actually use without making the fixture nondeterministic or spending provider quota.
+ */
+delete process.env.SALIDIUM_EXPLAINER;
+delete process.env.SALIDIUM_EXPLAIN_MODEL;
 const browser = await chromium.launch();
 let written = 0;
 /*

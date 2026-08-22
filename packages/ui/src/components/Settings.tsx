@@ -1,178 +1,432 @@
-import type { ExplainerCadence } from '@salidium/protocol';
-import { useEffect, useState } from 'react';
+import type {
+  ExplainerBackend,
+  ExplainerCadence,
+  ExplainerRoute,
+  ExplainerUsage,
+  ProviderId,
+} from '@salidium/protocol';
+import { useEffect, useRef, useState } from 'react';
+import { isAutomaticModel, modelName } from '../lib/modelName.ts';
 import { useAppStore } from '../store/appStore.ts';
-import { useDismiss } from './Controls.tsx';
-import { Icon } from './Icon.tsx';
 
-/**
- * When Salidium asks a model to explain a session, and what that has cost so far.
- *
- * It is the only setting on the page that is not the browser's. Detail, theme and the folds are
- * this window's opinion about this window; this one tells the daemon to spend, or not spend, the
- * reader's own subscription quota while they are not looking. So it is stored there, it survives a
- * restart, and it is read back rather than assumed.
- *
- * Same instrument as the depth control, for the same reason: three named stops, each stating what
- * it does, rather than a switch or a slider. A frequency has no good end to label — "less" and
- * "more" of what? — while "Off", "When a session ends" and "While it works" are the three things a
- * reader actually wants and each says what it buys.
- */
-const STOPS: Array<{ value: ExplainerCadence; name: string; adds: string }> = [
-  {
-    value: 'off',
-    name: 'Off',
-    adds: 'The page Salidium derives, and nothing else. No model is ever called.',
-  },
-  {
-    value: 'session',
-    name: 'When a session ends',
-    adds: 'One explanation each, written once a session has finished or gone quiet.',
-  },
-  {
-    value: 'turn',
-    name: 'While it works',
-    adds: 'A fresh explanation at every turn end, so the page keeps up with the agent.',
-  },
+const STOPS: Array<{ value: ExplainerCadence; name: string }> = [
+  { value: 'off', name: 'Off' },
+  { value: 'session', name: 'When done' },
+  { value: 'turn', name: 'Each reply' },
 ];
 
-/** Observed token counts, in the order the record drawer lists them for one call. */
-const TOKENS: Array<{
-  key: 'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'cacheWriteTokens';
+const BACKENDS: Array<{ value: ExplainerBackend; name: string }> = [
+  { value: 'auto', name: 'Same as coding' },
+  { value: 'claude', name: 'Claude' },
+  { value: 'codex', name: 'Codex' },
+];
+
+const CODEX_MODELS = [
+  { model: 'gpt-5.6-sol', detail: 'Highest capability' },
+  { model: 'gpt-5.6-terra', detail: 'Balanced' },
+  { model: 'gpt-5.6-luna', detail: 'Lightweight' },
+] as const;
+
+interface ModelChoice {
+  value: string | null;
+  name: string;
+  detail: string;
+}
+
+function backendName(backend: ExplainerRoute['backend']): string {
+  if (backend === 'claude') return 'Claude Code';
+  if (backend === 'codex') return 'Codex';
+  return 'Unavailable';
+}
+
+function ModelRow({
+  label,
+  model,
+  detail,
+  exact = true,
+}: {
   label: string;
-}> = [
-  { key: 'inputTokens', label: 'input' },
-  { key: 'outputTokens', label: 'output' },
-  { key: 'cacheReadTokens', label: 'cache read' },
-  { key: 'cacheWriteTokens', label: 'cache write' },
-];
+  model: string | null | undefined;
+  detail?: string;
+  exact?: boolean;
+}) {
+  return (
+    <div className="mu-model-row">
+      <dt>{label}</dt>
+      <dd>
+        <strong className={exact ? 'mono' : undefined}>{model ?? 'Unavailable'}</strong>
+        {detail && <span>{detail}</span>}
+      </dd>
+    </div>
+  );
+}
 
-export function ExplainerSettings() {
-  const api = useAppStore((s) => s.api);
-  const explainer = useAppStore((s) => s.explainer);
-  const loadExplainer = useAppStore((s) => s.loadExplainer);
-  const setCadence = useAppStore((s) => s.setExplainerCadence);
-  const [open, setOpen] = useState(false);
-  const [explain, setExplain] = useState(false);
-  const ref = useDismiss(open, () => setOpen(false));
+function visibleModel(model: string | null | undefined): { name: string; automatic: boolean } {
+  return { name: modelName(model), automatic: isAutomaticModel(model) };
+}
 
-  // Read once the client exists rather than when the panel opens: the stop is the daemon's, and a
-  // panel that opened on nothing and filled in a moment later would show the wrong radio first.
+function ChoiceGroup<T extends string>({
+  legend,
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  legend: string;
+  value: T;
+  options: Array<{ value: T; name: string }>;
+  disabled?: boolean;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <fieldset className="mu-choice" data-choice={legend}>
+      <legend>{legend}</legend>
+      <div className="mu-choice-set">
+        {options.map((option) => (
+          <button
+            type="button"
+            className={option.value === value ? 'is-on' : undefined}
+            aria-pressed={option.value === value}
+            disabled={disabled}
+            onClick={() => onChange(option.value)}
+            key={option.value}
+          >
+            {option.name}
+          </button>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
+function UsageLedger({
+  label,
+  scope,
+  usage,
+}: {
+  label: string;
+  scope?: string;
+  usage?: ExplainerUsage;
+}) {
+  return (
+    <div className="mu-usage-ledger">
+      <div className="mu-usage-head">
+        <span>
+          {label}
+          {scope && <small>{scope}</small>}
+        </span>
+        <strong>{usage ? `${usage.messages.toLocaleString()} responses` : 'No token data'}</strong>
+      </div>
+      {usage && (
+        <dl className="mu-usage-grid">
+          <div>
+            <dt>Input</dt>
+            <dd>{usage.inputTokens.toLocaleString()}</dd>
+          </div>
+          <div>
+            <dt>Output</dt>
+            <dd>{usage.outputTokens.toLocaleString()}</dd>
+          </div>
+          <div>
+            <dt>Cache reused</dt>
+            <dd>{usage.cacheReadTokens.toLocaleString()}</dd>
+          </div>
+          <div>
+            <dt>Cache stored</dt>
+            <dd>{usage.cacheWriteTokens.toLocaleString()}</dd>
+          </div>
+        </dl>
+      )}
+    </div>
+  );
+}
+
+/** One compact ledger for the models, controls and token usage that can consume provider quota. */
+export function ExplanationSettings({
+  provider,
+  workModel,
+  sessionUsage,
+  generatedModel,
+}: {
+  provider?: ProviderId;
+  workModel?: string;
+  sessionUsage?: ExplainerUsage;
+  generatedModel?: string;
+}) {
+  const api = useAppStore((state) => state.api);
+  const explainer = useAppStore((state) => state.explainer);
+  const loadExplainer = useAppStore((state) => state.loadExplainer);
+  const setExplainer = useAppStore((state) => state.setExplainerSettings);
+  const [modelDraft, setModelDraft] = useState('');
+  const [showModelChoices, setShowModelChoices] = useState(false);
+  const [showCustomModel, setShowCustomModel] = useState(false);
+  const modelFieldRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     if (api) loadExplainer();
   }, [api, loadExplainer]);
+  useEffect(() => setModelDraft(explainer?.model ?? ''), [explainer?.model]);
+  useEffect(() => {
+    if (showCustomModel) modelFieldRef.current?.focus();
+  }, [showCustomModel]);
 
-  const cadence = explainer?.cadence;
-  const usage = explainer?.usage;
+  if (!explainer) {
+    return (
+      <p className="mu-loading" role="status">
+        Loading model settings…
+      </p>
+    );
+  }
+
+  const route =
+    provider === 'codex'
+      ? explainer.routes.codex
+      : provider === 'claude-code'
+        ? explainer.routes.claudeCode
+        : undefined;
+  const modelChanged = modelDraft.trim() !== (explainer.model ?? '');
+  const currentExplanationModel = generatedModel ?? route?.model;
+  const shownExplanationModel = visibleModel(currentExplanationModel);
+  const shownNextModel = visibleModel(route?.model);
+  const nextModelChanged = Boolean(
+    generatedModel && route?.model && generatedModel !== route.model,
+  );
+  const providerBackend =
+    provider === 'codex' ? 'codex' : provider === 'claude-code' ? 'claude' : null;
+  const activeBackend = route?.backend ?? (explainer.backend === 'auto' ? null : explainer.backend);
+  const activeRoute =
+    route ??
+    (activeBackend === 'claude'
+      ? explainer.routes.claudeCode
+      : activeBackend === 'codex'
+        ? explainer.routes.codex
+        : undefined);
+  const modelChoices: ModelChoice[] = [];
+  const exactModels = new Set<string>();
+  const addModel = (choice: ModelChoice) => {
+    if (choice.value && exactModels.has(choice.value)) return;
+    if (choice.value) exactModels.add(choice.value);
+    modelChoices.push(choice);
+  };
+
+  if (activeBackend === 'claude' && !explainer.model && activeRoute?.model) {
+    addModel({ value: null, name: activeRoute.model, detail: 'Salidium default' });
+  } else {
+    addModel({
+      value: null,
+      name: 'Automatic',
+      detail: activeBackend ? `${backendName(activeBackend)} chooses` : 'Uses the coding agent',
+    });
+  }
+  if (workModel && providerBackend === activeBackend) {
+    addModel({ value: workModel, name: workModel, detail: 'Current coding model' });
+  }
+  if (activeBackend === 'codex') {
+    for (const choice of CODEX_MODELS) {
+      addModel({ value: choice.model, name: choice.model, detail: choice.detail });
+    }
+  }
+  if (explainer.model) {
+    addModel({ value: explainer.model, name: explainer.model, detail: 'Current selection' });
+  }
+
   return (
-    <div className="pop" ref={ref}>
-      {/*
-       * Iconic, because the sidebar head is chrome: it identifies the surface rather than saying
-       * anything about the session, and the panel it opens names itself. The glyph is the depth
-       * control's — the icon set has no gear and drawing one is not this change's to make — and the
-       * two are told apart by the pill: the depth control always carries its current level beside
-       * the mark, so a bare mark in the panel head is not the same object twice.
-       */}
-      <button
-        type="button"
-        className={`btn btn-icon ${open ? 'is-on' : ''}`}
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        title="When Salidium explains"
-      >
-        <Icon name="sliders" />
-        <span className="sr-only">When Salidium explains</span>
-      </button>
-      <div className={`pop-panel arrives ${open ? 'is-open' : ''}`}>
-        <div className="pop-head">
-          <span>Explaining</span>
+    <div className="mu">
+      <section className="mu-section" aria-labelledby="mu-models">
+        <h3 className="mu-title" id="mu-models">
+          Models
+        </h3>
+        <dl className="mu-models">
+          {provider ? (
+            <>
+              <ModelRow label="Coding" model={workModel} />
+              <ModelRow
+                label="Explanation"
+                model={shownExplanationModel.name}
+                exact={!shownExplanationModel.automatic}
+                detail={
+                  shownExplanationModel.automatic
+                    ? `${backendName(route?.backend ?? null)} chooses the model`
+                    : undefined
+                }
+              />
+              {nextModelChanged && (
+                <ModelRow
+                  label="Next"
+                  model={shownNextModel.name}
+                  exact={!shownNextModel.automatic}
+                />
+              )}
+            </>
+          ) : (
+            <>
+              <ModelRow label="Claude" model={explainer.routes.claudeCode.model} />
+              <ModelRow
+                label="Codex"
+                model={visibleModel(explainer.routes.codex.model).name}
+                exact={false}
+              />
+            </>
+          )}
+        </dl>
+      </section>
+
+      <section className="mu-section" aria-labelledby="mu-controls">
+        <h3 className="mu-title" id="mu-controls">
+          Explanation
+        </h3>
+
+        {explainer.envOff && <p className="explain-warning">Disabled by the daemon environment.</p>}
+        {!explainer.envOff &&
+          explainer.cadence !== 'off' &&
+          !explainer.routes.claudeCode.backend &&
+          !explainer.routes.codex.backend && (
+            <p className="explain-warning">
+              {explainer.backendLocked
+                ? 'The locked helper is unavailable.'
+                : 'No selected helper is installed.'}
+            </p>
+          )}
+
+        <div className="mu-control-stack">
+          <ChoiceGroup
+            legend="Agent"
+            value={explainer.backend}
+            options={BACKENDS}
+            disabled={explainer.backendLocked}
+            onChange={(backend) => {
+              if (backend === explainer.backend) return;
+              setModelDraft('');
+              setShowCustomModel(false);
+              setExplainer({ backend, model: null });
+            }}
+          />
+          <ChoiceGroup
+            legend="Create"
+            value={explainer.cadence}
+            options={STOPS}
+            onChange={(cadence) => setExplainer({ cadence })}
+          />
+        </div>
+
+        {showModelChoices ? (
+          <div className="mu-model-picker">
+            <div className="mu-model-picker-head">
+              <span>Model</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCustomModel(false);
+                  setShowModelChoices(false);
+                }}
+              >
+                Done
+              </button>
+            </div>
+            <ul className="mu-model-options" aria-label="Explanation model choices">
+              {modelChoices.map((choice) => (
+                <li key={choice.value ?? 'automatic'}>
+                  <button
+                    type="button"
+                    className="mu-model-option"
+                    aria-current={choice.value === (explainer.model ?? null) ? 'true' : undefined}
+                    disabled={explainer.modelLocked}
+                    onClick={() => {
+                      setModelDraft(choice.value ?? '');
+                      setExplainer({ model: choice.value });
+                      setShowCustomModel(false);
+                    }}
+                  >
+                    <span className="mono">{choice.name}</span>
+                    <small>{choice.detail}</small>
+                  </button>
+                </li>
+              ))}
+              <li>
+                <button
+                  type="button"
+                  className="mu-model-option"
+                  aria-expanded={showCustomModel}
+                  disabled={explainer.modelLocked}
+                  onClick={() => {
+                    setModelDraft(explainer.model ?? '');
+                    setShowCustomModel(true);
+                  }}
+                >
+                  <span>Other model…</span>
+                  <small>Enter a model name</small>
+                </button>
+              </li>
+            </ul>
+
+            {showCustomModel && (
+              <form
+                className="mu-model-control"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const model = modelDraft.trim();
+                  if (!model) return;
+                  setExplainer({ model });
+                  setShowCustomModel(false);
+                }}
+              >
+                <label htmlFor="explainer-model">Model name</label>
+                <div className="mu-model-input">
+                  <input
+                    ref={modelFieldRef}
+                    id="explainer-model"
+                    className="field mono"
+                    value={modelDraft}
+                    onChange={(event) => setModelDraft(event.target.value)}
+                    placeholder={activeBackend === 'claude' ? 'claude-…' : 'gpt-…'}
+                    maxLength={120}
+                    disabled={explainer.modelLocked}
+                  />
+                  <button
+                    className="btn btn-accent"
+                    type="submit"
+                    disabled={explainer.modelLocked || !modelChanged || !modelDraft.trim()}
+                  >
+                    Use
+                  </button>
+                  <button
+                    className="btn"
+                    type="button"
+                    onClick={() => {
+                      setModelDraft(explainer.model ?? '');
+                      setShowCustomModel(false);
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            )}
+            {(explainer.backendLocked || explainer.modelLocked) && (
+              <span className="explain-lock">Locked by the daemon environment.</span>
+            )}
+          </div>
+        ) : (
           <button
             type="button"
-            className={`pop-help ${explain ? 'is-on' : ''}`}
-            onClick={() => setExplain((e) => !e)}
-            aria-expanded={explain}
-            title="What this control does"
+            className="mu-exact-trigger"
+            aria-expanded="false"
+            onClick={() => setShowModelChoices(true)}
           >
-            <span aria-hidden="true">?</span>
-            <span className="sr-only">What this control does</span>
+            {explainer.model ? 'Change model…' : 'Choose a model…'}
           </button>
+        )}
+      </section>
+
+      <section className="mu-section" aria-labelledby="mu-usage">
+        <h3 className="mu-title" id="mu-usage">
+          Usage
+        </h3>
+        <div className="mu-usage-list">
+          {provider && <UsageLedger label="Session" usage={sessionUsage} />}
+          <UsageLedger label="Explanations" scope="all runs" usage={explainer.usage} />
         </div>
-        {explain && (
-          <p className="pop-note">
-            Everything else on the page is observed or derived from what was observed. The
-            explanation is the one part a model writes, on the subscription you already have.
-          </p>
-        )}
-        {/* Real radios in a real fieldset, as the depth control does: arrow keys, grouping and
-              announcement all come from the platform. */}
-        <fieldset className="opts">
-          <legend className="sr-only">When Salidium explains</legend>
-          {STOPS.map((s) => (
-            <label className={`opt ${s.value === cadence ? 'is-on' : ''}`} key={s.value}>
-              <input
-                className="sr-only"
-                type="radio"
-                name="salidium-explainer"
-                checked={s.value === cadence}
-                // Inert until the daemon has answered. The stop is its state, not this window's,
-                // and a radio that could be pressed before the current one is known would be
-                // offering to change something it cannot yet show.
-                disabled={cadence === undefined}
-                // The depth control closes on a choice because the page behind it changes and you
-                // want to see it. Nothing here changes behind the panel, and what is worth reading
-                // next — what this has already cost — is inside it, so it stays open.
-                onChange={() => setCadence(s.value)}
-              />
-              <span className="opt-mark" aria-hidden="true" />
-              <span className="opt-text">
-                <span className="opt-name">{s.name}</span>
-                <span className="opt-adds">{s.adds}</span>
-              </span>
-            </label>
-          ))}
-        </fieldset>
-        {/*
-         * A control that quietly does nothing is worse than no control. The kill switch in the
-         * daemon's environment outranks whatever is chosen here, so when it is set the panel says
-         * so — and still shows the stop that was chosen, because that is the one that comes back
-         * when the variable goes away.
-         */}
-        {explainer?.envOff && (
-          <p className="pop-note">
-            The daemon was started with the explainer switched off in its environment, so nothing is
-            generated whichever stop is chosen here.
-          </p>
-        )}
-        {/*
-         * What it has cost, when Salidium has seen it cost anything — never a heading over
-         * nothing. Tokens only: they were observed and are printed as fact, whereas a figure in
-         * dollars is arithmetic over a price table and, on a subscription, no dollar is charged
-         * at all. Neither of those two sentences fits in 236 px, so the money does not go here.
-         *
-         * The whole section is omitted when nothing was observed, but a zero inside it is kept:
-         * these four are read against each other, and a list whose rows come and go with the data
-         * makes "none of this kind" indistinguishable from "this kind was not counted". Zero
-         * cache reads is a real and interesting thing to have measured.
-         */}
-        {usage && (
-          <>
-            <div className="pop-head">
-              <span>Consumed</span>
-            </div>
-            <dl className="usage">
-              <div>
-                <dt>responses</dt>
-                <dd className="mono">{usage.messages.toLocaleString()}</dd>
-              </div>
-              {TOKENS.map((t) => (
-                <div key={t.key}>
-                  <dt>{t.label}</dt>
-                  <dd className="mono">{usage[t.key].toLocaleString()}</dd>
-                </div>
-              ))}
-            </dl>
-          </>
-        )}
-      </div>
+      </section>
     </div>
   );
 }

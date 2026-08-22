@@ -3,9 +3,17 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { resolveTrustedExecutable, trustedPathEntries } from '@salidium/adapter-kit';
-import type { ProviderId } from '@salidium/protocol';
+import {
+  type ExplainerBackend as ExplainerBackendSelection,
+  ExplainerModelSchema,
+  type ExplainerRoute,
+  type ProviderId,
+} from '@salidium/protocol';
 
 export type ExplainerMode = 'auto' | 'claude' | 'codex' | 'off';
+
+export const DEFAULT_CLAUDE_EXPLAINER_MODEL = 'claude-haiku-4-5-20251001';
+export const DEFAULT_CODEX_EXPLAINER_MODEL = 'Codex CLI default (not pinned)';
 
 export interface ExplainerBackendRequest {
   prompt: string;
@@ -103,7 +111,7 @@ export function buildClaudeInvocation(
   request: ExplainerBackendRequest,
   command = 'claude',
 ): ProcessInvocation {
-  const model = request.model ?? 'claude-haiku-4-5-20251001';
+  const model = request.model ?? DEFAULT_CLAUDE_EXPLAINER_MODEL;
   return {
     command,
     args: [
@@ -182,7 +190,7 @@ export function buildCodexInvocation(
     command,
     args,
     input: `${request.prompt} ${request.evidence}`,
-    model: request.model ?? 'Codex',
+    model: request.model ?? DEFAULT_CODEX_EXPLAINER_MODEL,
   };
 }
 
@@ -235,12 +243,44 @@ function resolvedBuiltInBackends(environment: NodeJS.ProcessEnv): ExplainerBacke
 }
 
 export function configuredExplainerMode(environment = process.env): ExplainerMode | 'invalid' {
+  return environmentExplainerMode(environment) ?? 'auto';
+}
+
+/** An explicit process-level override, kept separate from the stored browser choice. */
+export function environmentExplainerMode(
+  environment: NodeJS.ProcessEnv = process.env,
+): ExplainerMode | 'invalid' | undefined {
   // Preserve the original opt-out even after adding provider selection.
   if (environment.SALIDIUM_EXPLAIN === '0') return 'off';
-  const value = (environment.SALIDIUM_EXPLAINER ?? 'auto').trim().toLowerCase();
+  if (environment.SALIDIUM_EXPLAINER === undefined) return undefined;
+  const value = environment.SALIDIUM_EXPLAINER.trim().toLowerCase();
   return value === 'auto' || value === 'claude' || value === 'codex' || value === 'off'
     ? value
     : 'invalid';
+}
+
+/** The selected backend after the daemon's launch environment has had the final say. */
+export function effectiveExplainerMode(
+  stored: ExplainerBackendSelection,
+  environment: NodeJS.ProcessEnv = process.env,
+): ExplainerMode | 'invalid' {
+  return environmentExplainerMode(environment) ?? stored;
+}
+
+function validModel(value: string | null | undefined): string | undefined {
+  if (value == null) return undefined;
+  const parsed = ExplainerModelSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/** The optional model override after the launch environment has had the final say. */
+export function effectiveExplainerModel(
+  stored: string | null,
+  environment: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return environment.SALIDIUM_EXPLAIN_MODEL === undefined
+    ? validModel(stored)
+    : validModel(environment.SALIDIUM_EXPLAIN_MODEL);
 }
 
 export function chooseExplainerBackendId(
@@ -259,15 +299,56 @@ export function chooseExplainerBackendId(
 export function resolveExplainerBackend(
   sourceProvider: ProviderId,
   environment = process.env,
+  mode: ExplainerMode | 'invalid' = configuredExplainerMode(environment),
 ): ExplainerBackend | undefined {
   const backends = resolvedBuiltInBackends(environment);
   const available = new Set(backends.map((backend) => backend.id));
-  const id = chooseExplainerBackendId(
-    sourceProvider,
-    configuredExplainerMode(environment),
-    available,
-  );
+  const id = chooseExplainerBackendId(sourceProvider, mode, available);
   return backends.find((backend) => backend.id === id);
+}
+
+export interface ExplainedConfiguration {
+  mode: ExplainerMode | 'invalid';
+  model: string | undefined;
+  backendLocked: boolean;
+  modelLocked: boolean;
+  availableBackends: Array<'claude' | 'codex'>;
+  routes: { claudeCode: ExplainerRoute; codex: ExplainerRoute };
+}
+
+/**
+ * One account of what the next explanation will use, shared by the runtime and the settings UI.
+ * A route is absent rather than guessed when the selected CLI is not installed.
+ */
+export function explainedConfiguration(
+  storedBackend: ExplainerBackendSelection,
+  storedModel: string | null,
+  environment: NodeJS.ProcessEnv = process.env,
+): ExplainedConfiguration {
+  const mode = effectiveExplainerMode(storedBackend, environment);
+  const model = effectiveExplainerModel(storedModel, environment);
+  const availableBackends = resolvedBuiltInBackends(environment).map(
+    (backend) => backend.id,
+  ) as Array<'claude' | 'codex'>;
+  const available = new Set<string>(availableBackends);
+  const route = (provider: ProviderId): ExplainerRoute => {
+    const backend = chooseExplainerBackendId(provider, mode, available);
+    if (backend !== 'claude' && backend !== 'codex') return { backend: null, model: null };
+    return {
+      backend,
+      model:
+        model ??
+        (backend === 'claude' ? DEFAULT_CLAUDE_EXPLAINER_MODEL : DEFAULT_CODEX_EXPLAINER_MODEL),
+    };
+  };
+  return {
+    mode,
+    model,
+    backendLocked: environmentExplainerMode(environment) !== undefined,
+    modelLocked: environment.SALIDIUM_EXPLAIN_MODEL !== undefined,
+    availableBackends,
+    routes: { claudeCode: route('claude-code'), codex: route('codex') },
+  };
 }
 
 export interface ExplainerStatus {

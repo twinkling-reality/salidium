@@ -3,7 +3,7 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { DaemonInfo } from '@salidium/protocol';
+import type { DaemonInfo, ExplainerSettings } from '@salidium/protocol';
 import { ExplainerSettingsSchema } from '@salidium/protocol';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { readSettings, writeSettings } from '../daemon.ts';
@@ -32,6 +32,25 @@ beforeAll(async () => {
   registry = new SessionRegistry(store, {
     explainerCadence: effectiveCadence(stored.explainerCadence, {}),
   });
+  const answer = (): ExplainerSettings => {
+    const usage = registry.explainerUsage();
+    return {
+      cadence: stored.explainerCadence,
+      backend: stored.explainerBackend,
+      model: stored.explainerModel,
+      envOff: false,
+      backendLocked: false,
+      modelLocked: false,
+      activeBackend: stored.explainerBackend,
+      activeModel: stored.explainerModel,
+      availableBackends: [],
+      routes: {
+        claudeCode: { backend: null, model: null },
+        codex: { backend: null, model: null },
+      },
+      ...(usage ? { usage } : {}),
+    };
+  };
   server = createHttpServer({
     registry,
     hooks: { handle: () => 0 } as unknown as HookIngress,
@@ -39,15 +58,14 @@ beforeAll(async () => {
     port: () => (server.address() as AddressInfo).port,
     info: () => ({}) as DaemonInfo,
     settings: {
-      explainer: () => {
-        const usage = registry.explainerUsage();
-        return { cadence: stored.explainerCadence, envOff: false, ...(usage ? { usage } : {}) };
-      },
-      setExplainerCadence: (cadence) => {
-        stored.explainerCadence = cadence;
+      explainer: answer,
+      setExplainerSettings: (change) => {
+        if (change.cadence !== undefined) stored.explainerCadence = change.cadence;
+        if (change.backend !== undefined) stored.explainerBackend = change.backend;
+        if (change.model !== undefined) stored.explainerModel = change.model;
         writeSettings(dir, stored);
-        registry.setExplainerCadence(effectiveCadence(cadence, {}));
-        return { cadence, envOff: false };
+        registry.setExplainerCadence(effectiveCadence(stored.explainerCadence, {}));
+        return answer();
       },
     },
     log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} } as never,
@@ -76,6 +94,8 @@ describe('the explainer settings route', () => {
     expect(res.status).toBe(200);
     const settings = ExplainerSettingsSchema.parse(await res.json());
     expect(settings.cadence).toBe('turn');
+    expect(settings.backend).toBe('auto');
+    expect(settings.routes.codex.model).toBeNull();
     expect(settings.envOff).toBe(false);
     // Omitted, not zeroed: an empty section is left out rather than printed as a row of noughts.
     expect(settings.usage).toBeUndefined();
@@ -86,7 +106,11 @@ describe('the explainer settings route', () => {
     expect(res.status).toBe(200);
     expect(ExplainerSettingsSchema.parse(await res.json()).cadence).toBe('session');
     const path = join(dir, 'settings.json');
-    expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({ explainerCadence: 'session' });
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({
+      explainerCadence: 'session',
+      explainerBackend: 'auto',
+      explainerModel: null,
+    });
     // The file sits beside the token; it is written with the same permissions as everything else
     // under the home directory.
     expect(statSync(path).mode & 0o777).toBe(0o600);
@@ -94,6 +118,18 @@ describe('the explainer settings route', () => {
 
   it('survives a restart, which is the whole reason it is a file', () => {
     expect(readSettings(dir).explainerCadence).toBe('session');
+  });
+
+  it('updates the helper and model without restarting the daemon', async () => {
+    const res = await call('PUT', { backend: 'codex', model: 'gpt-5.6-luna' });
+    expect(res.status).toBe(200);
+    const settings = ExplainerSettingsSchema.parse(await res.json());
+    expect(settings.backend).toBe('codex');
+    expect(settings.model).toBe('gpt-5.6-luna');
+    expect(readSettings(dir)).toMatchObject({
+      explainerBackend: 'codex',
+      explainerModel: 'gpt-5.6-luna',
+    });
   });
 
   it('refuses a stop it does not know rather than storing it', async () => {
@@ -119,7 +155,11 @@ describe('the explainer settings route', () => {
   it('uses the shipped stop when settings are missing and fails closed when they are invalid', () => {
     const empty = mkdtempSync(join(tmpdir(), 'salidium-settings-missing-'));
     expect(readSettings(empty).explainerCadence).toBe('turn');
-    writeSettings(empty, { explainerCadence: 'off' });
+    writeSettings(empty, {
+      explainerCadence: 'off',
+      explainerBackend: 'auto',
+      explainerModel: null,
+    });
     expect(readSettings(empty).explainerCadence).toBe('off');
     expect(readdirSync(empty).filter((name) => name.endsWith('.tmp'))).toEqual([]);
 

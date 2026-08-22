@@ -282,7 +282,7 @@ const RAW: Array<Omit<Page, "n">> = [
   },
   {
     slug: "rewind",
-    title: "Rewind, History and Quantities",
+    title: "Rewind, History and Models & Usage",
     summary: "Seeing what a report said an hour ago, what changed since, and how much of it there is.",
     blocks: [
       p(
@@ -307,21 +307,18 @@ const RAW: Array<Omit<Page, "n">> = [
       p(
         "The filter narrows it to any of seven kinds: status, what changed, why, how, checks, left to do, needs review. When you come back to a session that moved while you were away, Salidium offers the changes since you last had it open, and History opens scoped to them.",
       ),
-      h("Quantities"),
-      p("Measured totals beside the session, and only the ones that were observed."),
+      h("Models & Usage"),
+      p(
+        "One compact rail for the work and explanation models, explanation controls, and exact token usage.",
+      ),
       shot(
-        "quantities",
-        "The Salidium quantities rail, showing changes, activity, model usage and the latest check.",
+        "models-usage",
+        "The Salidium Models & Usage rail, showing the coding and explanation models, explanation controls, and separate usage totals.",
       ),
       terms([
-        ["Changes", "Files, added, removed."],
-        ["Activity", "Duration, commits, turns."],
-        ["Model", "Responses, input, output, cache read, cache write."],
-        ["Latest check", "The method, the outcome, the time."],
-        [
-          "Data handling",
-          "Credential-shaped strings redacted, records that could not be read, context compactions.",
-        ],
+        ["Models", "The work model and the model used for the explanation."],
+        ["Explanation", "Which agent writes it, when it runs, and an optional model choice."],
+        ["Usage", "Exact session tokens and the separate all-time explanation ledger."],
       ]),
       note(
         "No figure appears in currency. That would be Salidium's arithmetic over a price table it does not carry, and on a subscription no amount is charged.",
@@ -393,7 +390,7 @@ const RAW: Array<Omit<Page, "n">> = [
   {
     slug: "explanations",
     title: "Explanations",
-    summary: "The one part of a report a model writes, and how to turn it off.",
+    summary: "The one part of a report a model writes, with visible routing and usage.",
     blocks: [
       p(
         "Most of a report is what Salidium observed. One part of it is prose, and prose has to be written by something.",
@@ -404,11 +401,18 @@ const RAW: Array<Omit<Page, "n">> = [
       h("When it runs"),
       terms([
         ["Off", "The page Salidium derives, and nothing else. No model is ever called."],
-        ["When a session ends", "One explanation each, written once a session has finished or gone quiet."],
-        ["While it works", "A fresh explanation at every turn end. This is the default."],
+        ["When done", "One explanation after the session finishes or goes quiet."],
+        ["Each reply", "Refresh the explanation after every reply."],
       ]),
       p(
-        "The control is in the session list, under the sliders. `SALIDIUM_EXPLAINER=off` switches it off in the daemon's environment and outranks whatever is chosen here, and the control says so when it is set.",
+        "Open Models & Usage in the session toolbar. It names the work and explanation models, and lets you choose which agent writes explanations and when. Choose a model opens a short list that adapts to the selected agent; Other model keeps manual entry available as a fallback. The same control is available before the first session exists.",
+      ),
+      h("What it uses"),
+      p(
+        "Models & Usage separates the work agent from the explanation helper in one rail. Session usage belongs to the work being read. Explanation usage is the observed all-time ledger. Both are token counts reported by the agent CLI, never a currency estimate.",
+      ),
+      note(
+        "Claude defaults to the named Haiku model shown in the panel. When no exact model is chosen, Codex selects its own model. Salidium labels that Automatic instead of exposing CLI terminology or guessing a model name.",
       ),
       h("What it is given"),
       list(
@@ -474,7 +478,7 @@ const RAW: Array<Omit<Page, "n">> = [
       p(
         "Credential-shaped strings are redacted, and files on paths that hold credentials have their contents withheld. Both happen when an event is ingested rather than when it is shown. So what Salidium suppresses is suppressed everywhere: in what it shows you, and in the packet an [explanation](/docs/explanations) is written from.",
       ),
-      note("How much was redacted is counted, and the count is in Quantities under data handling."),
+      note("How much was redacted is counted without exposing the matched value."),
     ],
   },
   {
@@ -536,9 +540,9 @@ const RAW: Array<Omit<Page, "n">> = [
         ],
         [
           "`SALIDIUM_EXPLAINER`",
-          "`auto`, `claude`, `codex` or `off`. Chooses the backend, and only `off` outranks the setting in the page.",
+          "`auto`, `claude`, `codex` or `off`. Enforces the helper choice and locks that control in the page.",
         ],
-        ["`SALIDIUM_EXPLAIN_MODEL`", "A model id for the explainer, instead of its default."],
+        ["`SALIDIUM_EXPLAIN_MODEL`", "Enforces a model id for the explainer and locks that control in the page."],
         ["`SALIDIUM_NO_GIT`", "Set to `1` to stop the git snapshots."],
         ["`SALIDIUM_LOG`", "`silent`, `info` or `debug`. Defaults to `info`."],
         ["`SALIDIUM_LOG_FILE`", "Where the structured log is written. The CLI sets it when it starts the daemon."],
@@ -572,7 +576,7 @@ const RAW: Array<Omit<Page, "n">> = [
         ],
         [
           "Ingest problems",
-          "An unreadable transcript record is counted in Quantities under data handling. A dropped hook payload is not: it reaches the daemon log and nothing else.",
+          "An unreadable transcript record becomes an ingest warning. A dropped hook payload does not: it reaches the daemon log and nothing else.",
         ],
       ]),
       note(

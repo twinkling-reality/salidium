@@ -3,6 +3,7 @@ import { type CanonicalEvent, ExplanationEventSchema } from '@salidium/protocol'
 import {
   configuredExplainerMode,
   type ExplainerBackend,
+  type ExplainerMode,
   MAX_EXPLAINER_OUTPUT_BYTES,
   resolveExplainerBackend,
 } from './explainerBackends.ts';
@@ -194,6 +195,8 @@ export const PROMPT = [
 export interface ExplainerOptions {
   /** Injected in tests or by a future backend registry. */
   backend?: ExplainerBackend;
+  /** Stored/runtime choice, supplied by the daemon so it can change without a restart. */
+  mode?: ExplainerMode | 'invalid';
   environment?: NodeJS.ProcessEnv;
   model?: string;
   timeoutMs?: number;
@@ -239,8 +242,8 @@ export async function explainWithStatus(
   opts: ExplainerOptions = {},
 ): Promise<ExplanationAttempt> {
   const environment = opts.environment ?? process.env;
-  const mode = configuredExplainerMode(environment);
-  const backend = opts.backend ?? resolveExplainerBackend(state.provider, environment);
+  const mode = opts.mode ?? configuredExplainerMode(environment);
+  const backend = opts.backend ?? resolveExplainerBackend(state.provider, environment, mode);
   if (!backend) return { status: mode === 'off' ? 'disabled' : 'unavailable' };
   const model = opts.model ?? environment.SALIDIUM_EXPLAIN_MODEL;
   const timeoutMs = opts.timeoutMs ?? 60_000;

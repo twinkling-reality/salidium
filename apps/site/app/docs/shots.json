@@ -18,16 +18,16 @@
     "dark": "history-dark-44561803.png"
   },
   "masthead": {
-    "width": 892,
+    "width": 870,
     "height": 225,
-    "light": "masthead-light-19b898be.png",
-    "dark": "masthead-dark-9a1926e7.png"
+    "light": "masthead-light-bd490069.png",
+    "dark": "masthead-dark-9bbc0678.png"
   },
-  "quantities": {
+  "models-usage": {
     "width": 320,
-    "height": 412,
-    "light": "quantities-light-36a25eaf.png",
-    "dark": "quantities-dark-20046d80.png"
+    "height": 683,
+    "light": "models-usage-light-1b775d4b.png",
+    "dark": "models-usage-dark-1d332eaa.png"
   },
   "record": {
     "width": 760,
@@ -44,7 +44,7 @@
   "sessions": {
     "width": 940,
     "height": 560,
-    "light": "sessions-light-c358889d.png",
-    "dark": "sessions-dark-648f39d8.png"
+    "light": "sessions-light-d1f0d5d1.png",
+    "dark": "sessions-dark-3f2f3bed.png"
   }
 }

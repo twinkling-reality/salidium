@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,8 +29,21 @@ export const test = base.extend<Record<string, never>, WorkerFixtures>({
       const temporary = await mkdtemp(join(tmpdir(), 'salidium-browser-e2e-'));
       let handle: DaemonHandle | undefined;
       try {
+        const salidiumHome = join(temporary, 'salidium');
+        await mkdir(salidiumHome, { recursive: true });
+        // Browser fixtures exercise the explanation controls, not a real paid helper invocation.
+        // Start at Off so a developer's locally installed CLI can never be called by a test run.
+        await writeFile(
+          join(salidiumHome, 'settings.json'),
+          JSON.stringify({
+            explainerCadence: 'off',
+            explainerBackend: 'auto',
+            explainerModel: null,
+          }),
+          { mode: 0o600 },
+        );
         handle = await startDaemon({
-          home: join(temporary, 'salidium'),
+          home: salidiumHome,
           userHome: join(temporary, 'providers'),
           port: 0,
           historyDays: 0,

@@ -18,6 +18,7 @@ import {
   type SessionSummary,
   type StoredEvent,
 } from '@salidium/protocol';
+import type { ExplanationAttempt } from '../enrich/explainer.ts';
 import type { RetentionPreview, SalidiumStore } from '../storage/salidiumStore.ts';
 import { type CoordinatorListener, SessionCoordinator } from './sessionCoordinator.ts';
 
@@ -65,14 +66,21 @@ export class SessionRegistry {
   private explainerCadence: ExplainerCadence = 'turn';
   /** Handed to every coordinator this registry loads; see `CoordinatorOptions.now`. */
   private readonly now: (() => number) | undefined;
+  /** Reads the daemon's current helper routing at call time, so settings apply without a restart. */
+  private readonly explainSession: ((state: RunState) => Promise<ExplanationAttempt>) | undefined;
 
   constructor(
     store: SalidiumStore,
-    opts: { explainerCadence?: ExplainerCadence; now?: () => number } = {},
+    opts: {
+      explainerCadence?: ExplainerCadence;
+      explainSession?: (state: RunState) => Promise<ExplanationAttempt>;
+      now?: () => number;
+    } = {},
   ) {
     this.store = store;
     if (opts.explainerCadence) this.explainerCadence = opts.explainerCadence;
     this.now = opts.now;
+    this.explainSession = opts.explainSession;
     this.listener = {
       onEvents: (sessionId, events, changes) => {
         for (const s of this.allSubscribers) {
@@ -119,7 +127,11 @@ export class SessionRegistry {
         cwd: hint?.cwd,
         store: this.store,
         listener: this.listener,
-        options: { cadence: this.explainerCadence, ...(this.now ? { now: this.now } : {}) },
+        options: {
+          cadence: this.explainerCadence,
+          ...(this.explainSession ? { explainSession: this.explainSession } : {}),
+          ...(this.now ? { now: this.now } : {}),
+        },
       });
       c.onError = (err) => this.onPersistError?.(sessionId, err);
       this.live.set(sessionId, c);

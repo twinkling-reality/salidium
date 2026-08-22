@@ -120,7 +120,7 @@ const PATHS: Record<IconName, React.ReactNode> = {
       <path d="M2 6.5h12M6.5 6.5v6.5" />
     </>
   ),
-  /* The quantities, behind their own toggle. */
+  /* Models and measured usage, behind their own toggle. */
   stats: (
     <>
       <path d="M2.5 13.5h11" />

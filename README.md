@@ -38,7 +38,7 @@ The documentation is at [salidium.com/docs](https://salidium.com/docs).
 3. [Sessions](https://salidium.com/docs/sessions)
 4. [Reading a report](https://salidium.com/docs/report)
 5. [Evidence](https://salidium.com/docs/evidence)
-6. [Rewind, History and Quantities](https://salidium.com/docs/rewind)
+6. [Rewind, History and Models & Usage](https://salidium.com/docs/rewind)
 7. [Records](https://salidium.com/docs/records)
 8. [How we know](https://salidium.com/docs/provenance)
 9. [Explanations](https://salidium.com/docs/explanations)

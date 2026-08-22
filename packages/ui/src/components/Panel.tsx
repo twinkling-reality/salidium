@@ -77,7 +77,7 @@ export function Panel({
           stays out of the tab order and the modal has exactly one keyboard boundary. */}
       <div className="panel-backdrop" aria-hidden="true" onClick={closePanel} />
       <div
-        className="panel-card"
+        className={`panel-card panel-card-${id}`}
         ref={cardRef}
         role="dialog"
         aria-modal="true"

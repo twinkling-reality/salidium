@@ -215,6 +215,79 @@ test('sessions without evidence omit the control and panel', async ({ page, daem
   await expectNoA11yViolations(page);
 });
 
+test('models and usage keeps both ledgers and explanation controls in one rail', async ({
+  page,
+  daemon,
+}, testInfo) => {
+  test.skip(testInfo.project.name.includes('narrow'), 'desktop flow');
+  await openSalidium(page, daemon);
+
+  await page.getByRole('button', { name: 'Models & Usage' }).click();
+  const models = page.getByRole('complementary', { name: 'Models & Usage' });
+  await expect(models.getByRole('heading', { name: 'Models' })).toBeVisible();
+  await expect(models).toContainText('test-model');
+  await expect(models).toContainText('No token data');
+  await expect(models.getByRole('heading', { name: 'Explanation' })).toBeVisible();
+  await expect(models).toContainText('claude-haiku-4-5-20251001');
+  await expect(models.getByRole('button', { name: 'Same as coding' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await expect(models.getByRole('button', { name: 'Off' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(models.getByRole('textbox', { name: 'Model name' })).toHaveCount(0);
+  await models.getByRole('button', { name: 'Choose a model' }).click();
+  const modelChoices = models.getByRole('list', { name: 'Explanation model choices' });
+  await expect(modelChoices).toBeVisible();
+  await expect(
+    modelChoices.getByRole('button', { name: /test-model Current coding model/ }),
+  ).toBeVisible();
+  await expect(
+    modelChoices.getByRole('button', {
+      name: /claude-haiku-4-5-20251001 Salidium default/,
+    }),
+  ).toHaveAttribute('aria-current', 'true');
+  await modelChoices.getByRole('button', { name: /test-model Current coding model/ }).click();
+  await expect(
+    modelChoices.getByRole('button', { name: /test-model Current coding model/ }),
+  ).toHaveAttribute('aria-current', 'true');
+  await models.getByRole('button', { name: 'Codex' }).click();
+  await expect(
+    modelChoices.getByRole('button', { name: /Automatic Codex chooses/ }),
+  ).toHaveAttribute('aria-current', 'true');
+  await expect(models.getByRole('textbox', { name: 'Model name' })).toHaveCount(0);
+  await modelChoices.getByRole('button', { name: /Other model/ }).click();
+  await expect(models.getByRole('textbox', { name: 'Model name' })).toBeVisible();
+  await expect(models.getByRole('heading', { name: 'Usage' })).toBeVisible();
+  await expect(models).toContainText('all runs');
+  await expect(page.getByRole('dialog', { name: 'Explanation' })).toHaveCount(0);
+  await expectNoA11yViolations(page);
+});
+
+test('the narrow layout uses the same models and usage rail', async ({
+  page,
+  daemon,
+}, testInfo) => {
+  test.skip(!testInfo.project.name.includes('narrow'), 'narrow flow');
+  await openSalidium(page, daemon);
+
+  const sessions = page.getByRole('dialog', { name: 'Salidium' });
+  await expect(sessions).toBeVisible();
+  await expect(sessions.getByRole('button', { name: 'Explanation model and usage' })).toHaveCount(
+    0,
+  );
+  await sessions.getByRole('button', { name: 'Hide the session list' }).click();
+  await page.getByRole('button', { name: 'Models & Usage' }).click();
+
+  await expect(sessions).toBeHidden();
+  const models = page.getByRole('complementary', { name: 'Models & Usage' });
+  await expect(models).toBeVisible();
+  await expect(models.getByRole('heading', { name: 'Models' })).toBeVisible();
+  await expect(models.getByRole('heading', { name: 'Explanation' })).toBeVisible();
+  await expect(models.getByRole('heading', { name: 'Usage' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Explanation' })).toHaveCount(0);
+  await expectNoA11yViolations(page);
+});
+
 /*
  * The section that quotes a delegated agent verbatim, which nothing could reach until a fixture
  * had one. It guards three things at once: that the disclosure counts the lanes and how many of

@@ -11,12 +11,12 @@ import {
 } from '@salidium/core';
 import type {
   DaemonInfo,
-  ExplainerCadence,
   ExplainerSettings,
+  ExplainerSettingsRequest,
   StoredEvent,
   StreamMessage,
 } from '@salidium/protocol';
-import { CanonicalTimestampSchema, ExplainerCadenceRequestSchema } from '@salidium/protocol';
+import { CanonicalTimestampSchema, ExplainerSettingsRequestSchema } from '@salidium/protocol';
 import type { HookIngress } from '../ingest/hookIngress.ts';
 import { MAX_INGEST_PAYLOAD_BYTES } from '../ingest/limits.ts';
 import type { Logger } from '../logging/logger.ts';
@@ -37,7 +37,7 @@ export interface HttpServerDeps {
    */
   settings?: {
     explainer: () => ExplainerSettings;
-    setExplainerCadence: (cadence: ExplainerCadence) => ExplainerSettings;
+    setExplainerSettings: (settings: ExplainerSettingsRequest) => ExplainerSettings;
   };
   log: Logger;
 }
@@ -172,9 +172,9 @@ export function createHttpServer(deps: HttpServerDeps): Server {
         } catch {
           return json(res, 400, { error: 'invalid json' });
         }
-        const parsed = ExplainerCadenceRequestSchema.safeParse(payload);
-        if (!parsed.success) return json(res, 400, { error: 'unknown cadence' });
-        return json(res, 200, deps.settings.setExplainerCadence(parsed.data.cadence));
+        const parsed = ExplainerSettingsRequestSchema.safeParse(payload);
+        if (!parsed.success) return json(res, 400, { error: 'invalid explainer setting' });
+        return json(res, 200, deps.settings.setExplainerSettings(parsed.data));
       }
       return json(res, 405, { error: 'method not allowed' });
     }

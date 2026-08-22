@@ -6,7 +6,7 @@ import { Icon } from './components/Icon.tsx';
 import { RawDrawer } from './components/RawDrawer.tsx';
 import { MarksKey, SessionList } from './components/SessionList.tsx';
 import { SessionView } from './components/SessionView.tsx';
-import { ExplainerSettings } from './components/Settings.tsx';
+import { ExplanationSettings } from './components/Settings.tsx';
 import { useSessionList } from './hooks/useLiveSession.ts';
 import { useModalFocus } from './lib/useModalFocus.ts';
 import { useAppStore } from './store/appStore.ts';
@@ -182,10 +182,6 @@ export function App() {
           {/* The key to the marks a row can carry, asked for rather than standing at the foot of
               the panel taking a row and a half of the list from it for good. */}
           {sessionCount > 0 && <MarksKey />}
-          {/* When Salidium spends the reader's own quota on an explanation. It is a setting for the
-              whole application rather than for a session, so it belongs to the surface that names
-              the application — and deliberately not to the foot of the panel, which is empty. */}
-          <ExplainerSettings />
           {/* The control that folds the list belongs to the list. Same primitive as the toolbar's,
               so it is the same box and the same glyph in both states rather than a stray chevron. */}
           <span data-modal-initial="true">
@@ -218,30 +214,7 @@ export function App() {
         {selectedId ? (
           <SessionView key={selectedId} sessionId={selectedId} now={now} />
         ) : sessionCount === 0 ? (
-          <div className="main-empty">
-            {
-              /*
-               * The first screen anyone sees, and it used to be "Nothing to show yet." on its own:
-               * a state described, in the larger half of a window whose smaller half was already
-               * telling the reader what to do. Someone who has just installed this does not yet
-               * know it watches an agent they have not started, so the pane that will hold the
-               * report says what will put one there.
-               *
-               * It claims nothing about whether the hooks are connected, because nothing here has
-               * checked that. It says what happens when a run starts, which is true either way.
-               */
-              <div className="main-empty-first">
-                <p>A report appears here when your agent runs.</p>
-                <p className="muted">
-                  Start a run in Claude Code or Codex. Salidium reads the session it writes and
-                  turns it into what changed, what was checked, and what it flagged for a human.
-                </p>
-                <a className="link" href={DOCS} target="_blank" rel="noreferrer">
-                  Read the documentation
-                </a>
-              </div>
-            }
-          </div>
+          <FirstRun />
         ) : /*
          * Nothing, deliberately, and only ever for one frame.
          *
@@ -264,6 +237,60 @@ export function App() {
       >
         <RawDrawer />
       </div>
+    </div>
+  );
+}
+
+/** The same visible model control exists before the first session, when defaults matter most. */
+function FirstRun() {
+  const statsOpen = useAppStore((state) => state.statsOpen);
+  const toggleStats = useAppStore((state) => state.toggleStats);
+  return (
+    <div className={`first-run ${statsOpen ? 'has-inspector' : ''}`}>
+      <div className="main-empty first-run-main">
+        <div className="toolbar first-run-actions">
+          <ToolButton
+            icon="stats"
+            label="Models & Usage"
+            on={statsOpen}
+            title="Show explanation models, token usage and defaults"
+            onClick={toggleStats}
+          />
+        </div>
+        {
+          /*
+           * The first screen anyone sees, and it used to be "Nothing to show yet." on its own:
+           * a state described, in the larger half of a window whose smaller half was already
+           * telling the reader what to do. Someone who has just installed this does not yet
+           * know it watches an agent they have not started, so the pane that will hold the
+           * report says what will put one there.
+           *
+           * It claims nothing about whether the hooks are connected, because nothing here has
+           * checked that. It says what happens when a run starts, which is true either way.
+           */
+          <div className="main-empty-first">
+            <p>A report appears here when your agent runs.</p>
+            <p className="muted">
+              Start a run in Claude Code or Codex. Salidium reads the session it writes and turns it
+              into what changed, what was checked, and what it flagged for a human.
+            </p>
+            <a className="link" href={DOCS} target="_blank" rel="noreferrer">
+              Read the documentation
+            </a>
+          </div>
+        }
+      </div>
+      {statsOpen && (
+        <aside className="inspector models-usage" aria-label="Models & Usage">
+          <div className="inspector-head">
+            <ToolButton icon="panel" title="Hide Models & Usage" onClick={toggleStats} />
+            <span className="inspector-title">Models &amp; Usage</span>
+          </div>
+          <div className="models-usage-body scroll-fade">
+            <ExplanationSettings />
+          </div>
+        </aside>
+      )}
     </div>
   );
 }

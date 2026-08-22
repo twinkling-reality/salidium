@@ -25,10 +25,10 @@ import {
   EvidenceHappened,
   Explained,
   StatusColumn,
-  Telemetry,
   VerdictBadge,
 } from './Report.tsx';
 import { statusGlyph } from './SessionList.tsx';
+import { ExplanationSettings } from './Settings.tsx';
 import { Timeline, TimelineKey } from './Timeline.tsx';
 
 /**
@@ -36,10 +36,10 @@ import { Timeline, TimelineKey } from './Timeline.tsx';
  *
  * Product mark, session title, the facts that identify the run, the verdict where a README puts
  * its badges, a rule, and then the explanation — a description followed by the diagrams, given the
- * width of the page and room to breathe. Quantities stay behind their own control, because
+ * width of the page and room to breathe. Models and usage stay behind their own control, because
  * whichever of meaning and measurement sits on top is the one that gets read.
  *
- * Detail is section-level: Evidence and Rewind open independently, while Quantities and History
+ * Detail is section-level: Evidence and Rewind open independently, while Models & usage and History
  * share the supporting inspector beside the explanation.
  */
 export function SessionView({ sessionId, now }: { sessionId: string; now: number }) {
@@ -184,8 +184,8 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
     }
   }, [setHistoryMode, toggleStats]);
 
-  /** Quantities and History occupy one inspector slot, so opening either replaces the other. */
-  const toggleQuantities = useCallback(() => {
+  /** Models & usage and History occupy one inspector slot, so opening either replaces the other. */
+  const toggleModels = useCallback(() => {
     const opening = !useAppStore.getState().statsOpen;
     if (opening) {
       setMarkedFrom(undefined);
@@ -233,7 +233,9 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
   const ex = view.explained;
 
   return (
-    <div className={`session ${statsOpen || historyMode === 'rail' ? 'has-inspector' : ''}`}>
+    <div
+      className={`session ${statsOpen || historyMode === 'rail' ? 'has-inspector' : ''} ${statsOpen ? 'has-models' : ''}`}
+    >
       <div className="session-main" ref={paneRef}>
         <div className="session-actions">
           {/* Only shown while the list is folded: with the list on screen its own header carries
@@ -289,10 +291,10 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
             />
             <ToolButton
               icon="stats"
-              label="Quantities"
+              label="Models & Usage"
               on={statsOpen}
-              title="Show measured totals beside the session"
-              onClick={toggleQuantities}
+              title="Show models, token usage and explanation defaults"
+              onClick={toggleModels}
             />
             <ToolButton
               icon="history"
@@ -456,7 +458,12 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
         <EvidencePanel view={view} cwd={state.cwd} onRef={onRef} />
       </div>
       {statsOpen ? (
-        <QuantitiesRail view={view} onClose={toggleQuantities} />
+        <ModelsUsageRail
+          view={view}
+          provider={state.provider}
+          generatedModel={view.explained?.model}
+          onClose={toggleModels}
+        />
       ) : historyMode === 'rail' ? (
         <HistoryRail
           changes={live.changes}
@@ -530,16 +537,31 @@ function EvidencePanel({
   return <Panel id="evidence" title="Evidence" sections={sections} />;
 }
 
-/** Measured facts use the same supporting rail as History, never a competing third column. */
-function QuantitiesRail({ view, onClose }: { view: ProjectedSessionView; onClose: () => void }) {
+/** Model choices and measured usage share the same supporting rail as History. */
+function ModelsUsageRail({
+  view,
+  provider,
+  generatedModel,
+  onClose,
+}: {
+  view: ProjectedSessionView;
+  provider: RunState['provider'];
+  generatedModel?: string;
+  onClose: () => void;
+}) {
   return (
-    <aside className="inspector quantities" aria-label="Quantities">
+    <aside className="inspector models-usage" aria-label="Models & Usage">
       <div className="inspector-head">
-        <ToolButton icon="panel" title="Hide quantities" onClick={onClose} />
-        <span className="inspector-title">Quantities</span>
+        <ToolButton icon="panel" title="Hide Models & Usage" onClick={onClose} />
+        <span className="inspector-title">Models &amp; Usage</span>
       </div>
-      <div className="quantities-body scroll-fade">
-        <Telemetry view={view} />
+      <div className="models-usage-body scroll-fade">
+        <ExplanationSettings
+          provider={provider}
+          workModel={view.strip.model}
+          sessionUsage={view.usage}
+          generatedModel={generatedModel}
+        />
       </div>
     </aside>
   );

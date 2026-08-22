@@ -1,7 +1,7 @@
 import { applyEvent, type RunState } from '@salidium/core';
 import type {
-  ExplainerCadence,
   ExplainerSettings,
+  ExplainerSettingsRequest,
   Facet,
   SemanticChange,
   SessionList,
@@ -149,7 +149,7 @@ interface AppState {
   closePanel(): void;
   /** The session list is a surface you choose, not furniture; it folds away and stays folded. */
   sidebarOpen: boolean;
-  /** The quantities, in the supporting inspector shared with History. */
+  /** Models and measured usage, in the supporting inspector shared with History. */
   statsOpen: boolean;
   /**
    * The time scrubber, at the foot of the session rather than inside a section of a panel.
@@ -187,7 +187,8 @@ interface AppState {
   liveErrors: Record<string, LiveError | undefined>;
   rawOpen: { sessionId: string; eventId: string } | undefined;
   /**
-   * When the explainer runs, as the daemon last reported it. Undefined until it answers.
+   * What the explainer will use and when it runs, as the daemon last reported it. Undefined until
+   * it answers.
    *
    * Not stored in localStorage like the other choices in this file, and that is the whole point:
    * this one is not the browser's. The daemon does the scheduling, so the daemon holds the answer,
@@ -208,7 +209,7 @@ interface AppState {
   unauthorized(): void;
   setDetail(detail: Detail): void;
   loadExplainer(): void;
-  setExplainerCadence(cadence: ExplainerCadence): void;
+  setExplainerSettings(settings: ExplainerSettingsRequest): void;
   toggleSidebar(): void;
   toggleStats(): void;
   setSessionQuery(q: string): void;
@@ -319,15 +320,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       () => {},
     );
   },
-  setExplainerCadence: (cadence) => {
+  setExplainerSettings: (change) => {
     const api = get().api;
     if (!api) return;
     const previous = get().explainer;
-    // Moved here first, because the radio has to answer the press. The daemon's reply replaces it
-    // whole a moment later, and that reply is the one that knows whether the environment is
-    // holding the explainer off whatever was just chosen.
-    if (previous) set({ explainer: { ...previous, cadence } });
-    void api.setExplainerCadence(cadence).then(
+    // Move the visible choice first so every control answers immediately. The daemon's complete
+    // reply then replaces it with resolved routes and environment locks from the authority.
+    if (previous) set({ explainer: { ...previous, ...change } });
+    void api.setExplainerSettings(change).then(
       (explainer) => set({ explainer }),
       () => set({ explainer: previous }),
     );

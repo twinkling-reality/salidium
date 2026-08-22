@@ -20,12 +20,16 @@ import {
 } from '@salidium/adapter-kit';
 import {
   type DaemonInfo,
+  type ExplainerBackend,
   type ExplainerCadence,
+  ExplainerModelSchema,
   type ExplainerSettings,
+  type ExplainerSettingsRequest,
   PROTOCOL_VERSION,
 } from '@salidium/protocol';
 import { type DaemonConfig, daemonPaths, resolveDaemonConfig } from './config/daemonConfig.ts';
-import { configuredExplainerMode } from './enrich/explainerBackends.ts';
+import { explainWithStatus } from './enrich/explainer.ts';
+import { explainedConfiguration } from './enrich/explainerBackends.ts';
 import { GitSnapshotEnricher } from './enrichers/gitSnapshot.ts';
 import { HookIngress } from './ingest/hookIngress.ts';
 import {
@@ -102,10 +106,16 @@ const VERSION: string = (() => {
  */
 export interface StoredSettings {
   explainerCadence: ExplainerCadence;
+  explainerBackend: ExplainerBackend;
+  explainerModel: string | null;
 }
 
 /** The stop that shipped: a fresh explanation at every turn end. */
-const DEFAULT_SETTINGS: StoredSettings = { explainerCadence: 'turn' };
+const DEFAULT_SETTINGS: StoredSettings = {
+  explainerCadence: 'turn',
+  explainerBackend: 'auto',
+  explainerModel: null,
+};
 
 function settingsPath(home: string): string {
   return join(home, 'settings.json');
@@ -124,15 +134,39 @@ export function readSettings(home: string, onInvalid?: (reason: string) => void)
   if (!existsSync(path)) return { ...DEFAULT_SETTINGS };
   try {
     const raw: unknown = JSON.parse(readFileSync(path, 'utf8'));
-    const cadence = (raw as { explainerCadence?: unknown } | null)?.explainerCadence;
-    if (cadence === 'off' || cadence === 'session' || cadence === 'turn') {
-      return { explainerCadence: cadence };
+    const candidate = raw as {
+      explainerCadence?: unknown;
+      explainerBackend?: unknown;
+      explainerModel?: unknown;
+    } | null;
+    const cadence = candidate?.explainerCadence;
+    if (cadence !== 'off' && cadence !== 'session' && cadence !== 'turn') {
+      onInvalid?.('explainerCadence is missing or unknown');
+      return { ...DEFAULT_SETTINGS, explainerCadence: 'off' };
     }
-    onInvalid?.('explainerCadence is missing or unknown');
+    const backend = candidate?.explainerBackend ?? 'auto';
+    if (backend !== 'auto' && backend !== 'claude' && backend !== 'codex') {
+      onInvalid?.('explainerBackend is unknown');
+      return { ...DEFAULT_SETTINGS, explainerCadence: 'off' };
+    }
+    const model = candidate?.explainerModel ?? null;
+    const parsedModel =
+      model === null
+        ? { success: true as const, data: null }
+        : ExplainerModelSchema.safeParse(model);
+    if (!parsedModel.success) {
+      onInvalid?.('explainerModel is invalid');
+      return { ...DEFAULT_SETTINGS, explainerCadence: 'off' };
+    }
+    return {
+      explainerCadence: cadence,
+      explainerBackend: backend,
+      explainerModel: parsedModel.data,
+    };
   } catch (err) {
     onInvalid?.(err instanceof Error ? err.message : String(err));
   }
-  return { explainerCadence: 'off' };
+  return { ...DEFAULT_SETTINGS, explainerCadence: 'off' };
 }
 
 export function writeSettings(home: string, settings: StoredSettings): void {
@@ -213,16 +247,37 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
   const stored = readSettings(config.home, (reason) =>
     log.warn('settings invalid; optional explanations disabled', { reason }),
   );
-  const envOff = configuredExplainerMode(process.env) === 'off';
+  const activeExplainer = () =>
+    explainedConfiguration(stored.explainerBackend, stored.explainerModel, process.env);
   const registry = new SessionRegistry(store, {
     explainerCadence: effectiveCadence(stored.explainerCadence),
+    explainSession: (state) => {
+      const active = activeExplainer();
+      return explainWithStatus(state, { mode: active.mode, model: active.model });
+    },
     ...(overrides.now ? { now: overrides.now } : {}),
   });
   const explainerSettings = (): ExplainerSettings => {
+    const active = activeExplainer();
     const usage = registry.explainerUsage();
     // Spread rather than `usage: undefined`: the field is absent when nothing was observed, and an
     // explicit undefined would serialise the same but read as a value that happens to be missing.
-    return { cadence: stored.explainerCadence, envOff, ...(usage ? { usage } : {}) };
+    return {
+      cadence: stored.explainerCadence,
+      backend: stored.explainerBackend,
+      model: stored.explainerModel,
+      envOff: active.mode === 'off',
+      backendLocked: active.backendLocked,
+      modelLocked: active.modelLocked,
+      activeBackend:
+        active.mode === 'auto' || active.mode === 'claude' || active.mode === 'codex'
+          ? active.mode
+          : null,
+      activeModel: active.model ?? null,
+      availableBackends: active.availableBackends,
+      routes: active.routes,
+      ...(usage ? { usage } : {}),
+    };
   };
   registry.onPersistError = (sessionId, err) =>
     log.warn('persist failed; will retry', { sessionId, err: String(err) });
@@ -266,13 +321,22 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     info,
     settings: {
       explainer: explainerSettings,
-      setExplainerCadence: (cadence) => {
-        writeSettings(config.home, { explainerCadence: cadence });
-        stored.explainerCadence = cadence;
+      setExplainerSettings: (change: ExplainerSettingsRequest) => {
+        if (change.cadence !== undefined) stored.explainerCadence = change.cadence;
+        if (change.backend !== undefined) stored.explainerBackend = change.backend;
+        if (change.model !== undefined) stored.explainerModel = change.model;
+        writeSettings(config.home, stored);
         // The environment still outranks the choice; it is the choice that was stored, not the
         // effect. A reader who unsets the variable and restarts gets the stop they picked.
-        registry.setExplainerCadence(effectiveCadence(cadence));
-        log.info('explainer cadence set', { cadence, inForce: effectiveCadence(cadence) });
+        registry.setExplainerCadence(effectiveCadence(stored.explainerCadence));
+        const active = activeExplainer();
+        log.info('explainer settings set', {
+          cadence: stored.explainerCadence,
+          backend: stored.explainerBackend,
+          model: stored.explainerModel ?? 'default',
+          inForceCadence: effectiveCadence(stored.explainerCadence),
+          inForceBackend: active.mode,
+        });
         return explainerSettings();
       },
     },

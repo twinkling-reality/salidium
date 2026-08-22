@@ -22,8 +22,8 @@ export function ToolButton({
    * chrome and the settings.
    *
    * That is the whole rule, and the toolbar broke it in one place: Evidence, Rewind and History
-   * named themselves while the quantities bar — which is the same kind of thing, a body of content
-   * it shows and hides — was a bar-chart glyph and a tooltip. The list fold and the theme are icons
+   * named themselves while Models & usage — which is the same kind of thing, a body of content it
+   * shows and hides — was a bar-chart glyph and a tooltip. The list fold and the theme are icons
    * because they act on the window rather than on the session, and because their glyphs are the
    * two everyone already knows.
    *

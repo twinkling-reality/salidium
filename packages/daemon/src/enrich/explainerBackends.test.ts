@@ -7,7 +7,10 @@ import {
   buildCodexInvocation,
   chooseExplainerBackendId,
   configuredExplainerMode,
+  DEFAULT_CODEX_EXPLAINER_MODEL,
   type ExplainerBackendRequest,
+  effectiveExplainerMode,
+  effectiveExplainerModel,
   resolveExplainerBackend,
 } from './explainerBackends.ts';
 
@@ -37,6 +40,15 @@ describe('explainer backend selection', () => {
   it('keeps the original opt-out and rejects unknown configuration', () => {
     expect(configuredExplainerMode({ SALIDIUM_EXPLAIN: '0' })).toBe('off');
     expect(configuredExplainerMode({ SALIDIUM_EXPLAINER: 'ollama' })).toBe('invalid');
+  });
+
+  it('uses stored helper and model choices unless the launch environment overrides them', () => {
+    expect(effectiveExplainerMode('codex', {})).toBe('codex');
+    expect(effectiveExplainerMode('codex', { SALIDIUM_EXPLAINER: 'claude' })).toBe('claude');
+    expect(effectiveExplainerModel('gpt-5.6-luna', {})).toBe('gpt-5.6-luna');
+    expect(effectiveExplainerModel('gpt-5.6-luna', { SALIDIUM_EXPLAIN_MODEL: 'gpt-5.6-sol' })).toBe(
+      'gpt-5.6-sol',
+    );
   });
 });
 
@@ -114,5 +126,6 @@ describe('built-in backend invocations', () => {
     expect(invocation.args.filter((arg) => arg === '--disable').length).toBeGreaterThan(10);
     expect(invocation.args.at(-1)).toBe('-');
     expect(invocation.input).toContain(request.evidence);
+    expect(invocation.model).toBe(DEFAULT_CODEX_EXPLAINER_MODEL);
   });
 });

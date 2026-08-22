@@ -1,7 +1,7 @@
 import type {
   DaemonInfo,
-  ExplainerCadence,
   ExplainerSettings,
+  ExplainerSettingsRequest,
   SemanticChange,
   SessionList,
   SessionSnapshot,
@@ -57,21 +57,21 @@ export class ApiClient {
   }
 
   /**
-   * When the explainer runs, and what Salidium has observed it consume.
+   * What the explainer will use, when it runs, and what Salidium has observed it consume.
    *
    * The write answers with the same shape the read does, rather than 204, so the surface never has
    * to guess what it now holds: the daemon's environment can be holding the explainer off, and the
-   * usage beside the control moves independently of the choice being made.
+   * usage beside the control moves independently of the choices being made.
    */
   explainerSettings(): Promise<ExplainerSettings> {
     return this.get('/api/settings/explainer');
   }
 
-  async setExplainerCadence(cadence: ExplainerCadence): Promise<ExplainerSettings> {
+  async setExplainerSettings(settings: ExplainerSettingsRequest): Promise<ExplainerSettings> {
     const res = await fetch('/api/settings/explainer', {
       method: 'PUT',
       headers: { ...this.headers(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cadence }),
+      body: JSON.stringify(settings),
     });
     if (res.status === 401) {
       this.onUnauthorized?.();

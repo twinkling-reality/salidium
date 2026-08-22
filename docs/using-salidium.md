@@ -28,8 +28,9 @@ should not open.
 - **Review** calls out claims and actions that still need a person.
 
 Evidence opens coverage, checks, changes, activity, and the original local record. Rewind
-reconstructs the report at an earlier moment. Quantities shows the scale of the work, and History
-shows how it unfolded. When the record cannot support a conclusion, Salidium leaves it unknown.
+reconstructs the report at an earlier moment. **Models & Usage** shows the work and explanation
+models, explanation controls, and provider-reported tokens; History shows how the session unfolded.
+When the record cannot support a conclusion, Salidium leaves it unknown.
 
 The session list groups work as **Needs you**, **Working**, and **Recent**. Light, dark, and system
 themes are supported and the choice is remembered locally.
@@ -47,7 +48,24 @@ statements, file names, and check outcomes. The CLI may contact its provider and
 API allowance. The invocation disables tools, treats evidence as untrusted data, and accepts only a
 bounded runtime-validated result. Generated text cannot decide Verified, Left, or Review.
 
-Set `SALIDIUM_EXPLAINER=off` to send nothing to an agent. The deterministic report remains available.
+Open **Models & Usage** in the session toolbar. **Models** names the work and explanation models.
+**Explanation** chooses which agent writes it and when. **Choose a model** opens a short list that
+adapts to that agent: the current coding model and known provider choices are shown when they apply.
+Typing a model name is kept under **Other model** for installations with a model Salidium has not
+seen. **Usage** keeps session tokens separate from the explanation ledger across all runs. The same
+control is available before the first session exists, so defaults can be set up front.
+
+Claude explanations default to the named Haiku model shown in the panel. Without an exact choice,
+Codex chooses its own model and Salidium labels the result **Automatic** instead of exposing CLI
+terminology or guessing a model name.
+
+Session usage belongs to the coding-agent session being read. Explanation usage is explicitly
+labelled all-time. Token figures are observed counts, not a currency estimate.
+
+Set `SALIDIUM_EXPLAINER` to `auto`, `claude`, `codex`, or `off` to enforce a helper choice when the
+daemon starts. `SALIDIUM_EXPLAIN_MODEL` similarly enforces a model override. Environment choices
+lock the matching controls in the interface until the override is removed. With explanations off,
+nothing is sent to an agent and the deterministic report remains available.
 
 ## Commands
 

@@ -154,6 +154,33 @@ export type DaemonInfo = z.infer<typeof DaemonInfoSchema>;
 export const ExplainerCadenceSchema = z.enum(['off', 'session', 'turn']);
 export type ExplainerCadence = z.infer<typeof ExplainerCadenceSchema>;
 
+/** Which installed agent CLI writes Salidium's optional explanation. */
+export const ExplainerBackendSchema = z.enum(['auto', 'claude', 'codex']);
+export type ExplainerBackend = z.infer<typeof ExplainerBackendSchema>;
+
+/** One concrete route after availability, stored choice and environment overrides are applied. */
+export const ExplainerRouteSchema = z.object({
+  backend: z.enum(['claude', 'codex']).nullable(),
+  /** A real model id, or the provider's explicitly labelled default. */
+  model: z.string().min(1).max(120).nullable(),
+});
+export type ExplainerRoute = z.infer<typeof ExplainerRouteSchema>;
+
+/** A model id is passed as one process argument, but control characters are still not UI text. */
+export const ExplainerModelSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(120)
+  .refine(
+    (value) =>
+      Array.from(value).every((character) => {
+        const code = character.charCodeAt(0);
+        return code >= 32 && code !== 127;
+      }),
+    'model names cannot contain control characters',
+  );
+
 /**
  * What Salidium observed its own explainer consume, in tokens.
  *
@@ -176,21 +203,43 @@ export type ExplainerUsage = z.infer<typeof ExplainerUsageSchema>;
 /**
  * GET /api/settings/explainer, and the answer to PUT of the same path.
  *
- * `cadence` is the stored choice, never the effective one. The daemon's environment can hold the
- * explainer off (`SALIDIUM_EXPLAINER=off`, `SALIDIUM_EXPLAIN=0`) and that outranks the stored
- * choice, but overwriting the choice with `off` would lose it — the reader would come back after
- * unsetting the variable to find the stop they picked gone. So the choice travels as itself and
- * `envOff` travels beside it, and the surface says which one is in force.
+ * The stored choices travel separately from the concrete routes that will run. Process-level
+ * environment values can lock the helper, model, or kill switch without erasing what the reader
+ * chose in the interface, so removing an override restores those choices.
  *
  * `usage` is absent, never zeroed, when Salidium has observed nothing: an empty section is omitted.
  */
 export const ExplainerSettingsSchema = z.object({
   cadence: ExplainerCadenceSchema,
+  /** Stored choices, retained even when an environment override is in force. */
+  backend: ExplainerBackendSchema,
+  model: ExplainerModelSchema.nullable(),
   envOff: z.boolean(),
+  backendLocked: z.boolean(),
+  modelLocked: z.boolean(),
+  /** The override actually in force; null means the environment disabled or invalidated it. */
+  activeBackend: ExplainerBackendSchema.nullable(),
+  activeModel: ExplainerModelSchema.nullable(),
+  availableBackends: z.array(z.enum(['claude', 'codex'])),
+  routes: z.object({
+    claudeCode: ExplainerRouteSchema,
+    codex: ExplainerRouteSchema,
+  }),
   usage: ExplainerUsageSchema.optional(),
 });
 export type ExplainerSettings = z.infer<typeof ExplainerSettingsSchema>;
 
 /** PUT /api/settings/explainer */
-export const ExplainerCadenceRequestSchema = z.object({ cadence: ExplainerCadenceSchema });
-export type ExplainerCadenceRequest = z.infer<typeof ExplainerCadenceRequestSchema>;
+export const ExplainerSettingsRequestSchema = z
+  .object({
+    cadence: ExplainerCadenceSchema.optional(),
+    backend: ExplainerBackendSchema.optional(),
+    model: ExplainerModelSchema.nullable().optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, 'at least one setting is required');
+export type ExplainerSettingsRequest = z.infer<typeof ExplainerSettingsRequestSchema>;
+
+/** Compatibility name for callers that only change the cadence. */
+export const ExplainerCadenceRequestSchema = ExplainerSettingsRequestSchema;
+export type ExplainerCadenceRequest = ExplainerSettingsRequest;
