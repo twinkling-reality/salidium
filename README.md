@@ -20,6 +20,9 @@ interface run on your machine with no Salidium telemetry. Raw transcripts stay l
 generated explanations send a bounded, redacted excerpt through your installed agent CLI, which
 may contact its provider; the first run asks before enabling them.
 
+An optional local profile can restate an existing generated Why and How in familiar terms. Saving
+it sends nothing; each personalization call is explicit, ephemeral, and never changes evidence.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="apps/site/public/report-dark.png">
   <img src="apps/site/public/report-light.png" alt="A full report: the verdict, Why drawn as two paths converging on one order charged twice, How drawn as one idempotency key per order, and the approach the agent abandoned beside the one it adopted.">

@@ -30,6 +30,8 @@ export type IconName =
   | 'save'
   | 'copy'
   | 'check'
+  | 'edit'
+  | 'trash'
   | 'outbound';
 
 const PATHS: Record<IconName, React.ReactNode> = {
@@ -42,6 +44,20 @@ const PATHS: Record<IconName, React.ReactNode> = {
   ),
   /* The same control a moment after it worked. */
   check: <path d="M3 8.4l3.4 3.2L13 4.8" />,
+  /* A saved instruction that has been changed but not saved again. */
+  edit: (
+    <>
+      <path d="m3 11.8.6-2.8 6.8-6.8 2.4 2.4L6 11.4Z" />
+      <path d="m9.2 3.4 2.4 2.4M3 13h10" />
+    </>
+  ),
+  /* Remove a saved preference. */
+  trash: (
+    <>
+      <path d="M3.5 4.5h9M6 4.5V3h4v1.5M5 6.5l.5 6h5l.5-6" />
+      <path d="M7 7v3.5M9 7v3.5" />
+    </>
+  ),
   /* A page with its side panel: the control that folds the session list. */
   panel: (
     <>

@@ -13,7 +13,7 @@ import { PROMPT, SCHEMA } from './explainer.ts';
  * twice, and the count the prompt tells the model to aim for is asserted with them.
  */
 
-const step = 'a step of six words here';
+const step = 'a step with five words';
 const list = (n: number) => Array.from({ length: n }, (_, i) => `${step} ${i}`);
 
 /** A payload valid in every respect except the one array under test. */
@@ -83,6 +83,13 @@ describe('explanation schema: the JSON copy and the zod copy agree', () => {
     expect(accepts(payload({ lanes: SCHEMA.properties.why.properties.lanes.maxItems + 1 }))).toBe(
       false,
     );
+    expect(accepts(payload({ lanes: 1 }))).toBe(false);
+  });
+
+  it('enforces the six-word layout budget at runtime', () => {
+    const tooLong = payload();
+    tooLong.why.chain[0] = 'one two three four five six seven';
+    expect(accepts(tooLong)).toBe(false);
   });
 
   /*

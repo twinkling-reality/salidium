@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { SemanticChangeSchema } from './changes.ts';
-import { CanonicalEventSchema, StoredEventSchema } from './events.ts';
+import { CanonicalEventSchema, ExplanationEventSchema, StoredEventSchema } from './events.ts';
 import { EpistemicSchema, ProviderIdSchema } from './provenance.ts';
 import { CanonicalTimestampSchema } from './timestamps.ts';
 
@@ -243,3 +243,71 @@ export type ExplainerSettingsRequest = z.infer<typeof ExplainerSettingsRequestSc
 /** Compatibility name for callers that only change the cadence. */
 export const ExplainerCadenceRequestSchema = ExplainerSettingsRequestSchema;
 export type ExplainerCadenceRequest = ExplainerSettingsRequest;
+
+/**
+ * The small, explicit profile a reader can ask Salidium to use for one personalized rendering.
+ *
+ * This is presentation guidance, not a second system prompt. One bounded note keeps the exact data
+ * leaving the local process inspectable without making the reader classify their own experience.
+ */
+export const PersonalizationProfileSchema = z
+  .object({
+    /** Reader-authored presentation guidance. It is never treated as session evidence. */
+    guidance: z.string().trim().max(800),
+  })
+  .strict();
+export type PersonalizationProfile = z.infer<typeof PersonalizationProfileSchema>;
+
+/** The daemon-owned profile, including the revision that invalidates ephemeral renderings. */
+export const PersonalizationSettingsSchema = z
+  .object({
+    version: z.literal(2),
+    enabled: z.boolean(),
+    revision: z.string().min(1).max(80),
+    profile: PersonalizationProfileSchema,
+  })
+  .strict()
+  .refine(
+    (settings) =>
+      (settings.revision !== 'none' || (!settings.enabled && settings.profile.guidance === '')) &&
+      (!settings.enabled || settings.profile.guidance !== ''),
+    'enabled personalization requires guidance; the none revision is reserved for the disabled empty profile',
+  );
+export type PersonalizationSettings = z.infer<typeof PersonalizationSettingsSchema>;
+
+/** PUT /api/settings/personalization replaces the complete profile atomically. */
+export const PersonalizationSettingsRequestSchema = z
+  .object({
+    enabled: z.boolean(),
+    profile: PersonalizationProfileSchema,
+  })
+  .strict()
+  .refine(
+    (settings) => !settings.enabled || settings.profile.guidance !== '',
+    'enabled personalization requires guidance',
+  );
+export type PersonalizationSettingsRequest = z.infer<typeof PersonalizationSettingsRequestSchema>;
+
+/**
+ * A personalized explanation is presentation, not evidence. It deliberately lacks event ids,
+ * provenance and a stored sequence: the daemon returns it to the requesting browser and never
+ * ingests it into the append-only session log.
+ */
+export const PersonalizedExplanationSchema = ExplanationEventSchema.pick({
+  basedOnSeq: true,
+  model: true,
+  what: true,
+  why: true,
+  how: true,
+  approachChange: true,
+})
+  .extend({
+    generatedAt: CanonicalTimestampSchema,
+    profileRevision: z.string().min(1).max(80),
+    analogies: z.object({
+      why: z.string().max(300).nullable(),
+      how: z.string().max(300).nullable(),
+    }),
+  })
+  .strict();
+export type PersonalizedExplanation = z.infer<typeof PersonalizedExplanationSchema>;

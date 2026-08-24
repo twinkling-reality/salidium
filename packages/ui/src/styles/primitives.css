@@ -232,21 +232,6 @@
   color: var(--text);
 }
 
-.btn-value {
-  color: var(--text);
-  font-weight: 600;
-}
-
-.btn-value::before {
-  margin-right: var(--control-gap);
-  color: var(--text-tertiary);
-  content: "·";
-}
-
-.btn[data-value="Local only"] .btn-value {
-  color: var(--ok);
-}
-
 .btn[aria-disabled="true"],
 .btn:disabled {
   opacity: 0.45;

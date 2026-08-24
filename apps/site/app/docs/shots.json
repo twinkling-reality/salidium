@@ -2,8 +2,8 @@
   "evidence": {
     "width": 880,
     "height": 232,
-    "light": "evidence-light-8f006b86.png",
-    "dark": "evidence-dark-82ff02c3.png"
+    "light": "evidence-light-ea5b9d58.png",
+    "dark": "evidence-dark-15c72039.png"
   },
   "gate": {
     "width": 485,
@@ -18,10 +18,10 @@
     "dark": "history-dark-44561803.png"
   },
   "masthead": {
-    "width": 870,
+    "width": 892,
     "height": 225,
-    "light": "masthead-light-bd490069.png",
-    "dark": "masthead-dark-9bbc0678.png"
+    "light": "masthead-light-19b898be.png",
+    "dark": "masthead-dark-9a1926e7.png"
   },
   "models-usage": {
     "width": 320,
@@ -44,7 +44,7 @@
   "sessions": {
     "width": 940,
     "height": 560,
-    "light": "sessions-light-7aa167df.png",
-    "dark": "sessions-dark-745000e9.png"
+    "light": "sessions-light-05eda51b.png",
+    "dark": "sessions-dark-3cf7dfee.png"
   }
 }

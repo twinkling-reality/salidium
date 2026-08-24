@@ -428,6 +428,14 @@ export const IngestWarningEventSchema = Base.extend({
  * section, so `.min(1)` turns a silent disappearance into a retry.
  * `.min(2)` on the two approach paths is what makes them paths rather than a pair of boxes.
  */
+const DiagramStepSchema = z
+  .string()
+  .max(200)
+  .refine(
+    (value) => value.trim().split(/\s+/).filter(Boolean).length <= 6,
+    'diagram steps contain at most six words',
+  );
+
 export const ExplanationEventSchema = Base.extend({
   kind: z.literal('salidium.explanation'),
   /** Sequence of the newest event the explanation was written from. */
@@ -448,26 +456,27 @@ export const ExplanationEventSchema = Base.extend({
       .array(
         z.object({
           title: z.string().max(100),
-          steps: z.array(z.string().max(200)).min(1).max(4),
+          steps: z.array(DiagramStepSchema).min(1).max(4),
         }),
       )
       .max(3)
+      .refine((lanes) => lanes.length === 0 || lanes.length >= 2, 'lanes are empty or converging')
       .default([]),
-    chain: z.array(z.string().max(200)).min(1).max(6),
+    chain: z.array(DiagramStepSchema).min(1).max(6),
   }),
   how: z.object({
     summary: z.string().max(600),
     /** The component the change centres on; steps hang beneath it. */
     root: z.string().max(200).nullable().default(null),
-    steps: z.array(z.string().max(200)).min(1).max(6),
+    steps: z.array(DiagramStepSchema).min(1).max(6),
   }),
   approachChange: z
     .object({
       from: z.string().max(200),
-      fromSteps: z.array(z.string().max(200)).min(2).max(4),
+      fromSteps: z.array(DiagramStepSchema).min(2).max(4),
       why: z.string().max(600),
       to: z.string().max(200),
-      toSteps: z.array(z.string().max(200)).min(2).max(4),
+      toSteps: z.array(DiagramStepSchema).min(2).max(4),
     })
     .nullable(),
 });

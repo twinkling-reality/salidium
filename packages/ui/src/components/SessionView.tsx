@@ -8,6 +8,7 @@ import { useLiveSession } from '../hooks/useLiveSession.ts';
 import { activeExplanationCadence, activeExplanationMode } from '../lib/explanationMode.ts';
 import { relativeTime, shortHome, shortPath, timeOfDay } from '../lib/format.ts';
 import { providerLabel } from '../lib/providerLabel.ts';
+import { downloadSessionExport } from '../lib/sessionExport.ts';
 import { useFootSpace } from '../lib/useFootSpace.ts';
 import { useScrollState } from '../lib/useScrollState.ts';
 import { useStaysMounted } from '../lib/useStaysMounted.ts';
@@ -61,6 +62,8 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
   const statsOpen = useAppStore((s) => s.statsOpen);
   const toggleStats = useAppStore((s) => s.toggleStats);
   const explainer = useAppStore((s) => s.explainer);
+  const personalization = useAppStore((s) => s.personalization);
+  const personalizedPresentation = useAppStore((s) => s.personalized[sessionId]);
   const explanationMode = activeExplanationMode(explainer);
   const explanationCadence = activeExplanationCadence(explainer);
   const historyMode = useAppStore((s) => s.historyMode);
@@ -72,6 +75,10 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
    * moves. Holding the old value here keeps the highlight from vanishing at the moment it matters.
    */
   const [markedFrom, setMarkedFrom] = useState<number | undefined>(undefined);
+  const [explanationVersion, setExplanationVersion] = useState<'original' | 'personalized'>(
+    'personalized',
+  );
+  const [personalizerOpen, setPersonalizerOpen] = useState(false);
   const contentRef = useScrollState<HTMLDivElement>();
   /*
    * The floating scrubber costs the layout no height, so the document has to keep its own last
@@ -81,6 +88,19 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
   const [paneRef, footRef] = useFootSpace<HTMLDivElement, HTMLDivElement>(`${rewindOpen}`);
   /* It leaves by retracing its arrival, so it has to still be there while it does. */
   const rewindMounted = useStaysMounted(rewindOpen);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: every new overlay/profile/base explanation starts on the personalized version.
+  useEffect(() => {
+    setExplanationVersion('personalized');
+  }, [
+    personalizedPresentation?.generatedAt,
+    personalization?.revision,
+    live?.state.explained?.basedOnSeq,
+  ]);
+
+  useEffect(() => {
+    if (live?.scrub?.seq !== undefined) setPersonalizerOpen(false);
+  }, [live?.scrub?.seq]);
 
   const liveState: RunState | undefined = live?.state;
   const scrubState: RunState | undefined = live?.scrub?.state;
@@ -188,13 +208,10 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
     }
   }, [setHistoryMode, toggleStats]);
 
-  /** Models & usage and History occupy one inspector slot, so opening either replaces the other. */
+  /** Models and History occupy the one supporting inspector slot. */
   const toggleModels = useCallback(() => {
-    const opening = !useAppStore.getState().statsOpen;
-    if (opening) {
-      setMarkedFrom(undefined);
-      setHistoryMode('off');
-    }
+    setMarkedFrom(undefined);
+    setHistoryMode('off');
     toggleStats();
   }, [setHistoryMode, toggleStats]);
 
@@ -235,6 +252,27 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
    */
   const ended = liveView.strip.status === 'ended' ? liveState.lastEventAt : undefined;
   const ex = view.explained;
+  const personalized = Boolean(
+    ex &&
+      personalization?.enabled &&
+      personalizedPresentation &&
+      personalizedPresentation.profileRevision === personalization.revision &&
+      personalizedPresentation.basedOnSeq === ex.basedOnSeq,
+  );
+  const showOriginalTerms = personalized && explanationVersion === 'original';
+  const displayedExplanation =
+    personalized && !showOriginalTerms && personalizedPresentation
+      ? {
+          basedOnSeq: personalizedPresentation.basedOnSeq,
+          model: personalizedPresentation.model,
+          at: personalizedPresentation.generatedAt,
+          what: personalizedPresentation.what,
+          why: personalizedPresentation.why,
+          how: personalizedPresentation.how,
+          approachChange: personalizedPresentation.approachChange,
+        }
+      : ex;
+  const showingPersonalized = personalized && !showOriginalTerms;
 
   return (
     <div
@@ -287,6 +325,23 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
               />
             )}
             <ToolButton
+              icon="save"
+              label="Export"
+              title="Save this report as JSON without raw provider records"
+              onClick={() =>
+                downloadSessionExport(
+                  {
+                    id: sessionId,
+                    provider: liveState.provider,
+                    title: liveState.title || summary?.title || liveState.cwd,
+                    cwd: liveState.cwd,
+                    ...(liveState.model ? { model: liveState.model } : {}),
+                  },
+                  liveView,
+                )
+              }
+            />
+            <ToolButton
               icon="latest"
               label="Rewind"
               on={rewindOpen}
@@ -296,11 +351,28 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
             <ToolButton
               icon="stats"
               label="Models & Usage"
-              value={explanationMode?.label}
               on={statsOpen}
-              title={`Show models and token usage${explanationMode ? `. ${explanationMode.label}: ${explanationMode.detail}.` : ''}`}
+              title={`Show explanation timing, models and usage${explanationMode ? `. ${explanationMode.label}: ${explanationMode.detail}.` : ''}`}
               onClick={toggleModels}
             />
+            {ex && (
+              <ToolButton
+                icon={personalized ? 'check' : 'sliders'}
+                label={personalized ? 'Personalized' : 'Personalize'}
+                on={personalizerOpen}
+                controls="personalization-composer"
+                expanded={personalizerOpen}
+                disabled={scrubSeq !== undefined}
+                title={
+                  scrubSeq !== undefined
+                    ? 'Return to live before personalizing this report'
+                    : personalized
+                      ? 'Edit the saved terms applied to this report'
+                      : 'Explain the generated report using terms and examples you know'
+                }
+                onClick={() => setPersonalizerOpen((open) => !open)}
+              />
+            )}
             <ToolButton
               icon="history"
               label="History"
@@ -402,8 +474,23 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
                 </p>
               )}
 
-              {ex ? (
-                <Explained ex={ex} />
+              {displayedExplanation ? (
+                <Explained
+                  ex={displayedExplanation}
+                  sessionId={sessionId}
+                  personalized={showingPersonalized}
+                  analogies={showingPersonalized ? personalizedPresentation?.analogies : undefined}
+                  hasAlternate={personalized}
+                  onToggleVersion={
+                    personalized
+                      ? () => setExplanationVersion(showOriginalTerms ? 'personalized' : 'original')
+                      : undefined
+                  }
+                  personalizerOpen={personalizerOpen}
+                  onClosePersonalizer={() => setPersonalizerOpen(false)}
+                  personalizationNote={personalization?.profile.guidance}
+                  hasCurrentPresentation={personalized}
+                />
               ) : (
                 <ExplanationPending
                   turns={view.turns.length}
@@ -471,7 +558,7 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
           view={view}
           provider={state.provider}
           generatedModel={view.explained?.model}
-          onClose={toggleModels}
+          onClose={toggleStats}
         />
       ) : historyMode === 'rail' ? (
         <HistoryRail
@@ -546,7 +633,7 @@ function EvidencePanel({
   return <Panel id="evidence" title="Evidence" sections={sections} />;
 }
 
-/** Model choices and measured usage share the same supporting rail as History. */
+/** Explanation settings and measured usage share one supporting rail with History. */
 function ModelsUsageRail({
   view,
   provider,

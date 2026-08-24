@@ -84,7 +84,7 @@ consensus is reported separately as a calibration statistic.
 
 ## Stratification
 
-Stratify by age (under 7 days, 7 to 90 days, over 90 days), project, source availability (raw local
+Stratify by age (7 to 30 days, 31 to 90 days, over 90 days), project, source availability (raw local
 evidence present or absent), conflict present, outcome attached, and device (origin or second).
 
 At 130 pairs these are descriptive. Preregister exactly one powered subgroup: source-unavailable at

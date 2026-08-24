@@ -71,6 +71,46 @@ export const test = base.extend<Record<string, never>, WorkerFixtures>({
           primary.message('I am tightening the checkout validation and will verify the result.'),
           ...primary.edit('edit-cart', '/repo/checkout/src/cart.ts', 8, 2),
           ...primary.command('test-cart', 'pnpm test', 'Tests  12 passed (12)', { exitCode: 0 }),
+          primary.raw({
+            id: 'explanation',
+            kind: 'salidium.explanation',
+            basedOnSeq: 6,
+            model: 'test-explainer',
+            what: {
+              summary: 'Checkout validation now blocks an invalid cart before payment.',
+              currently: null,
+            },
+            why: {
+              summary: 'Two checks converge before the payment request can start.',
+              lanes: [
+                {
+                  title: 'Cart contents',
+                  steps: ['Read the cart lines', 'Reject invalid quantities'],
+                },
+                {
+                  title: 'Checkout request',
+                  steps: ['Read the submitted total', 'Reject a stale total'],
+                },
+              ],
+              chain: ['Both checks must pass', 'Payment can start'],
+            },
+            how: {
+              summary: 'One guard coordinates the cart and submitted total.',
+              root: 'checkout guard',
+              steps: [
+                'Validate every cart line',
+                'Compare the submitted total',
+                'Return one safe result',
+              ],
+            },
+            approachChange: {
+              from: 'Validate after payment starts',
+              fromSteps: ['Create the payment request', 'Reject the invalid cart'],
+              why: 'The rejected cart could already have started a payment.',
+              to: 'Validate before payment starts',
+              toSteps: ['Check the cart first', 'Start one valid payment'],
+            },
+          }),
         ];
         handle.registry.ingest(PRIMARY_SESSION, first, { cwd: '/repo/checkout' });
         handle.registry.flush(PRIMARY_SESSION);

@@ -245,6 +245,10 @@ const RAW: Array<Omit<Page, "n">> = [
         ["Unverified changes", "Files changed with no passing check behind them."],
         ["A claim without evidence", "The agent said checks passed when none ran."],
       ]),
+      h("Export the report"),
+      p(
+        "Export saves the report you can inspect in Salidium as versioned JSON. It includes the projected report and its provenance references, not the provider's raw transcript records, and it never uploads the file.",
+      ),
     ],
   },
   {
@@ -312,11 +316,11 @@ const RAW: Array<Omit<Page, "n">> = [
       ),
       h("Models & Usage"),
       p(
-        "One compact rail for the work and explanation models, explanation controls, and exact token usage. Its toolbar button always shows Local only, When done, or Each reply.",
+        "One compact rail for explanation timing, the work and explanation models, and exact token usage. Personalization has its own control beside it.",
       ),
       shot(
         "models-usage",
-        "The Salidium Models & Usage rail, showing the coding and explanation models, explanation controls, and separate usage totals.",
+        "The Salidium Models & Usage rail, showing explanation controls, models, and separate usage totals.",
       ),
       terms([
         ["Models", "The work model and, when enabled, the model used for the explanation."],
@@ -399,7 +403,7 @@ const RAW: Array<Omit<Page, "n">> = [
         "Most of a report is what Salidium observed. One part of it is prose, and prose has to be written by something.",
       ),
       p(
-        "Salidium hands your own installed Claude or Codex CLI a short, redacted summary of the session and lets it write that part. It is labelled wherever it appears, it is the only thing that leaves the daemon, and you can switch it off without losing anything else on the page.",
+        "Salidium hands your own installed Claude or Codex CLI a short, redacted summary of the session and lets it write that part. It is labelled wherever it appears. Nothing leaves unless you choose one of these explanation calls, and you can switch scheduled calls off without losing anything else on the page.",
       ),
       h("When it runs"),
       terms([
@@ -408,7 +412,7 @@ const RAW: Array<Omit<Page, "n">> = [
         ["Each reply", "One model call after every agent reply."],
       ]),
       p(
-        "The Models & Usage button shows the active mode before you open it. The panel names the work and explanation models, and lets you choose which agent writes explanations and when. Choose a model opens a short list that adapts to the selected agent; Other model keeps manual entry available as a fallback. The same control is available before the first session exists.",
+        "Open Models & Usage to choose when explanations run and which agent writes them. Choose a model opens a short list that adapts to the selected agent; Other model keeps manual entry available as a fallback. The same control is available before the first session exists.",
       ),
       note(
         "Stopping the daemon does not erase the saved mode. Use `salidium explanations off` as the persistent no-model-call control; local reports keep working and an explanation already generating is canceled.",
@@ -426,6 +430,19 @@ const RAW: Array<Omit<Page, "n">> = [
         "Up to forty of the agent's statements.",
         "Fifteen file names, shortened to their last two segments.",
         "The last six check results.",
+      ),
+      h("Personalize Why and How"),
+      p(
+        "Choose Personalize in the session toolbar. Once this browser tab has a current personalized version, the same control reads Personalized. It opens a compact composer above Why with one Terms and examples field for what you know, comparisons that help, or terms you use.",
+      ),
+      p(
+        "The save state stays visible under the field as Not saved, Unsaved changes, or Saved on this machine. Apply saves the terms and makes one explicit model call. When a call cannot be made, including in Local only mode, the button reads Save terms and stores them without generating anything. Delete saved terms removes the owner-only local file and the personalized presentation.",
+      ),
+      p(
+        "Each report has one browser-only personalized version. Applying again replaces it rather than stacking another. A filled icon-button switch labelled Original and Personalized moves between the two versions. Reloading keeps the saved terms but discards the presentation, so choose Apply again to recreate it. Analogies are labelled In your terms.",
+      ),
+      note(
+        "The terms can never change Verified, Left or Needs you. Personalizing sends them with the generated Why and How, not transcripts, prompts, commands, diffs or raw records. The selected agent may contact its provider. Deleting saved terms cannot delete a record kept by that agent.",
       ),
       h("What it cannot do"),
       list(
@@ -468,6 +485,7 @@ const RAW: Array<Omit<Page, "n">> = [
         "The daemon listens only on `127.0.0.1`, by default on port `47822`.",
         "Every request for your data carries a token, regenerated each time it starts.",
         "The directories it creates are readable only by you, and it repairs their permissions on every start.",
+        "Optional saved personalization terms live separately in `personalization.json`; Delete saved terms removes the file.",
       ),
       h("Your repository"),
       p(

@@ -24,6 +24,278 @@ async function expectNoA11yViolations(page: import('@playwright/test').Page): Pr
   ).toEqual([]);
 }
 
+test('generated diagrams, personalization, and report export keep their boundaries', async ({
+  page,
+  daemon,
+}) => {
+  await openSalidium(page, daemon);
+  const narrow = page.viewportSize()?.width === 390;
+  if (narrow) {
+    await page.getByRole('button', { name: 'Hide the session list' }).click();
+  }
+
+  const explanation = page.getByRole('region', { name: 'Generated explanation' });
+  await expect(explanation).toBeVisible();
+  await expect(explanation.getByRole('heading', { name: 'Why' })).toBeVisible();
+  await expect(explanation.getByRole('heading', { name: 'How' })).toBeVisible();
+  await expect(explanation.getByRole('heading', { name: 'Approach changed' })).toBeVisible();
+  await expect(explanation.locator('#sec-why ol, #sec-why ul')).toHaveCount(3);
+  await expect(explanation.locator('#sec-how ul')).toHaveCount(1);
+
+  const colors = await explanation.evaluate((region) => {
+    const why = region.querySelector<HTMLElement>('#sec-why .fd-lane');
+    const how = region.querySelector<HTMLElement>('#sec-how .fd-branches .fd-node');
+    const background = getComputedStyle(region).backgroundColor;
+    const channels = (value: string) => {
+      const numbers = value.match(/[\d.]+/g)?.map(Number) ?? [];
+      return value.startsWith('color(srgb')
+        ? numbers.slice(0, 3).map((number) => number * 255)
+        : numbers.slice(0, 3);
+    };
+    const luminance = (value: string) => {
+      const [r = 0, g = 0, b = 0] = channels(value).map((number) => {
+        const channel = number / 255;
+        return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const contrast = (a: string, b: string) => {
+      const [lighter = 0, darker = 0] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+      return (lighter + 0.05) / (darker + 0.05);
+    };
+    const whyBorder = why ? getComputedStyle(why).borderColor : '';
+    const howBorder = how ? getComputedStyle(how).borderColor : '';
+    return {
+      why: whyBorder,
+      how: howBorder,
+      whyContrast: contrast(whyBorder, background),
+      howContrast: contrast(howBorder, background),
+      overflow: document.documentElement.scrollWidth - window.innerWidth,
+    };
+  });
+  expect(colors.why).not.toBe('');
+  expect(colors.how).not.toBe('');
+  expect(colors.why).not.toBe(colors.how);
+  expect(colors.whyContrast).toBeGreaterThanOrEqual(3);
+  expect(colors.howContrast).toBeGreaterThanOrEqual(3);
+  expect(colors.overflow).toBe(0);
+  await expectNoA11yViolations(page);
+
+  const theme = page.getByRole('button', { name: /Theme:/ });
+  await theme.click();
+  await theme.click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expectNoA11yViolations(page);
+
+  const personalize = page.getByRole('region', { name: 'Generated explanation' });
+  const personalizeControl = page
+    .locator('.toolbar')
+    .getByRole('button', { name: 'Personalize', exact: true });
+  await expect(personalizeControl.locator('svg')).toHaveCount(1);
+  await personalizeControl.click();
+  await personalize
+    .getByLabel('Terms and examples')
+    .fill('I run payment operations. Use restaurant kitchens and logistics as examples.');
+  await expect(personalize).toContainText('Unsaved changes');
+  await personalize.getByRole('button', { name: 'Save terms', exact: true }).click();
+  await expect(personalize).toContainText('Saved on this machine');
+  await expect(personalize.getByRole('button', { name: 'Personalize', exact: true })).toHaveCount(
+    0,
+  );
+  await expectNoA11yViolations(page);
+  const deleteTerms = personalize.getByRole('button', {
+    name: 'Delete saved terms',
+    exact: true,
+  });
+  await expect(deleteTerms.locator('svg')).toHaveCount(1);
+  await expect
+    .poll(() => deleteTerms.evaluate((button) => getComputedStyle(button).borderTopWidth))
+    .toBe('1px');
+  await deleteTerms.click();
+  await expect(personalize).toContainText('Not saved');
+  await personalizeControl.click();
+  await expect(personalize.getByLabel('Terms and examples')).toBeHidden();
+
+  if (!narrow) {
+    const downloadPromise = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Export' }).click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toBe('salidium-improve-checkout-safeguards.json');
+  }
+});
+
+test('an explicit personalization call stays reversible and presentation-only', async ({
+  page,
+  daemon,
+}, testInfo) => {
+  test.skip(testInfo.project.name.includes('narrow'), 'the responsive dialog is covered above');
+  let profile = {
+    version: 2 as const,
+    enabled: false,
+    revision: 'none',
+    profile: { guidance: '' },
+  };
+  let failGeneration = false;
+  await page.route('**/api/settings/personalization', async (route) => {
+    if (route.request().method() === 'PUT') {
+      const request = route.request().postDataJSON() as Pick<typeof profile, 'enabled' | 'profile'>;
+      profile = { version: 2, revision: 'e2e-profile', ...request };
+    } else if (route.request().method() === 'DELETE') {
+      profile = {
+        version: 2,
+        enabled: false,
+        revision: 'none',
+        profile: { guidance: '' },
+      };
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(profile),
+    });
+  });
+  await page.route('**/api/settings/explainer', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        cadence: 'session',
+        backend: 'auto',
+        model: null,
+        envOff: false,
+        backendLocked: false,
+        modelLocked: false,
+        activeBackend: 'auto',
+        activeModel: null,
+        availableBackends: ['claude', 'codex'],
+        routes: {
+          claudeCode: { backend: 'claude', model: 'test-explainer' },
+          codex: { backend: 'codex', model: 'Codex CLI default (not pinned)' },
+        },
+      }),
+    });
+  });
+  await page.route('**/api/sessions/**/personalized-presentation', async (route) => {
+    if (failGeneration) {
+      await route.fulfill({ status: 500, body: 'generation failed' });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        basedOnSeq: 6,
+        model: 'test-personalizer',
+        generatedAt: '2026-08-23T18:00:00.000Z',
+        profileRevision: 'e2e-profile',
+        what: {
+          summary: 'Checkout validation now blocks an invalid cart before payment.',
+          currently: null,
+        },
+        why: {
+          summary: 'Two tickets reach one payment gate.',
+          lanes: [
+            { title: 'Cart ticket', steps: ['Read every cart line', 'Reject a bad quantity'] },
+            {
+              title: 'Checkout ticket',
+              steps: ['Read the submitted total', 'Reject a stale total'],
+            },
+          ],
+          chain: ['Both tickets must pass', 'Payment can start'],
+        },
+        how: {
+          summary: 'One worker checks both tickets.',
+          root: 'checkout guard',
+          steps: ['Check every cart line', 'Compare the submitted total', 'Return one safe result'],
+        },
+        approachChange: {
+          from: 'Validate after payment starts',
+          fromSteps: ['Create the payment request', 'Reject the invalid cart'],
+          why: 'The rejected cart could already have started a payment.',
+          to: 'Validate before payment starts',
+          toSteps: ['Check the cart first', 'Start one valid payment'],
+        },
+        analogies: {
+          why: 'Like two order tickets reaching one kitchen pass.',
+          how: 'Like one expediter checking both tickets.',
+        },
+      }),
+    });
+  });
+
+  await openSalidium(page, daemon);
+  const panel = page.getByRole('region', { name: 'Generated explanation' });
+  await page.locator('.toolbar').getByRole('button', { name: 'Personalize', exact: true }).click();
+  await panel
+    .getByLabel('Terms and examples')
+    .fill('I run a restaurant kitchen. Use kitchen tickets and handoffs as examples.');
+  await panel.getByRole('button', { name: 'Apply', exact: true }).click();
+
+  const explanation = page.getByRole('region', { name: 'Generated explanation' });
+  const personalizedControl = page
+    .locator('.toolbar')
+    .getByRole('button', { name: 'Personalized', exact: true });
+  await expect(personalizedControl).toBeVisible();
+  await expect(personalizedControl.locator('svg')).toHaveCount(1);
+  await personalizedControl.click();
+  await expect(panel.getByRole('button', { name: 'Applied', exact: true })).toBeDisabled();
+  await expect(panel).toContainText('Saved on this machine');
+  await personalizedControl.click();
+  await expect(explanation.locator('.ex-version-row')).toContainText('I run a restaurant kitchen');
+  await expect(explanation).toContainText('Two tickets reach one payment gate.');
+  await expect(explanation).toContainText('In your terms');
+  await expect(explanation).toContainText('Personalized by test-personalizer');
+  const originalVersion = explanation.getByRole('button', { name: 'Original', exact: true });
+  const personalizedVersion = explanation.getByRole('button', {
+    name: 'Personalized',
+    exact: true,
+  });
+  await expect(originalVersion.locator('svg')).toHaveCount(1);
+  await expect(personalizedVersion.locator('svg')).toHaveCount(1);
+  await expect
+    .poll(() => originalVersion.evaluate((button) => getComputedStyle(button).borderTopWidth))
+    .toBe('1px');
+  await expect
+    .poll(() => personalizedVersion.evaluate((button) => getComputedStyle(button).borderTopWidth))
+    .toBe('1px');
+  await originalVersion.click();
+  await expect(personalizedControl).toBeVisible();
+  await expect(originalVersion).toHaveAttribute('aria-pressed', 'true');
+  await expect(explanation).toContainText(
+    'Two checks converge before the payment request can start.',
+  );
+  await expect(explanation).not.toContainText('In your terms');
+  await personalizedVersion.click();
+  await expect(personalizedVersion).toHaveAttribute('aria-pressed', 'true');
+  await expect(explanation).toContainText('Two tickets reach one payment gate.');
+  await expectNoA11yViolations(page);
+
+  failGeneration = true;
+  await personalizedControl.click();
+  await panel.getByLabel('Terms and examples').fill('Use logistics handoffs instead.');
+  await expect(panel).toContainText('Unsaved changes');
+  await panel.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(panel).toContainText('Saved, but this report was not updated. Try again.');
+  await expect(panel).toContainText('Saved on this machine');
+  await expect(
+    page.locator('.toolbar').getByRole('button', { name: 'Personalize', exact: true }),
+  ).toBeVisible();
+  await expect(panel.locator('.ex-version-row')).toHaveCount(0);
+
+  await page.reload();
+  const restoredControl = page
+    .locator('.toolbar')
+    .getByRole('button', { name: 'Personalize', exact: true });
+  await expect(restoredControl).toBeVisible();
+  await restoredControl.click();
+  await expect(page.getByLabel('Terms and examples')).toHaveValue(
+    'Use logistics handoffs instead.',
+  );
+  await expect(page.getByRole('region', { name: 'Generated explanation' })).toContainText(
+    'Saved on this machine',
+  );
+});
+
 interface RecordedExit {
   found: boolean;
   display: string;
@@ -222,8 +494,8 @@ test('models and usage keeps both ledgers and explanation controls in one rail',
   test.skip(testInfo.project.name.includes('narrow'), 'desktop flow');
   await openSalidium(page, daemon);
 
-  const modelsButton = page.locator('.session-actions-end .btn[data-value]');
-  await expect(modelsButton).toContainText('Local only');
+  const modelsButton = page.getByRole('button', { name: 'Models & Usage', exact: true });
+  await expect(modelsButton).not.toContainText('Local only');
   await modelsButton.click();
   const models = page.getByRole('complementary', { name: 'Models & Usage' });
   await expect(models.getByRole('heading', { name: 'Models' })).toBeVisible();
@@ -239,7 +511,7 @@ test('models and usage keeps both ledgers and explanation controls in one rail',
   await expect(models.getByRole('button', { name: 'Choose a model' })).toHaveCount(0);
 
   await models.getByRole('button', { name: 'When done' }).click();
-  await expect(modelsButton).toContainText('When done');
+  await expect(modelsButton).not.toContainText('When done');
   await expect(models).toContainText('claude-haiku-4-5-20251001');
   await expect(models.getByRole('button', { name: 'Same as coding' })).toHaveAttribute(
     'aria-pressed',
@@ -291,7 +563,7 @@ test('the narrow layout uses the same models and usage rail', async ({
     0,
   );
   await sessions.getByRole('button', { name: 'Hide the session list' }).click();
-  await page.getByRole('button', { name: 'Models & Usage' }).click();
+  await page.getByRole('button', { name: 'Models & Usage', exact: true }).click();
 
   await expect(sessions).toBeHidden();
   const models = page.getByRole('complementary', { name: 'Models & Usage' });
@@ -300,6 +572,48 @@ test('the narrow layout uses the same models and usage rail', async ({
   await expect(models.getByRole('heading', { name: 'Explanation' })).toBeVisible();
   await expect(models.getByRole('heading', { name: 'Usage' })).toBeVisible();
   await expect(page.getByRole('dialog', { name: 'Explanation' })).toHaveCount(0);
+  await expectNoA11yViolations(page);
+});
+
+test('a compact desktop keeps Personalize visible and its editor inside the report', async ({
+  page,
+  daemon,
+}, testInfo) => {
+  test.skip(testInfo.project.name.includes('narrow'), 'compact desktop breakpoint');
+  await page.setViewportSize({ width: 886, height: 942 });
+  await openSalidium(page, daemon);
+
+  const sessions = page.getByRole('dialog', { name: 'Salidium' });
+  await sessions.getByRole('button', { name: 'Hide the session list' }).click();
+  const personalizeControl = page
+    .locator('.toolbar')
+    .getByRole('button', { name: 'Personalize', exact: true });
+  await expect(personalizeControl).toBeVisible();
+  await expect(personalizeControl.locator('svg')).toHaveCount(1);
+  const personalize = page.getByRole('region', { name: 'Generated explanation' });
+  await personalizeControl.click();
+  await expect(personalize.getByLabel('Terms and examples')).toBeVisible();
+  await expect(personalize.getByRole('button', { name: 'Save terms', exact: true })).toBeVisible();
+
+  const layout = await personalize.locator('.ex-personalize').evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      right: Math.round(innerWidth - rect.right),
+      width: Math.round(rect.width),
+      inspector: document.querySelectorAll('.inspector').length,
+      overflow: document.documentElement.scrollWidth - innerWidth,
+    };
+  });
+  expect(layout.width).toBeLessThanOrEqual(512);
+  expect(layout.right).toBeGreaterThan(0);
+  expect(layout.inspector).toBe(0);
+  expect(layout.overflow).toBe(0);
+
+  await page.setViewportSize({ width: 320, height: 568 });
+  await expect(personalize.getByLabel('Terms and examples')).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth - innerWidth))
+    .toBe(0);
   await expectNoA11yViolations(page);
 });
 

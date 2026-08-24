@@ -13,10 +13,17 @@ import type {
   DaemonInfo,
   ExplainerSettings,
   ExplainerSettingsRequest,
+  PersonalizationSettings,
+  PersonalizationSettingsRequest,
+  PersonalizedExplanation,
   StoredEvent,
   StreamMessage,
 } from '@salidium/protocol';
-import { CanonicalTimestampSchema, ExplainerSettingsRequestSchema } from '@salidium/protocol';
+import {
+  CanonicalTimestampSchema,
+  ExplainerSettingsRequestSchema,
+  PersonalizationSettingsRequestSchema,
+} from '@salidium/protocol';
 import type { HookIngress } from '../ingest/hookIngress.ts';
 import { MAX_INGEST_PAYLOAD_BYTES } from '../ingest/limits.ts';
 import type { Logger } from '../logging/logger.ts';
@@ -38,6 +45,20 @@ export interface HttpServerDeps {
   settings?: {
     explainer: () => ExplainerSettings;
     setExplainerSettings: (settings: ExplainerSettingsRequest) => ExplainerSettings;
+    personalization: () => PersonalizationSettings;
+    setPersonalization: (
+      settings: PersonalizationSettingsRequest,
+      expectedRevision: string | undefined,
+    ) => PersonalizationSettings | 'conflict';
+    deletePersonalization: (
+      expectedRevision: string | undefined,
+    ) => PersonalizationSettings | 'conflict';
+    personalize: (
+      sessionId: string,
+    ) => Promise<
+      | { status: 'generated'; presentation: PersonalizedExplanation }
+      | { status: 'disabled' | 'unavailable' | 'failed' | 'not-found' | 'stale' }
+    >;
   };
   log: Logger;
 }
@@ -179,6 +200,39 @@ export function createHttpServer(deps: HttpServerDeps): Server {
       return json(res, 405, { error: 'method not allowed' });
     }
 
+    if (url.pathname === '/api/settings/personalization' && deps.settings) {
+      if (req.method === 'GET') return json(res, 200, deps.settings.personalization());
+      if (req.method === 'PUT') {
+        const body = await readBody(req, MAX_SETTINGS_BODY_BYTES);
+        let payload: unknown;
+        try {
+          payload = JSON.parse(body);
+        } catch {
+          return json(res, 400, { error: 'invalid json' });
+        }
+        const parsed = PersonalizationSettingsRequestSchema.safeParse(payload);
+        if (!parsed.success) return json(res, 400, { error: 'invalid personalization profile' });
+        const expected = req.headers['if-match'];
+        const result = deps.settings.setPersonalization(
+          parsed.data,
+          typeof expected === 'string' ? expected : undefined,
+        );
+        return result === 'conflict'
+          ? json(res, 409, { error: 'personalization revision changed' })
+          : json(res, 200, result);
+      }
+      if (req.method === 'DELETE') {
+        const expected = req.headers['if-match'];
+        const result = deps.settings.deletePersonalization(
+          typeof expected === 'string' ? expected : undefined,
+        );
+        return result === 'conflict'
+          ? json(res, 409, { error: 'personalization revision changed' })
+          : json(res, 200, result);
+      }
+      return json(res, 405, { error: 'method not allowed' });
+    }
+
     if (req.method === 'GET' && url.pathname === '/api/stream') return streamSummaries(res);
 
     const m = /^\/api\/sessions\/([^/]+)(?:\/(.*))?$/.exec(url.pathname);
@@ -188,6 +242,20 @@ export function createHttpServer(deps: HttpServerDeps): Server {
       if (req.method === 'DELETE' && rest === '') {
         registry.forget(sessionId);
         return json(res, 200, { ok: true });
+      }
+      if (req.method === 'POST' && rest === 'personalized-presentation' && deps.settings) {
+        const result = await deps.settings.personalize(sessionId);
+        if (result.status === 'generated') return json(res, 200, result.presentation);
+        if (result.status === 'not-found') return json(res, 404, { error: 'unknown session' });
+        if (result.status === 'stale')
+          return json(res, 409, { error: 'personalization changed while generating' });
+        if (result.status === 'disabled')
+          return json(res, 409, { error: 'written Why and How is local only' });
+        if (result.status === 'unavailable')
+          return json(res, 409, {
+            error: 'a generated explanation and enabled profile are required',
+          });
+        return json(res, 502, { error: 'personalized presentation failed' });
       }
       if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' });
       switch (true) {

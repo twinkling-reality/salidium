@@ -57,8 +57,11 @@ test("server-renders the Salidium landing page", async () => {
   const html = await response.text();
   assert.match(html, /<title>Salidium: Agent output, turned into a visual report<\/title>/i);
 
-  // The claim, preserved verbatim. It is the only line of copy in the left panel.
-  assert.match(html, /Agent output, turned into a visual report\./);
+  // The canonical product promise, preserved verbatim. It is the only claim in the left panel.
+  assert.match(
+    html,
+    /Visualize your agent(?:'|&#x27;)s work with diagrams and evidence you can check, not walls of text\./,
+  );
   assert.match(html, /npx salidium/);
 
   // One command, one control. The npx/pnpm selector is gone.

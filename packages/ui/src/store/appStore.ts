@@ -3,6 +3,9 @@ import type {
   ExplainerSettings,
   ExplainerSettingsRequest,
   Facet,
+  PersonalizationSettings,
+  PersonalizationSettingsRequest,
+  PersonalizedExplanation,
   SemanticChange,
   SessionList,
   SessionSummary,
@@ -195,6 +198,12 @@ interface AppState {
    * and a copy kept here would be the one a second tab disagreed with.
    */
   explainer: ExplainerSettings | undefined;
+  /** Daemon-owned and independently deletable; never copied into browser storage. */
+  personalization: PersonalizationSettings | undefined;
+  personalizationLoading: boolean;
+  personalizationLoadError: string | undefined;
+  /** Presentation-only results for this tab. Never persisted or folded into session state. */
+  personalized: Record<string, PersonalizedExplanation | undefined>;
   /*
    * The message, and whether it means the daemon is not answering at all. The banner used to hold
    * only the string, so it printed `daemon unreachable (Failed to fetch)` with no instruction, and
@@ -209,7 +218,11 @@ interface AppState {
   unauthorized(): void;
   setDetail(detail: Detail): void;
   loadExplainer(): void;
+  loadPersonalization(): void;
   setExplainerSettings(settings: ExplainerSettingsRequest): void;
+  savePersonalization(settings: PersonalizationSettingsRequest): Promise<void>;
+  deletePersonalization(): Promise<void>;
+  personalizeSession(sessionId: string): Promise<void>;
   toggleSidebar(): void;
   toggleStats(): void;
   setSessionQuery(q: string): void;
@@ -237,6 +250,9 @@ interface AppState {
 export function byTime(a: SemanticChange, b: SemanticChange): number {
   return a.ts.localeCompare(b.ts) || a.seq - b.seq || a.ordinal - b.ordinal;
 }
+
+/** Invalidates older profile reads when a write, reconnect, or newer read overtakes them. */
+let personalizationLoadGeneration = 0;
 
 /**
  * Salidium's own enrichment runs are agent sessions too. The daemon filters them, but a session's
@@ -288,22 +304,44 @@ export const useAppStore = create<AppState>((set, get) => ({
   liveErrors: {},
   rawOpen: undefined,
   explainer: undefined,
+  personalization: undefined,
+  personalizationLoading: false,
+  personalizationLoadError: undefined,
+  personalized: {},
   daemonError: undefined,
   authRejected: false,
 
   openPanel: (panel) => set({ panel }),
   closePanel: () => set({ panel: undefined }),
 
-  setToken: (token) =>
+  setToken: (token) => {
+    personalizationLoadGeneration++;
     set({
       api: new ApiClient(token, { onUnauthorized: () => get().unauthorized() }),
       authRejected: false,
       daemonError: undefined,
-    }),
+      personalization: undefined,
+      personalizationLoading: false,
+      personalizationLoadError: undefined,
+      personalized: {},
+    });
+  },
   unauthorized: () => {
     if (!get().api) return;
+    personalizationLoadGeneration++;
     clearToken();
-    set({ api: undefined, authRejected: true, live: {}, liveErrors: {}, rawOpen: undefined });
+    set({
+      api: undefined,
+      authRejected: true,
+      live: {},
+      liveErrors: {},
+      rawOpen: undefined,
+      explainer: undefined,
+      personalization: undefined,
+      personalizationLoading: false,
+      personalizationLoadError: undefined,
+      personalized: {},
+    });
   },
   setDetail: (detail) => {
     localStorage.setItem(DETAIL_KEY, String(detail));
@@ -320,6 +358,33 @@ export const useAppStore = create<AppState>((set, get) => ({
       () => {},
     );
   },
+  loadPersonalization: () => {
+    const api = get().api;
+    if (!api) return;
+    const request = ++personalizationLoadGeneration;
+    set({ personalizationLoading: true, personalizationLoadError: undefined });
+    void api.personalizationSettings().then(
+      (personalization) => {
+        if (request !== personalizationLoadGeneration || api !== get().api) return;
+        const previous = get().personalization;
+        set({
+          personalization,
+          personalizationLoading: false,
+          personalizationLoadError: undefined,
+          ...(previous && previous.revision !== personalization.revision
+            ? { personalized: {} }
+            : {}),
+        });
+      },
+      () => {
+        if (request !== personalizationLoadGeneration || api !== get().api) return;
+        set({
+          personalizationLoading: false,
+          personalizationLoadError: 'Could not load saved terms.',
+        });
+      },
+    );
+  },
   setExplainerSettings: (change) => {
     const api = get().api;
     if (!api) return;
@@ -331,6 +396,58 @@ export const useAppStore = create<AppState>((set, get) => ({
       (explainer) => set({ explainer }),
       () => set({ explainer: previous }),
     );
+  },
+  savePersonalization: async (profile) => {
+    const api = get().api;
+    const current = get().personalization;
+    if (!api || !current) throw new Error('personalization is not loaded');
+    personalizationLoadGeneration++;
+    try {
+      const personalization = await api.setPersonalizationSettings(profile, current.revision);
+      set({
+        personalization,
+        personalizationLoading: false,
+        personalizationLoadError: undefined,
+        personalized: {},
+      });
+    } catch (err) {
+      if (err instanceof Error && 'status' in err && err.status === 409)
+        get().loadPersonalization();
+      throw err;
+    }
+  },
+  deletePersonalization: async () => {
+    const api = get().api;
+    const current = get().personalization;
+    if (!api || !current) throw new Error('personalization is not loaded');
+    personalizationLoadGeneration++;
+    try {
+      const personalization = await api.deletePersonalizationSettings(current.revision);
+      set({
+        personalization,
+        personalizationLoading: false,
+        personalizationLoadError: undefined,
+        personalized: {},
+      });
+    } catch (err) {
+      if (err instanceof Error && 'status' in err && err.status === 409)
+        get().loadPersonalization();
+      throw err;
+    }
+  },
+  personalizeSession: async (sessionId) => {
+    const api = get().api;
+    if (!api) throw new Error('daemon is not connected');
+    const presentation = await api.personalizedPresentation(sessionId);
+    const currentProfile = get().personalization;
+    const currentExplanation = get().live[sessionId]?.state.explained;
+    if (
+      !currentProfile ||
+      presentation.profileRevision !== currentProfile.revision ||
+      presentation.basedOnSeq !== currentExplanation?.basedOnSeq
+    )
+      throw new Error('the explanation changed while personalization was running');
+    set((state) => ({ personalized: { ...state.personalized, [sessionId]: presentation } }));
   },
   setTheme: (theme) => {
     localStorage.setItem(THEME_KEY, theme);

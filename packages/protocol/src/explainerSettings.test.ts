@@ -4,6 +4,8 @@ import {
   ExplainerCadenceSchema,
   ExplainerSettingsRequestSchema,
   ExplainerSettingsSchema,
+  PersonalizationSettingsRequestSchema,
+  PersonalizationSettingsSchema,
 } from './wire.ts';
 
 const runtime = {
@@ -91,5 +93,62 @@ describe('the explainer settings wire', () => {
     expect(ExplainerSettingsRequestSchema.safeParse({ model: null }).success).toBe(true);
     expect(ExplainerSettingsRequestSchema.safeParse({}).success).toBe(false);
     expect(ExplainerSettingsRequestSchema.safeParse({ model: 'bad\nmodel' }).success).toBe(false);
+  });
+});
+
+describe('the personalization wire', () => {
+  const profile = {
+    guidance:
+      'I run payment operations. Use restaurant kitchens and logistics as examples. Call background jobs workers.',
+  };
+
+  it('keeps the reader-authored guidance exact, strict, and bounded', () => {
+    expect(PersonalizationSettingsRequestSchema.parse({ enabled: true, profile })).toEqual({
+      enabled: true,
+      profile,
+    });
+    expect(
+      PersonalizationSettingsRequestSchema.safeParse({ enabled: true, profile, instructions: 'x' })
+        .success,
+    ).toBe(false);
+    expect(
+      PersonalizationSettingsRequestSchema.safeParse({
+        enabled: true,
+        profile: { guidance: 'x'.repeat(801) },
+      }).success,
+    ).toBe(false);
+    expect(
+      PersonalizationSettingsRequestSchema.safeParse({
+        enabled: true,
+        profile: { guidance: '   ' },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('carries a server revision separately from the replace request', () => {
+    expect(
+      PersonalizationSettingsSchema.parse({
+        version: 2,
+        enabled: true,
+        revision: 'abc123',
+        profile,
+      }).revision,
+    ).toBe('abc123');
+    expect(
+      PersonalizationSettingsSchema.safeParse({
+        version: 1,
+        enabled: true,
+        revision: 'abc123',
+        profile,
+      }).success,
+    ).toBe(false);
+    expect(
+      PersonalizationSettingsSchema.safeParse({
+        version: 2,
+        enabled: true,
+        revision: 'none',
+        profile,
+      }).success,
+    ).toBe(false);
   });
 });

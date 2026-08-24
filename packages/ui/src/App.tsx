@@ -53,6 +53,7 @@ export function App() {
   const sidebarOpen = useAppStore((s) => s.sidebarOpen);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const loadExplainer = useAppStore((s) => s.loadExplainer);
+  const loadPersonalization = useAppStore((s) => s.loadPersonalization);
   const sideRef = useRef<HTMLElement>(null);
   const mobileSideTriggerRef = useRef<HTMLDivElement>(null);
   const narrow = useNarrowLayout();
@@ -71,8 +72,27 @@ export function App() {
   }, [setToken]);
 
   useEffect(() => {
-    if (api) loadExplainer();
-  }, [api, loadExplainer]);
+    if (api) {
+      loadExplainer();
+      loadPersonalization();
+    }
+  }, [api, loadExplainer, loadPersonalization]);
+
+  /* A profile belongs to the daemon, not this tab. Revalidate when this tab becomes active so a
+     save or delete in another tab invalidates any presentation still held only in memory here. */
+  useEffect(() => {
+    if (!api) return;
+    const revalidate = () => loadPersonalization();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') revalidate();
+    };
+    window.addEventListener('focus', revalidate);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('focus', revalidate);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [api, loadPersonalization]);
 
   // Hash routing: #/s/<sessionId>
   useEffect(() => {
@@ -260,9 +280,8 @@ function FirstRun() {
           <ToolButton
             icon="stats"
             label="Models & Usage"
-            value={explanationMode?.label}
             on={statsOpen}
-            title={`Show explanation models and token usage${explanationMode ? `. ${explanationMode.label}: ${explanationMode.detail}.` : ''}`}
+            title={`Show explanation timing, models and usage${explanationMode ? `. ${explanationMode.label}: ${explanationMode.detail}.` : ''}`}
             onClick={toggleStats}
           />
         </div>

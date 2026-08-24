@@ -11,8 +11,10 @@ import { Icon, type IconName } from './Icon.tsx';
 export function ToolButton({
   icon,
   label,
-  value,
   on,
+  controls,
+  expanded,
+  disabled,
   title,
   onClick,
 }: {
@@ -32,9 +34,12 @@ export function ToolButton({
    * would otherwise stand in for the name is never shown at all.
    */
   label?: string;
-  /** Current state the button reports, shown at full strength beside its label. */
-  value?: string;
   on?: boolean;
+  /** The in-page region this control reveals, when it is a disclosure rather than a mode. */
+  controls?: string;
+  /** Disclosure state, when the highlighted state also carries some other meaning. */
+  expanded?: boolean;
+  disabled?: boolean;
   title: string;
   onClick: () => void;
 }) {
@@ -43,13 +48,14 @@ export function ToolButton({
       type="button"
       className={`btn ${label ? '' : 'btn-icon'} ${on ? 'is-on' : ''}`}
       onClick={onClick}
-      aria-pressed={on}
+      aria-pressed={controls ? undefined : on}
+      aria-expanded={controls ? (expanded ?? on) : undefined}
+      aria-controls={controls}
+      disabled={disabled}
       title={title}
-      data-value={value}
     >
       <Icon name={icon} />
       {label && <span>{label}</span>}
-      {value && <span className="btn-value">{value}</span>}
       {!label && <span className="sr-only">{title}</span>}
     </button>
   );

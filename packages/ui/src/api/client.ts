@@ -2,6 +2,9 @@ import type {
   DaemonInfo,
   ExplainerSettings,
   ExplainerSettingsRequest,
+  PersonalizationSettings,
+  PersonalizationSettingsRequest,
+  PersonalizedExplanation,
   SemanticChange,
   SessionList,
   SessionSnapshot,
@@ -9,7 +12,12 @@ import type {
   StoredEvent,
   StreamMessage,
 } from '@salidium/protocol';
-import { StreamMessageSchema, StreamResnapshotRequiredSchema } from '@salidium/protocol';
+import {
+  PersonalizationSettingsSchema,
+  PersonalizedExplanationSchema,
+  StreamMessageSchema,
+  StreamResnapshotRequiredSchema,
+} from '@salidium/protocol';
 
 /**
  * Thin client for the daemon's loopback API. The token arrives in the URL fragment when the CLI
@@ -79,6 +87,57 @@ export class ApiClient {
     }
     if (!res.ok) throw new ApiError(`request failed: ${res.status}`, res.status);
     return (await res.json()) as ExplainerSettings;
+  }
+
+  async personalizationSettings(): Promise<PersonalizationSettings> {
+    return PersonalizationSettingsSchema.parse(await this.get('/api/settings/personalization'));
+  }
+
+  async setPersonalizationSettings(
+    settings: PersonalizationSettingsRequest,
+    expectedRevision: string,
+  ): Promise<PersonalizationSettings> {
+    const res = await fetch('/api/settings/personalization', {
+      method: 'PUT',
+      headers: {
+        ...this.headers(),
+        'Content-Type': 'application/json',
+        'If-Match': expectedRevision,
+      },
+      body: JSON.stringify(settings),
+    });
+    if (res.status === 401) {
+      this.onUnauthorized?.();
+      throw new ApiError('unauthorized', 401);
+    }
+    if (!res.ok) throw new ApiError(`request failed: ${res.status}`, res.status);
+    return PersonalizationSettingsSchema.parse(await res.json());
+  }
+
+  async deletePersonalizationSettings(expectedRevision: string): Promise<PersonalizationSettings> {
+    const res = await fetch('/api/settings/personalization', {
+      method: 'DELETE',
+      headers: { ...this.headers(), 'If-Match': expectedRevision },
+    });
+    if (res.status === 401) {
+      this.onUnauthorized?.();
+      throw new ApiError('unauthorized', 401);
+    }
+    if (!res.ok) throw new ApiError(`request failed: ${res.status}`, res.status);
+    return PersonalizationSettingsSchema.parse(await res.json());
+  }
+
+  async personalizedPresentation(sessionId: string): Promise<PersonalizedExplanation> {
+    const res = await fetch(
+      `/api/sessions/${encodeURIComponent(sessionId)}/personalized-presentation`,
+      { method: 'POST', headers: this.headers() },
+    );
+    if (res.status === 401) {
+      this.onUnauthorized?.();
+      throw new ApiError('unauthorized', 401);
+    }
+    if (!res.ok) throw new ApiError(`request failed: ${res.status}`, res.status);
+    return PersonalizedExplanationSchema.parse(await res.json());
   }
 
   sessions(): Promise<SessionSummary[]> {

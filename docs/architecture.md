@@ -169,6 +169,13 @@ evidence position. Failures are recorded as failures, and explanation can be dis
 The provider CLI may contact its own service and consume the user's plan or API allowance. Salidium
 does not hide that network boundary or describe generated text as observed fact.
 
+Personalization is a separate presentation layer. One bounded reader-authored note is kept in an
+owner-only local file. An explicit Personalize action saves the note and sends it with the
+already-generated technical Why/How diagram to the selected explanation agent. The returned
+wording is held in browser memory only: it is not appended to session events, checkpoints, exports,
+or a sync outbox. The original technical wording remains available, and clearing the profile removes
+the local preference file and cancels work in flight.
+
 ## Local security boundary
 
 The daemon binds to `127.0.0.1` and requires a random bearer token stored in `daemon.json`. Requests
@@ -227,10 +234,10 @@ export minimization.
 The contract vocabulary distinguishes observations, attributed claims, decisions, intentions,
 commitments, outcomes, entities, relationships, explicit and inferred preferences, durable memory,
 and inference. It separates verification state from calibrated probability, and working memory is
-not durable. Phase 0 deliberately produces only explicit user-confirmed decision threads: selected
-option, rejected alternatives, rationale, owner, scope, status, lifecycle, and corrections or
-supersessions. Existing agent-message classification and model output cannot promote themselves to
-a decision.
+not durable. Phase 0's internal producer accepts only explicit user-confirmed decision threads:
+selected option, rejected alternatives, rationale, owner, scope, status, lifecycle, and corrections
+or supersessions. Existing agent-message classification and model output cannot promote themselves
+to a decision.
 
 Every operation has a local stream and replica namespace, lane position, stable operation id,
 predecessor, and canonical content digest. A receiver must treat the same position and same digest as

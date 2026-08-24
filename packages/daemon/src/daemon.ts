@@ -18,6 +18,7 @@ import {
   ProviderRegistry,
   trustedPathEntries,
 } from '@salidium/adapter-kit';
+import type { RunState } from '@salidium/core';
 import {
   type DaemonInfo,
   type ExplainerBackend,
@@ -25,11 +26,20 @@ import {
   ExplainerModelSchema,
   type ExplainerSettings,
   type ExplainerSettingsRequest,
+  type PersonalizationSettingsRequest,
   PROTOCOL_VERSION,
 } from '@salidium/protocol';
 import { type DaemonConfig, daemonPaths, resolveDaemonConfig } from './config/daemonConfig.ts';
+import {
+  deletePersonalization,
+  EMPTY_PERSONALIZATION,
+  nextPersonalization,
+  readPersonalization,
+  writePersonalization,
+} from './config/personalization.ts';
 import { explainWithStatus } from './enrich/explainer.ts';
 import { explainedConfiguration } from './enrich/explainerBackends.ts';
+import { personalizeExplanation } from './enrich/personalizeExplanation.ts';
 import { GitSnapshotEnricher } from './enrichers/gitSnapshot.ts';
 import { HookIngress } from './ingest/hookIngress.ts';
 import {
@@ -247,6 +257,14 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
   const stored = readSettings(config.home, (reason) =>
     log.warn('settings invalid; optional explanations disabled', { reason }),
   );
+  let personalization = readPersonalization(config.home, (reason) =>
+    log.warn('personalization invalid; profile ignored', { reason }),
+  );
+  const personalizationCalls = new Map<string, AbortController>();
+  const abortPersonalization = () => {
+    for (const controller of personalizationCalls.values()) controller.abort();
+    personalizationCalls.clear();
+  };
   const activeExplainer = () =>
     explainedConfiguration(stored.explainerBackend, stored.explainerModel, process.env);
   const registry = new SessionRegistry(store, {
@@ -322,10 +340,16 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     settings: {
       explainer: explainerSettings,
       setExplainerSettings: (change: ExplainerSettingsRequest) => {
-        if (change.cadence !== undefined) stored.explainerCadence = change.cadence;
-        if (change.backend !== undefined) stored.explainerBackend = change.backend;
-        if (change.model !== undefined) stored.explainerModel = change.model;
-        writeSettings(config.home, stored);
+        // Persist a candidate before it becomes live. A failed disk write must not leave this
+        // process using settings the API reported as rejected.
+        const candidate = {
+          ...stored,
+          ...(change.cadence !== undefined ? { explainerCadence: change.cadence } : {}),
+          ...(change.backend !== undefined ? { explainerBackend: change.backend } : {}),
+          ...(change.model !== undefined ? { explainerModel: change.model } : {}),
+        };
+        writeSettings(config.home, candidate);
+        Object.assign(stored, candidate);
         // The environment still outranks the choice; it is the choice that was stored, not the
         // effect. A reader who unsets the variable and restarts gets the stop they picked.
         registry.setExplainerCadence(effectiveCadence(stored.explainerCadence));
@@ -338,6 +362,50 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
           inForceBackend: active.mode,
         });
         return explainerSettings();
+      },
+      personalization: () => personalization,
+      setPersonalization: (
+        request: PersonalizationSettingsRequest,
+        expectedRevision: string | undefined,
+      ) => {
+        if (expectedRevision !== personalization.revision) return 'conflict';
+        const candidate = nextPersonalization(request);
+        writePersonalization(config.home, candidate);
+        abortPersonalization();
+        personalization = candidate;
+        log.info('personalization profile set', {
+          enabled: candidate.enabled,
+          revision: candidate.revision,
+        });
+        return personalization;
+      },
+      deletePersonalization: (expectedRevision: string | undefined) => {
+        if (expectedRevision !== personalization.revision) return 'conflict';
+        deletePersonalization(config.home);
+        abortPersonalization();
+        personalization = structuredClone(EMPTY_PERSONALIZATION);
+        log.info('personalization profile deleted');
+        return personalization;
+      },
+      personalize: async (sessionId) => {
+        const snapshot = registry.snapshot(sessionId, 0);
+        if (!snapshot) return { status: 'not-found' as const };
+        const profile = personalization;
+        const active = activeExplainer();
+        const previous = personalizationCalls.get(sessionId);
+        previous?.abort();
+        const controller = new AbortController();
+        personalizationCalls.set(sessionId, controller);
+        const result = await personalizeExplanation(snapshot.state as RunState, profile, {
+          mode: active.mode,
+          model: active.model,
+          signal: controller.signal,
+          onFailure: (reason) => log.warn('personalization generation failed', { reason }),
+        });
+        if (personalizationCalls.get(sessionId) === controller)
+          personalizationCalls.delete(sessionId);
+        if (profile.revision !== personalization.revision) return { status: 'stale' as const };
+        return result;
       },
     },
     log,
@@ -407,6 +475,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
   const stop = async () => {
     if (stopped) return;
     stopped = true;
+    abortPersonalization();
     if (retentionTimer) clearInterval(retentionTimer);
     tailer.stop();
     hooks.stop();

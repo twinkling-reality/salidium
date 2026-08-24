@@ -121,7 +121,12 @@ function runProcess(
       settled = true;
       cleanup();
       if (code === 0) resolve(out);
-      else reject(new Error(`${invocation.command} exited ${code}: ${err.trim().slice(0, 200)}`));
+      else {
+        const detail = err.trim();
+        const excerpt =
+          detail.length <= 1_000 ? detail : `${detail.slice(0, 200)} … ${detail.slice(-800)}`;
+        reject(new Error(`${invocation.command} exited ${code}: ${excerpt}`));
+      }
     });
     child.stdin.end(invocation.input);
   });
