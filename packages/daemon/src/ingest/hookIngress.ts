@@ -20,6 +20,7 @@ import {
   MAX_HOOK_PENDING_FILES,
   MAX_HOOK_SPOOL_RECORD_BYTES,
   MAX_INGEST_PAYLOAD_BYTES,
+  MAX_SPOOL_DRAIN_BATCH,
   TRUNCATED_HOOK_PAYLOAD_KEY,
 } from './limits.ts';
 import type { TranscriptTailer } from './transcriptTailer.ts';
@@ -40,6 +41,8 @@ export class HookIngress {
   private readonly maxPayloadBytes: number;
   private readonly maxSpoolRecordBytes: number;
   private spoolTimer: NodeJS.Timeout | undefined;
+  /** Set only while a capped drain pass has more of the same backlog still to read. */
+  private catchUp: NodeJS.Timeout | undefined;
   private draining = false;
 
   constructor(args: {
@@ -86,21 +89,35 @@ export class HookIngress {
       });
       return 0;
     }
+    const outcome = this.ingestPayload(providerId, payload, received.data);
+    // HTTP success and spool deletion are recovery boundaries: do not let either discard the
+    // relay's copy while this session still exists only in the coordinator's write-behind
+    // queue. Throwing makes the HTTP relay spool its pending file and keeps a processing file
+    // available for the next drain.
+    if (outcome.sessionId && !this.registry.flush(outcome.sessionId))
+      throw new Error('hook events are not durable yet');
+    return outcome.accepted;
+  }
+
+  /**
+   * The half of `handle` that stops short of the durability boundary, so a drain can ingest a whole
+   * batch and then flush each touched session once instead of opening one transaction per envelope.
+   * Callers must flush the returned session before treating the payload's source as discardable.
+   */
+  private ingestPayload(
+    providerId: string,
+    payload: unknown,
+    receivedAt: string,
+  ): { accepted: number; sessionId?: string } {
     const adapter = this.adapters.get(providerId as ProviderId);
-    if (!adapter) return 0;
+    if (!adapter) return { accepted: 0 };
     const transcript = adapter.transcriptPathFromHook(payload);
-    const events = adapter.parseHookPayload(payload, { receivedAt: received.data });
+    const events = adapter.parseHookPayload(payload, { receivedAt });
     let accepted = 0;
+    let sessionId: string | undefined;
     if (events.length) {
-      const sessionId = events[0]?.sessionId;
-      if (sessionId) {
-        accepted = this.registry.ingest(sessionId, events, { cwd: transcript?.cwd });
-        // HTTP success and spool deletion are recovery boundaries: do not let either discard the
-        // relay's copy while this session still exists only in the coordinator's write-behind
-        // queue. Throwing makes the HTTP relay spool its pending file and keeps a processing file
-        // available for the next drain.
-        if (!this.registry.flush(sessionId)) throw new Error('hook events are not durable yet');
-      }
+      sessionId = events[0]?.sessionId;
+      if (sessionId) accepted = this.registry.ingest(sessionId, events, { cwd: transcript?.cwd });
     }
     if (transcript) {
       // Only files under the provider's own state directories are ever tailed, whatever a hook
@@ -114,7 +131,7 @@ export class HookIngress {
         else this.log.warn('ignoring transcript_path outside provider roots', { path: candidate });
       }
     }
-    return accepted;
+    return { accepted, sessionId };
   }
 
   /** Reads both atomic per-envelope payloads and legacy JSONL spools, deleting only durable work. */
@@ -125,8 +142,9 @@ export class HookIngress {
       return;
     }
     this.draining = true;
+    let more = false;
     try {
-      this.drainOrphanedPending();
+      more = this.drainOrphanedPending();
       const files = readdirSync(this.spoolDir)
         .filter((f) => f.endsWith('.jsonl') || f.endsWith('.jsonl.processing'))
         // Recover an interrupted drain before renaming a newer daily spool onto the same target.
@@ -206,6 +224,15 @@ export class HookIngress {
       this.draining = false;
       this.releaseBreaker();
     }
+    // A capped pass left work behind. Come back on the next tick of the event loop rather than at
+    // the next poll, so a large backlog still clears quickly without ever holding the loop.
+    if (more && this.spoolTimer && !this.catchUp) {
+      this.catchUp = setTimeout(() => {
+        this.catchUp = undefined;
+        this.drainSpool();
+      }, 25);
+      this.catchUp.unref?.();
+    }
   }
 
   /** Ready and claimed envelopes, counted the way the relay's own glob counts them. */
@@ -244,11 +271,11 @@ export class HookIngress {
    * reading. Plain `.json` files are legacy/in-flight payloads and remain protected by the 10 s
    * orphan grace period. Processing files survive daemon crashes and persistence failures.
    */
-  private drainOrphanedPending(): void {
+  private drainOrphanedPending(): boolean {
     const pending = join(this.spoolDir, 'pending');
-    if (!existsSync(pending)) return;
+    if (!existsSync(pending)) return false;
     const cutoff = Date.now() - 10_000;
-    const files = readdirSync(pending)
+    const all = readdirSync(pending)
       .filter(
         (f) =>
           f.endsWith('.ready.json') ||
@@ -261,6 +288,13 @@ export class HookIngress {
         const bp = b.endsWith('.processing');
         return ap === bp ? a.localeCompare(b) : ap ? -1 : 1;
       });
+    const files = all.slice(0, MAX_SPOOL_DRAIN_BATCH);
+    const more = all.length > files.length;
+    // Claimed envelopes whose events are ingested but not yet proven durable. Nothing here may be
+    // deleted until its session flushes, so a failed batch still leaves the relay's only copy.
+    const claimedBatch: { file: string; processing: string; sessionId?: string }[] = [];
+    const touched = new Set<string>();
+    let recovered = 0;
     for (const f of files) {
       const path = join(pending, f);
       const alreadyProcessing = f.endsWith('.processing');
@@ -296,18 +330,49 @@ export class HookIngress {
           unlinkSync(processing);
           continue;
         }
-        this.handle(provider, payload, claimed.mtime.toISOString());
-        try {
-          unlinkSync(processing);
-        } catch {
-          /* ignore */
-        }
-        this.log.info('recovered orphaned hook payload', { file: f });
+        const { sessionId } = this.ingestPayload(provider, payload, claimed.mtime.toISOString());
+        if (sessionId) touched.add(sessionId);
+        claimedBatch.push({ file: f, processing, sessionId });
       } catch (err) {
         // Persistence/processing failures can recover, so retain the relay's only remaining copy.
         this.log.warn('orphaned hook recovery deferred', { file: f, err: String(err) });
       }
     }
+
+    // One transaction per session in the batch rather than one per envelope. The observed backlog
+    // was 1,677 files across 16 sessions, so this is the difference between 1,677 commits against
+    // a multi-gigabyte store and 16.
+    const undurable = new Set<string>();
+    for (const sessionId of touched) {
+      try {
+        if (!this.registry.flush(sessionId)) undurable.add(sessionId);
+      } catch (err) {
+        undurable.add(sessionId);
+        this.log.warn('hook batch flush failed; envelopes retained', {
+          sessionId,
+          err: String(err),
+        });
+      }
+    }
+    for (const item of claimedBatch) {
+      if (item.sessionId && undurable.has(item.sessionId)) continue;
+      try {
+        unlinkSync(item.processing);
+        recovered++;
+      } catch {
+        /* ignore */
+      }
+    }
+    // One line per pass. Per-file logging made a large recovery write a log entry per envelope,
+    // and the rotation check stats the file on every line.
+    if (recovered || undurable.size)
+      this.log.info('recovered orphaned hook payloads', {
+        recovered,
+        sessions: touched.size,
+        deferred: claimedBatch.length - recovered,
+        remaining: more,
+      });
+    return more;
   }
 
   private providerFromSpoolName(file: string): string {
@@ -328,13 +393,20 @@ export class HookIngress {
 
   startSpoolWatcher(intervalMs = 5000): void {
     if (!existsSync(this.spoolDir)) mkdirSync(this.spoolDir, { recursive: true, mode: 0o700 });
-    this.drainSpool();
+    // The poll is installed before the first pass, not after it. A capped pass only chains into the
+    // next one while this watcher is running, and startup is exactly when the backlog is largest:
+    // draining first would leave the recovery waiting a full interval between its own batches.
+    // Re-entry is already prevented by `draining`.
     this.spoolTimer = setInterval(() => this.drainSpool(), intervalMs);
     this.spoolTimer.unref?.();
+    this.drainSpool();
   }
 
   stop(): void {
     if (this.spoolTimer) clearInterval(this.spoolTimer);
+    this.spoolTimer = undefined;
+    if (this.catchUp) clearTimeout(this.catchUp);
+    this.catchUp = undefined;
   }
 }
 

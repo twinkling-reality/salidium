@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ProviderAdapter } from '@salidium/adapter-kit';
@@ -7,7 +15,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createLogger } from '../logging/logger.ts';
 import type { SessionRegistry } from '../sessions/sessionRegistry.ts';
 import { HookIngress } from './hookIngress.ts';
-import { TRUNCATED_HOOK_PAYLOAD_KEY } from './limits.ts';
+import { MAX_SPOOL_DRAIN_BATCH, TRUNCATED_HOOK_PAYLOAD_KEY } from './limits.ts';
 import type { TranscriptTailer } from './transcriptTailer.ts';
 
 const dirs: string[] = [];
@@ -154,6 +162,54 @@ describe('HookIngress durability and recovery', () => {
 
     expect(existsSync(processing)).toBe(true);
     expect(existsSync(`${pending}.processing`)).toBe(true);
+  });
+
+  it('commits one transaction per session in a batch, not one per envelope', () => {
+    const { dir, hooks, flushes } = fixture(() => true);
+    const pendingDir = join(dir, 'pending');
+    mkdirSync(pendingDir);
+    for (let i = 0; i < 40; i++)
+      writeFileSync(join(pendingDir, `claude-code_1-${i}-aa.ready.json`), JSON.stringify({ i }));
+
+    hooks.drainSpool();
+
+    expect(existsSync(join(pendingDir, 'claude-code_1-0-aa.ready.json'))).toBe(false);
+    // Forty envelopes, one session. The old drain flushed inside every handle() call.
+    expect(flushes()).toBe(1);
+  });
+
+  it('caps a drain pass and leaves the rest claimable by the next one', () => {
+    const { dir, hooks, seenPayloads } = fixture(() => true);
+    const pendingDir = join(dir, 'pending');
+    mkdirSync(pendingDir);
+    const total = MAX_SPOOL_DRAIN_BATCH + 25;
+    for (let i = 0; i < total; i++)
+      writeFileSync(join(pendingDir, `claude-code_2-${i}-bb.ready.json`), JSON.stringify({ i }));
+
+    hooks.drainSpool();
+
+    expect(seenPayloads.length).toBe(MAX_SPOOL_DRAIN_BATCH);
+    expect(readdirSync(pendingDir)).toHaveLength(25);
+
+    hooks.drainSpool();
+
+    expect(seenPayloads.length).toBe(total);
+    expect(readdirSync(pendingDir)).toHaveLength(0);
+  });
+
+  it('retains every envelope in a batch whose session did not reach the store', () => {
+    const { dir, hooks } = fixture(() => false);
+    const pendingDir = join(dir, 'pending');
+    mkdirSync(pendingDir);
+    for (let i = 0; i < 10; i++)
+      writeFileSync(join(pendingDir, `claude-code_3-${i}-cc.ready.json`), JSON.stringify({ i }));
+
+    hooks.drainSpool();
+
+    // Batching must not widen the durability boundary: an undurable session keeps all ten copies.
+    const kept = readdirSync(pendingDir);
+    expect(kept).toHaveLength(10);
+    expect(kept.every((f) => f.endsWith('.processing'))).toBe(true);
   });
 
   it('quarantines an oversized orphan without reading or repeatedly retrying it', () => {

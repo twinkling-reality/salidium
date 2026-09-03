@@ -18,5 +18,16 @@ export const MAX_HOOK_PENDING_FILES = 2000;
 /** Sentinel written beside the spool once the relay has stopped accepting work. */
 export const HOOK_BREAKER_FILE = 'hooks-off';
 
+/**
+ * Spool envelopes recovered in one drain pass before the daemon yields.
+ *
+ * The drain is synchronous and each payload reaches the reducer and SQLite, so an uncapped pass
+ * over a large backlog holds the event loop for as long as it takes: the daemon stops answering
+ * exactly when a user is trying to recover, and the CLI's readiness probe times out against a
+ * daemon that is working normally. A pass that hits this cap schedules the next one immediately
+ * rather than waiting for the poll interval, so a backlog still drains promptly.
+ */
+export const MAX_SPOOL_DRAIN_BATCH = 200;
+
 /** Valid JSON substituted by the relay when stdin exceeds the payload ceiling. */
 export const TRUNCATED_HOOK_PAYLOAD_KEY = '_salidium_truncated_hook_payload';

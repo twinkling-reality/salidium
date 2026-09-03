@@ -431,11 +431,15 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     protocolVersion: PROTOCOL_VERSION,
     storeSchemaVersion: SCHEMA_VERSION,
   };
+  if (config.gitEnrichment) git.start();
+  // Recover the spool before publishing daemon.json, not after. The file is what both the CLI's
+  // readiness probe and every relay treat as "there is a daemon here", and the first drain is the
+  // one moment a fresh daemon is busiest: announcing first meant a backlog could make `salidium
+  // start` report that the daemon had not started while it was in fact reading, which invites a
+  // retry that opens a second writer on the store.
+  hooks.startSpoolWatcher();
   writeFileSync(paths.daemonJson, JSON.stringify(daemonJson, null, 2), { mode: 0o600 });
   chmodSync(paths.daemonJson, 0o600);
-
-  if (config.gitEnrichment) git.start();
-  hooks.startSpoolWatcher();
   const initialBackfill = tailer.start(config.userHome, config.historyDays);
   log.info('salidium daemon listening', {
     port,
