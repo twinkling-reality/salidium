@@ -17,6 +17,7 @@ import { CanonicalTimestampSchema, type ProviderId } from '@salidium/protocol';
 import type { Logger } from '../logging/logger.ts';
 import type { SessionRegistry } from '../sessions/sessionRegistry.ts';
 import {
+  MAX_HOOK_PENDING_FILES,
   MAX_HOOK_SPOOL_RECORD_BYTES,
   MAX_INGEST_PAYLOAD_BYTES,
   TRUNCATED_HOOK_PAYLOAD_KEY,
@@ -34,6 +35,7 @@ export class HookIngress {
   private readonly tailer: TranscriptTailer;
   private readonly log: Logger;
   private readonly spoolDir: string;
+  private readonly breakerFile: string;
   private readonly userHome: string;
   private readonly maxPayloadBytes: number;
   private readonly maxSpoolRecordBytes: number;
@@ -45,6 +47,8 @@ export class HookIngress {
     registry: SessionRegistry;
     tailer: TranscriptTailer;
     spoolDir: string;
+    /** Relay breaker sentinel, cleared once a drain leaves the spool under its ceiling. */
+    breakerFile: string;
     userHome: string;
     log: Logger;
     /** Test seams; production uses the shared hostile-input ceilings. */
@@ -55,6 +59,7 @@ export class HookIngress {
     this.registry = args.registry;
     this.tailer = args.tailer;
     this.spoolDir = args.spoolDir;
+    this.breakerFile = args.breakerFile;
     this.userHome = args.userHome;
     this.log = args.log;
     this.maxPayloadBytes = args.maxPayloadBytes ?? MAX_INGEST_PAYLOAD_BYTES;
@@ -115,7 +120,10 @@ export class HookIngress {
   /** Reads both atomic per-envelope payloads and legacy JSONL spools, deleting only durable work. */
   drainSpool(): void {
     if (this.draining) return;
-    if (!existsSync(this.spoolDir)) return;
+    if (!existsSync(this.spoolDir)) {
+      this.releaseBreaker();
+      return;
+    }
     this.draining = true;
     try {
       this.drainOrphanedPending();
@@ -196,6 +204,38 @@ export class HookIngress {
       }
     } finally {
       this.draining = false;
+      this.releaseBreaker();
+    }
+  }
+
+  /** Ready and claimed envelopes, counted the way the relay's own glob counts them. */
+  private pendingCount(): number {
+    const pending = join(this.spoolDir, 'pending');
+    if (!existsSync(pending)) return 0;
+    try {
+      return readdirSync(pending).filter(
+        (f) => f.endsWith('.ready.json') || f.endsWith('.ready.json.processing'),
+      ).length;
+    } catch {
+      // Unreadable is not empty. Report the ceiling so the breaker stays closed.
+      return MAX_HOOK_PENDING_FILES;
+    }
+  }
+
+  /**
+   * Lets hooks back in once the backlog is under the relay's ceiling. Tied to a finished drain and
+   * not to startup on purpose: clearing the sentinel when the daemon comes up would re-admit every
+   * hook at the moment the queue is at its worst and the daemon has not read any of it yet.
+   */
+  private releaseBreaker(): void {
+    try {
+      if (!existsSync(this.breakerFile)) return;
+      const pending = this.pendingCount();
+      if (pending >= MAX_HOOK_PENDING_FILES) return;
+      unlinkSync(this.breakerFile);
+      this.log.info('hook relay resumed', { pending, limit: MAX_HOOK_PENDING_FILES });
+    } catch {
+      /* ignore */
     }
   }
 

@@ -43,7 +43,8 @@ import { personalizeExplanation } from './enrich/personalizeExplanation.ts';
 import { GitSnapshotEnricher } from './enrichers/gitSnapshot.ts';
 import { HookIngress } from './ingest/hookIngress.ts';
 import {
-  MAX_HOOK_DAILY_SPOOL_BYTES,
+  HOOK_BREAKER_FILE,
+  MAX_HOOK_PENDING_FILES,
   MAX_INGEST_PAYLOAD_BYTES,
   TRUNCATED_HOOK_PAYLOAD_KEY,
 } from './ingest/limits.ts';
@@ -305,6 +306,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     registry,
     tailer,
     spoolDir: paths.spoolDir,
+    breakerFile: paths.breakerFile,
     userHome: config.userHome,
     log,
   });
@@ -535,6 +537,11 @@ PATH='${shellQuote(relayPath)}'; export PATH
 # The variable is set only by the explainer.
 [ -n "$SALIDIUM_INTERNAL" ] && exit 0
 HOME_DIR='${shellQuote(home)}'
+# The breaker. Once the offline spool is full there is nothing useful left for a hook to do, and
+# the cheapest possible no-op is the only safe thing to do a thousand times a minute: one test,
+# no subprocess, before stdin is even read. The daemon clears this after it drains the backlog.
+# Reading no stdin is already this script's behaviour under SALIDIUM_INTERNAL one line above.
+[ -e "$HOME_DIR/${HOOK_BREAKER_FILE}" ] && exit 0
 if [ "$1" = "--send" ]; then
   PROVIDER="$2"; FILE="$3"
   # Bound old/external pending files too, not just stdin captured by this version of the relay.
@@ -559,18 +566,25 @@ if [ "$1" = "--send" ]; then
   # Every sender owns one file. Publishing it with a same-directory rename is atomic, so a drain
   # can never observe interleaved or partially-written envelopes from concurrent hooks.
   READY="\${FILE%.json}.ready.json"
-  # Keep the previous best-effort offline ceiling. Concurrent senders may overshoot it by at most
-  # their individually-bounded payloads, but never corrupt one another's records.
-  SIZE=0
-  for ITEM in "$PENDING"/*.ready.json "$PENDING"/*.ready.json.processing; do
-    [ -f "$ITEM" ] || continue
-    ITEM_SIZE=$(wc -c < "$ITEM" 2>/dev/null | tr -d ' ')
-    case "$ITEM_SIZE" in ''|*[!0-9]*) ITEM_SIZE=0;; esac
-    SIZE=$((SIZE + ITEM_SIZE))
-  done
-  if [ $((SIZE + PAYLOAD_SIZE)) -le ${MAX_HOOK_DAILY_SPOOL_BYTES} ]; then
+  # Measure the backlog with the shell alone. An earlier version summed every envelope with a
+  # wc/tr pair per file, which made the cost of delivering one hook proportional to the queue it
+  # was joining: a backlog made each sender slower, which grew the backlog. Globbing into the
+  # positional parameters counts the same files with no subprocess at all. An unmatched glob stays
+  # literal and reports one word, so test it before trusting the count.
+  set -- "$PENDING"/*.ready.json
+  [ -e "$1" ] || shift $#
+  PENDING_COUNT=$#
+  set -- "$PENDING"/*.ready.json.processing
+  [ -e "$1" ] || shift $#
+  PENDING_COUNT=$((PENDING_COUNT + $#))
+  if [ "$PENDING_COUNT" -lt ${MAX_HOOK_PENDING_FILES} ]; then
     mv "$FILE" "$READY" 2>/dev/null && exit 0
   fi
+  # Full. Trip the breaker so the hooks behind this one cost a single test instead of a glob, and
+  # leave the reason where the daemon and \`salidium doctor\` can read it. A dropped payload was
+  # already the outcome here; recording it is what is new.
+  printf '{"reason":"pending-files","limit":%s,"at":"%s"}\\n' ${MAX_HOOK_PENDING_FILES} \\
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$HOME_DIR/${HOOK_BREAKER_FILE}" 2>/dev/null
   rm -f "$FILE"
   exit 0
 fi

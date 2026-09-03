@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { ProviderId } from '@salidium/protocol';
+import { HOOK_BREAKER_FILE } from '../ingest/limits.ts';
 
 export interface DaemonConfig {
   /** Salidium's own state directory (default ~/.salidium). */
@@ -74,6 +75,8 @@ export function daemonPaths(home: string) {
     daemonJson: join(home, 'daemon.json'),
     spoolDir: join(home, 'spool'),
     hooksDir: join(home, 'hooks'),
+    /** Present only while the relay has stopped accepting work; see `MAX_HOOK_PENDING_FILES`. */
+    breakerFile: join(home, HOOK_BREAKER_FILE),
     logFile: join(home, 'daemon.log'),
     /** Small launcher/uncaught-process stream, separate from the structured rotating daemon log. */
     startupLogFile: join(home, 'daemon-startup.log'),

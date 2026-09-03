@@ -17,7 +17,11 @@ import type { CanonicalEvent } from '@salidium/protocol';
 import { describe, expect, it } from 'vitest';
 import { writeRelayScript } from './daemon.ts';
 import { HookIngress } from './ingest/hookIngress.ts';
-import { MAX_INGEST_PAYLOAD_BYTES, TRUNCATED_HOOK_PAYLOAD_KEY } from './ingest/limits.ts';
+import {
+  MAX_HOOK_PENDING_FILES,
+  MAX_INGEST_PAYLOAD_BYTES,
+  TRUNCATED_HOOK_PAYLOAD_KEY,
+} from './ingest/limits.ts';
 import type { TranscriptTailer } from './ingest/transcriptTailer.ts';
 import { createLogger } from './logging/logger.ts';
 import type { SessionRegistry } from './sessions/sessionRegistry.ts';
@@ -78,6 +82,7 @@ describe('the installed hook relay', () => {
         registry: { ingest: () => 1, flush: () => true } as unknown as SessionRegistry,
         tailer: { track() {} } as unknown as TranscriptTailer,
         spoolDir: join(home, 'spool'),
+        breakerFile: join(home, 'hooks-off'),
         userHome: root,
         log: createLogger('silent'),
       });
@@ -228,6 +233,7 @@ describe('the installed hook relay', () => {
         } as unknown as SessionRegistry,
         tailer: { track() {} } as unknown as TranscriptTailer,
         spoolDir: join(home, 'spool'),
+        breakerFile: join(home, 'hooks-off'),
         userHome: root,
         log: createLogger('silent'),
       });
@@ -250,6 +256,95 @@ describe('the installed hook relay', () => {
 
       expect(seen.sort((a, b) => a - b)).toEqual(Array.from({ length: 48 }, (_, i) => i));
       expect(readdirSync(pendingDir).filter((name) => name.includes('.ready.json'))).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * The regression that matters most, and the cheapest one to state: an earlier relay measured the
+   * offline spool by running `wc -c` on every file in it, which made one hook's cost proportional
+   * to the queue depth it was joining. Nothing about the delivered payload was wrong, so no
+   * behavioural test caught it. This one reads the generated text instead.
+   */
+  it('measures the offline spool without spawning a process per pending file', () => {
+    const root = mkdtempSync(join(tmpdir(), 'salidium-relay-cost-'));
+    try {
+      const home = join(root, 'state');
+      const script = readFileSync(
+        writeRelayScript(join(home, 'hooks'), home, { PATH: '/bin' }),
+        'utf8',
+      );
+      const sendBranch = script.slice(script.indexOf('if [ "$1" = "--send" ]'));
+
+      const loopOverPending = /\bfor\b[^\n]*\$(?:\{)?PENDING/.test(sendBranch);
+      expect(loopOverPending).toBe(false);
+      expect(sendBranch).not.toMatch(/wc -c < "\$ITEM"/);
+      expect(sendBranch).toContain('set -- "$PENDING"/*.ready.json');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('exits without reading stdin while the breaker is tripped', () => {
+    const root = mkdtempSync(join(tmpdir(), 'salidium-relay-breaker-'));
+    try {
+      const home = join(root, 'state');
+      const pendingDir = join(home, 'spool', 'pending');
+      const relay = writeRelayScript(join(home, 'hooks'), home, { PATH: '/bin:/usr/bin' });
+      mkdirSync(home, { recursive: true });
+      writeFileSync(join(home, 'hooks-off'), '{"reason":"pending-files"}\n');
+
+      const result = spawnSync('/bin/sh', [relay, 'claude-code'], {
+        env: {},
+        encoding: 'utf8',
+        input: JSON.stringify({ hook: 'dropped while tripped' }),
+      });
+
+      expect(result.status).toBe(0);
+      expect(existsSync(pendingDir)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('trips the breaker and stops spooling once the pending ceiling is reached', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'salidium-relay-ceiling-'));
+    try {
+      const home = join(root, 'state');
+      const pendingDir = join(home, 'spool', 'pending');
+      const relay = writeRelayScript(join(home, 'hooks'), home, { PATH: '/bin:/usr/bin' });
+      mkdirSync(pendingDir, { recursive: true });
+      for (let i = 0; i < MAX_HOOK_PENDING_FILES; i++)
+        writeFileSync(join(pendingDir, `claude-code-${i}.ready.json`), '{}');
+
+      const file = join(pendingDir, 'claude-code-overflow.json');
+      writeFileSync(file, JSON.stringify({ hook: 'one too many' }));
+      const result = spawnSync('/bin/sh', [relay, '--send', 'claude-code', file], {
+        env: {},
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(0);
+      // The arriving payload is dropped rather than queued, and the drop is now recorded.
+      expect(existsSync(file)).toBe(false);
+      expect(readdirSync(pendingDir)).toHaveLength(MAX_HOOK_PENDING_FILES);
+      const breaker = JSON.parse(readFileSync(join(home, 'hooks-off'), 'utf8'));
+      expect(breaker).toMatchObject({ reason: 'pending-files', limit: MAX_HOOK_PENDING_FILES });
+
+      // A drain that leaves the spool under the ceiling lets hooks back in.
+      const ingress = new HookIngress({
+        adapters: [],
+        registry: { ingest: () => 1, flush: () => true } as unknown as SessionRegistry,
+        tailer: { track() {} } as unknown as TranscriptTailer,
+        spoolDir: join(home, 'spool'),
+        breakerFile: join(home, 'hooks-off'),
+        userHome: root,
+        log: createLogger('silent'),
+      });
+      ingress.drainSpool();
+
+      expect(existsSync(join(home, 'hooks-off'))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

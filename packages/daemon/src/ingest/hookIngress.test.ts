@@ -60,6 +60,7 @@ function fixture(
     registry,
     tailer: { track() {} } as unknown as TranscriptTailer,
     spoolDir: dir,
+    breakerFile: join(dir, 'hooks-off'),
     userHome: dir,
     log: createLogger('silent'),
     ...limits,
