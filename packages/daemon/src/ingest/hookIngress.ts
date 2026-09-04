@@ -341,8 +341,21 @@ export class HookIngress {
         const bp = b.endsWith('.processing');
         return ap === bp ? a.localeCompare(b) : ap ? -1 : 1;
       });
-    const files = all.slice(0, MAX_SPOOL_DRAIN_BATCH);
-    const more = all.length > files.length;
+    // Envelopes for a provider that is not enabled are retained on purpose: they were collected
+    // while it was, and a reversible config change must not destroy them. But retaining them is
+    // not the same as offering them to the drain. Every pass would claim the same ones, fail on
+    // them, keep them, and -- because `.processing` sorts first -- refill the whole batch with
+    // them, so an enabled provider's envelopes sat behind them and were never read at all while
+    // the pass re-armed itself indefinitely. Set them aside before the batch is cut; they rejoin
+    // it unchanged the moment their provider is enabled again.
+    const drainable = all.filter((f) =>
+      this.adapters.has(this.providerFromPendingName(f) as ProviderId),
+    );
+    const retained = all.length - drainable.length;
+    if (retained > 0)
+      this.log.debug('retaining envelopes for providers that are not enabled', { files: retained });
+    const files = drainable.slice(0, MAX_SPOOL_DRAIN_BATCH);
+    const more = drainable.length > files.length;
     // Claimed envelopes whose events are ingested but not yet proven durable. Nothing here may be
     // deleted until its session flushes, so a failed batch still leaves the relay's only copy.
     const claimedBatch: { file: string; processing: string; sessionId?: string }[] = [];

@@ -166,7 +166,10 @@ describe('HookIngress durability and recovery', () => {
 
     disabled.drainSpool();
     expect(seenPayloads).toEqual([]);
-    expect(existsSync(`${path}.processing`)).toBe(true);
+    // Retained, and left where it was. A disabled provider's envelope is no longer claimed, so it
+    // never occupies a slot in the drain batch; what matters is that it survives, not which of the
+    // two names it survives under.
+    expect(existsSync(path)).toBe(true);
 
     const enabled = new HookIngress({
       adapters: [adapter],
@@ -180,6 +183,40 @@ describe('HookIngress durability and recovery', () => {
     enabled.drainSpool();
     expect(seenPayloads).toEqual([{ recovered: 'after-enable' }]);
     expect(existsSync(`${path}.processing`)).toBe(false);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it('drains an enabled provider while a full batch of disabled envelopes is queued', () => {
+    const { dir, adapter, registry, seenPayloads } = fixture();
+    const pending = join(dir, 'pending');
+    mkdirSync(pending);
+    // Already claimed by an earlier pass, which is the state that made this fatal: `.processing`
+    // sorts ahead of everything, so a full batch of them was re-claimed and re-failed on every
+    // pass while the enabled provider's envelope waited behind them and was never read at all.
+    for (let i = 0; i < MAX_SPOOL_DRAIN_BATCH + 5; i++)
+      writeFileSync(
+        join(pending, `codex_1-${String(i).padStart(4, '0')}-x.ready.json.processing`),
+        JSON.stringify({ disabled: i }),
+      );
+    writeFileSync(
+      join(pending, 'claude-code_2-9999-x.ready.json'),
+      JSON.stringify({ enabled: 'drained' }),
+    );
+
+    const hooks = new HookIngress({
+      adapters: [adapter],
+      registry,
+      tailer: { track() {} } as unknown as TranscriptTailer,
+      spoolDir: dir,
+      breakerFile: join(dir, 'hooks-off'),
+      userHome: dir,
+      log: createLogger('silent'),
+    });
+    hooks.drainSpool();
+
+    expect(seenPayloads).toEqual([{ enabled: 'drained' }]);
+    expect(existsSync(join(pending, 'claude-code_2-9999-x.ready.json'))).toBe(false);
+    expect(existsSync(join(pending, 'codex_1-0000-x.ready.json.processing'))).toBe(true);
   });
 
   it('preserves processing and pending files when persistence is deferred', () => {
