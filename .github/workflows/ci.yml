@@ -74,7 +74,13 @@ jobs:
           open=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$SALIDIUM_PORT/api/info")
           auth=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "http://127.0.0.1:$SALIDIUM_PORT/api/info")
           echo "ui=$ui unauthenticated=$open authenticated=$auth"
-          [ "$ui" = 200 ] && [ "$open" = 401 ] && [ "$auth" = 200 ]
+          # One assertion per line. Chained with `&&`, only the last of the three could ever fail
+          # the step: `set -e` ignores a non-final command in an AND-OR list, and the `&&` stops at
+          # the first false. That made the unauthenticated probe -- the one that proves the API
+          # refuses a caller with no token -- decorative, so an auth bypass would have published.
+          test "$ui" = 200
+          test "$open" = 401
+          test "$auth" = 200
 
           node "$RUNNER_TEMP/install/bundle/salidium.mjs" stop
 

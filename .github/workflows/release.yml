@@ -136,7 +136,11 @@ jobs:
           open=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$SALIDIUM_PORT/api/info")
           auth=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "http://127.0.0.1:$SALIDIUM_PORT/api/info")
           echo "ui=$ui unauthenticated=$open authenticated=$auth"
-          [ "$ui" = 200 ] && [ "$open" = 401 ] && [ "$auth" = 200 ]
+          # One assertion per line; see the identical check in ci.yml. Chained with `&&`, only the
+          # last could fail the step, which left the unauthenticated probe unable to block a publish.
+          test "$ui" = 200
+          test "$open" = 401
+          test "$auth" = 200
           # Doctor intentionally exits 1 when it finds a provider that is present but not connected;
           # a clean release runner may or may not have such a CLI. Exercise its runtime checks and
           # assert the facts this smoke owns without treating an expected setup warning as a crash.
@@ -161,6 +165,10 @@ jobs:
           old_pid=$!
           trap 'kill "$old_pid" 2>/dev/null || true' EXIT
           for _ in $(seq 1 40); do [ -f "$SALIDIUM_HOME/daemon.json" ] && break; sleep 0.5; done
+          # Say so here rather than at `wait`. Without this the poll can expire silently, `stop`
+          # finds no daemon to stop and exits 0, and `wait` then blocks on a child that is still
+          # alive until the job hits its timeout: twenty minutes and no reason why.
+          test -f "$SALIDIUM_HOME/daemon.json" || { echo "0.3.0 daemon never wrote daemon.json"; exit 1; }
           node "$RUNNER_TEMP/v030/packages/cli/bundle/salidium.mjs" stop
           wait "$old_pid"
           trap - EXIT
