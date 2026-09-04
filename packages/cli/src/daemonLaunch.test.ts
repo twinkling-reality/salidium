@@ -135,6 +135,17 @@ describe('detached daemon launch failures', () => {
     });
     expect(existsSync(join(home, 'hooks-paused'))).toBe(true);
 
+    const service = run(home, ['service', 'status', '--json'], '0');
+    expect(service.status).toBe(1);
+    expect(JSON.parse(service.stdout)).toMatchObject({
+      supported: process.platform === 'darwin',
+      installed: false,
+      enabled: false,
+    });
+    // Inspection is the exception to implicit resume: asking whether supervision is installed
+    // must not restart collection the user deliberately paused.
+    expect(existsSync(join(home, 'hooks-paused'))).toBe(true);
+
     const version = run(home, ['--version'], '0');
     expect(version.status).toBe(0);
     expect(existsSync(join(home, 'hooks-paused'))).toBe(false);
@@ -161,6 +172,79 @@ describe('detached daemon launch failures', () => {
     expect(quiet.stderr).toBe('');
   });
 
+  it('shows, changes, and resets versioned local configuration with source labels', () => {
+    const home = temporaryHome();
+    const initial = run(home, ['config', 'show', '--json'], '0');
+    expect(initial.status).toBe(0);
+    expect(JSON.parse(initial.stdout)).toMatchObject({
+      contractVersion: 1,
+      schemaVersion: 1,
+      values: {
+        history: {
+          days: { value: 0, source: 'environment', environment: 'SALIDIUM_HISTORY_DAYS' },
+        },
+        alerts: { queueAgeMinutes: { value: 10, source: 'default' } },
+      },
+    });
+
+    const changed = run(home, ['config', 'set', 'alerts.queueAgeMinutes', '30', '--json'], '0');
+    expect(changed.status).toBe(0);
+    expect(JSON.parse(changed.stdout)).toMatchObject({
+      revision: 1,
+      values: { alerts: { queueAgeMinutes: { value: 30, source: 'stored' } } },
+    });
+    expect(JSON.parse(readFileSync(join(home, 'operations-config.json'), 'utf8'))).toMatchObject({
+      version: 1,
+      settings: { alerts: { queueAgeMinutes: 30 } },
+    });
+
+    const reset = run(home, ['config', 'reset', 'alerts.queueAgeMinutes', '--json'], '0');
+    expect(reset.status).toBe(0);
+    expect(JSON.parse(reset.stdout)).toMatchObject({
+      revision: 2,
+      values: { alerts: { queueAgeMinutes: { value: 10, source: 'default' } } },
+    });
+
+    const notifications = run(
+      home,
+      ['config', 'set', 'alerts.nativeNotifications', 'true', '--json'],
+      '0',
+    );
+    expect(notifications.status).toBe(0);
+    expect(JSON.parse(notifications.stdout)).toMatchObject({
+      revision: 3,
+      values: { alerts: { nativeNotifications: { value: true, source: 'stored' } } },
+    });
+  });
+
+  it('previews diagnostic contents and inspects an empty durable queue as structured JSON', () => {
+    const home = temporaryHome();
+    const preview = run(home, ['doctor', '--bundle', '--dry-run', '--json'], '0');
+    const diagnostic = JSON.parse(preview.stdout).diagnosticBundle;
+    expect(diagnostic).toMatchObject({
+      dryRun: true,
+      manifest: { contractVersion: 1 },
+    });
+    expect(diagnostic.manifest.excludes).toEqual(
+      expect.arrayContaining([
+        'transcript contents',
+        'raw canonical events',
+        'prompts and command output',
+        'authentication tokens and secrets',
+      ]),
+    );
+
+    const queue = run(home, ['maintenance', 'queue', '--limit=0', '--json'], '0');
+    expect(queue.status).toBe(0);
+    expect(JSON.parse(queue.stdout)).toMatchObject({
+      contractVersion: 1,
+      exactTotals: true,
+      totalFiles: 0,
+      totalBytes: 0,
+      entries: [],
+    });
+  });
+
   it('keeps explanations local by default and changes the persisted setting while stopped', () => {
     const home = temporaryHome();
     const initial = run(home, ['explanations'], '0');
@@ -170,8 +254,9 @@ describe('detached daemon launch failures', () => {
     const changed = run(home, ['explanations', 'when-done'], '0');
     expect(changed.status).toBe(0);
     expect(changed.stdout).toMatch(/Saved: When done · One model call after a session ends/);
-    expect(JSON.parse(readFileSync(join(home, 'settings.json'), 'utf8'))).toMatchObject({
-      explainerCadence: 'session',
+    expect(JSON.parse(readFileSync(join(home, 'operations-config.json'), 'utf8'))).toMatchObject({
+      version: 1,
+      settings: { explainer: { cadence: 'session' } },
     });
   });
 
@@ -187,8 +272,53 @@ describe('detached daemon launch failures', () => {
       expect(status.stdout).toMatch(
         /Explanations: Each reply · One model call after each agent reply/,
       );
+      expect(status.stdout).toMatch(/Local endpoint: http:\/\/127\.0\.0\.1:\d+ · state /);
+      expect(status.stdout).toMatch(/Desktop notifications: Off/);
+      expect(status.stdout).toMatch(/Control: salidium open/);
     } finally {
       run(home, ['explanations', 'off'], '0');
+      run(home, ['stop'], '0');
+    }
+  }, 30_000);
+
+  it('stops watch mode promptly on Ctrl-C instead of waiting for the refresh interval', async () => {
+    const home = temporaryHome();
+    expect(start(home, '0').status).toBe(0);
+    const watcher = spawn(
+      process.execPath,
+      ['--conditions=development', entry, 'status', '--watch', '--interval=60'],
+      {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          SALIDIUM_HOME: home,
+          SALIDIUM_PORT: '0',
+          SALIDIUM_HISTORY_DAYS: '0',
+          SALIDIUM_NO_GIT: '1',
+        },
+      },
+    );
+    let stdout = '';
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('watch mode produced no snapshot')), 8_000);
+        watcher.once('error', reject);
+        watcher.stdout?.on('data', (chunk: Buffer) => {
+          stdout += chunk.toString();
+          if (!stdout.includes('Health:')) return;
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+      const interruptedAt = Date.now();
+      watcher.kill('SIGINT');
+      const code = await new Promise<number | null>((resolve) =>
+        watcher.once('exit', (exitCode) => resolve(exitCode)),
+      );
+      expect(Date.now() - interruptedAt).toBeLessThan(5_000);
+      expect(code).toBe(0);
+    } finally {
+      if (watcher.pid && processExists(watcher.pid)) watcher.kill('SIGTERM');
       run(home, ['stop'], '0');
     }
   }, 30_000);

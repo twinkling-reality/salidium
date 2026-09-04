@@ -29,6 +29,7 @@ export {
   safeJson,
 } from './recordHelpers.ts';
 export {
+  resolveSystemExecutable,
   resolveTrustedExecutable,
   type TrustedPathOptions,
   trustedPathEntries,

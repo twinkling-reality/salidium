@@ -26,7 +26,8 @@ import {
 } from '@salidium/sync-contract';
 import { z } from 'zod';
 
-const REQUIRED_STORE_SCHEMA = 6;
+const MINIMUM_STORE_SCHEMA = 6;
+const MAXIMUM_STORE_SCHEMA = 8;
 /** Mirrors the contract's inert-text rule: C0/C1 controls except tab, newline and carriage return,
  * zero-width and bidi characters, invisible operators, and the byte order mark. */
 const HIDDEN_CHARACTERS = new RegExp(
@@ -119,8 +120,9 @@ export interface AcknowledgementResult {
 type DeletionReceipt = z.infer<typeof DeletionReceiptV1Schema>;
 
 /**
- * Internal local outbox. It reads and writes only schema-6 sync tables in Salidium's SQLite file;
- * it is not an implementation of `SalidiumStore` and is not an external cloud extension API.
+ * Internal local outbox. It reads and writes only the sync tables introduced by schema 6;
+ * additive schemas 7 and 8 leave those tables unchanged. It is not an implementation of
+ * `SalidiumStore` and is not an external cloud extension API.
  *
  * There is intentionally no network code here. A future sender may read committed batches only
  * after a user explicitly connects a released compatible destination.
@@ -136,9 +138,12 @@ export class SqliteSyncOutbox {
     const row = this.db.prepare("SELECT value FROM meta WHERE key='schema_version'").get() as
       | { value?: unknown }
       | undefined;
-    if (Number(row?.value) !== REQUIRED_STORE_SCHEMA) {
+    const schema = Number(row?.value);
+    if (schema < MINIMUM_STORE_SCHEMA || schema > MAXIMUM_STORE_SCHEMA) {
       this.db.close();
-      throw new Error(`sync outbox requires Salidium store schema ${REQUIRED_STORE_SCHEMA}`);
+      throw new Error(
+        `sync outbox requires Salidium store schema ${MINIMUM_STORE_SCHEMA}-${MAXIMUM_STORE_SCHEMA}`,
+      );
     }
   }
 

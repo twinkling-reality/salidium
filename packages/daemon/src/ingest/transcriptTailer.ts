@@ -4,11 +4,11 @@ import {
   type FSWatcher,
   fstatSync,
   openSync,
-  readdirSync,
   readSync,
   statSync,
   watch,
 } from 'node:fs';
+import { opendir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { setImmediate as yieldToLoop } from 'node:timers/promises';
@@ -80,6 +80,8 @@ export class TranscriptTailer {
   private rescanTimer: NodeJS.Timeout | undefined;
   private rootDiscoveryTimer: NodeJS.Timeout | undefined;
   private roots: string[] = [];
+  private scanInFlight: Promise<void> | undefined;
+  private sweepInFlight = false;
   private stopped = false;
   private paused = false;
   private startedWith: { userHome: string; historyDays: number } | undefined;
@@ -132,7 +134,7 @@ export class TranscriptTailer {
     // Explicit jobs are durable and bypass the ordinary age window. Process them before the
     // opportunistic recent-history scan so an adapter upgrade cannot strand old sessions.
     const initialBackfill = this.startBackfill(historyDays);
-    this.sweepTimer = setInterval(() => this.sweepActive(), this.sweepIntervalMs);
+    this.sweepTimer = setInterval(() => void this.sweepActive(), this.sweepIntervalMs);
     this.sweepTimer.unref?.();
     this.rescanTimer = setInterval(() => void this.scanRoots(historyDays, false), 60_000);
     this.rescanTimer.unref?.();
@@ -413,7 +415,7 @@ export class TranscriptTailer {
         byteOffset: src.offset,
         lineNo: src.lineNo,
       });
-      return true;
+      return src.offset >= st.size;
     } finally {
       closeSync(fd);
     }
@@ -469,35 +471,50 @@ export class TranscriptTailer {
     };
   }
 
-  private sweepActive(): void {
-    if (this.stopped || this.paused) return;
-    const now = Date.now();
-    for (const [path, src] of this.sources) {
-      // Stateful parsers retain tool-call maps. Once a source is idle, its durable cursor is enough:
-      // a recursive watch or later scan recreates the parser and replays from byte zero on growth.
-      if (now - src.lastActivity > this.sourceIdleMs) {
-        if (!src.reading && !this.pokeTimers.has(path)) this.sources.delete(path);
-        continue;
+  private async sweepActive(): Promise<void> {
+    if (this.stopped || this.paused || this.sweepInFlight) return;
+    this.sweepInFlight = true;
+    try {
+      const now = Date.now();
+      for (const [path, src] of this.sources) {
+        // Stateful parsers retain tool-call maps. Once a source is idle, its durable cursor is
+        // enough: a recursive watch or later scan recreates the parser and replays from byte zero
+        // on growth.
+        if (now - src.lastActivity > this.sourceIdleMs) {
+          if (!src.reading && !this.pokeTimers.has(path)) this.sources.delete(path);
+          continue;
+        }
+        try {
+          const st = await stat(src.path);
+          if (st.size !== src.offset || st.ino !== src.inode) this.poke(src.path, 0);
+        } catch {
+          /* gone */
+        }
       }
-      try {
-        const st = statSync(src.path);
-        if (st.size !== src.offset || st.ino !== src.inode) this.poke(src.path, 0);
-      } catch {
-        /* gone */
-      }
+    } finally {
+      this.sweepInFlight = false;
     }
   }
 
   private async scanRoots(historyDays: number, initial: boolean): Promise<void> {
+    if (this.scanInFlight) return this.scanInFlight;
+    const scan = this.performScan(historyDays, initial).finally(() => {
+      if (this.scanInFlight === scan) this.scanInFlight = undefined;
+    });
+    this.scanInFlight = scan;
+    return scan;
+  }
+
+  private async performScan(historyDays: number, initial: boolean): Promise<void> {
     if (this.paused) return;
     this.ensureRootWatchers();
-    const cutoff = Date.now() - historyDays * 24 * 60 * 60_000;
+    const cutoff = Math.max(0, Date.now() - historyDays * 24 * 60 * 60_000);
     const found: Array<{ path: string; mtime: number }> = [];
     for (const root of this.roots) {
-      for (const path of walk(root)) {
+      for await (const path of walk(root)) {
         if (!this.adapters.some((a) => a.matchSessionFile(path))) continue;
         try {
-          const st = statSync(path);
+          const st = await stat(path);
           if (st.mtimeMs >= cutoff) found.push({ path, mtime: st.mtimeMs });
         } catch {
           /* ignore */
@@ -514,8 +531,8 @@ export class TranscriptTailer {
       const cursor = this.store.getSource(f.path);
       if (cursor) {
         try {
-          const stat = statSync(f.path);
-          if (stat.ino === cursor.inode && stat.size === cursor.byteOffset) continue;
+          const current = await stat(f.path);
+          if (current.ino === cursor.inode && current.size === cursor.byteOffset) continue;
         } catch {
           continue;
         }
@@ -550,16 +567,17 @@ export class TranscriptTailer {
   }
 }
 
-function* walk(dir: string): Generator<string> {
-  let entries: import('node:fs').Dirent[];
+async function* walk(dir: string): AsyncGenerator<string> {
+  let entries: Awaited<ReturnType<typeof opendir>>;
   try {
-    entries = readdirSync(dir, { withFileTypes: true });
+    entries = await opendir(dir);
   } catch {
     return;
   }
-  for (const e of entries) {
+  for await (const e of entries) {
     const p = join(dir, e.name);
-    if (e.isDirectory()) yield* walk(p);
-    else if (e.isFile()) yield p;
+    if (e.isDirectory()) {
+      for await (const child of walk(p)) yield child;
+    } else if (e.isFile()) yield p;
   }
 }

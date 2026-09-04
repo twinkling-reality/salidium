@@ -262,7 +262,8 @@ export type ExplainerUsage = z.infer<typeof ExplainerUsageSchema>;
  * environment values can lock the helper, model, or kill switch without erasing what the reader
  * chose in the interface, so removing an override restores those choices.
  *
- * `usage` is absent, never zeroed, when Salidium has observed nothing: an empty section is omitted.
+ * `usage` is absent, never zeroed, when Salidium has observed nothing. `usageStatus` distinguishes
+ * that from a one-time historical preparation without exposing archive contents.
  */
 export const ExplainerSettingsSchema = z.object({
   cadence: ExplainerCadenceSchema,
@@ -280,6 +281,7 @@ export const ExplainerSettingsSchema = z.object({
     claudeCode: ExplainerRouteSchema,
     codex: ExplainerRouteSchema,
   }),
+  usageStatus: z.enum(['ready', 'preparing']).optional(),
   usage: ExplainerUsageSchema.optional(),
 });
 export type ExplainerSettings = z.infer<typeof ExplainerSettingsSchema>;

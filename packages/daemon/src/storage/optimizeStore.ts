@@ -54,6 +54,13 @@ export interface StoreOptimizationOptions {
   onProgress?: (stage: string) => void;
 }
 
+/** Pure byte preflight, so multi-gigabyte stores can be tested without allocating their data. */
+export function storeOptimizationRequiredFreeBytes(beforeBytes: number): number {
+  if (!Number.isSafeInteger(beforeBytes) || beforeBytes < 0)
+    throw new Error('store byte count must be a nonnegative safe integer');
+  return beforeBytes + Math.max(512 * 1024 * 1024, beforeBytes * 0.1);
+}
+
 function scalarNumber(db: DatabaseSync, sql: string): number {
   const row = db.prepare(sql).get() as Record<string, number | bigint> | undefined;
   const value = row ? Object.values(row)[0] : undefined;
@@ -417,7 +424,7 @@ export function optimizeStoreLayout(
   const beforeLayout = inspectStoreLayout(path);
   const walPath = `${path}-wal`;
   const beforeBytes = statSync(path).size + (existsSync(walPath) ? statSync(walPath).size : 0);
-  const requiredFreeBytes = beforeBytes + Math.max(512 * 1024 * 1024, beforeBytes * 0.1);
+  const requiredFreeBytes = storeOptimizationRequiredFreeBytes(beforeBytes);
   const availableBytes =
     options.availableBytes ??
     (() => {
@@ -440,6 +447,15 @@ export function optimizeStoreLayout(
     throw new Error(
       `store schema ${beforeLayout.schemaVersion ?? 'unknown'} must be upgraded to ${SCHEMA_VERSION} before optimization`,
     );
+  const inspection = new SqliteStore(path, { readOnly: true });
+  try {
+    if (!inspection.usageBackfillProgress().complete)
+      throw new Error(
+        'historical usage preparation must finish before optimizing the storage layout',
+      );
+  } finally {
+    inspection.close();
+  }
   if (availableBytes < requiredFreeBytes)
     throw new Error(
       `storage optimization needs ${requiredFreeBytes} free bytes; ${availableBytes} are available`,

@@ -1,12 +1,33 @@
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { request } from 'node:http';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
+import { createServer, request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { buildSyntheticTranscript } from '@salidium/adapter-claude-code/testing';
-import type { SessionSnapshot, SessionSummary } from '@salidium/protocol';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type {
+  EffectiveOperationalConfig,
+  LocalAlert,
+  OperationsOverview,
+  QueueInspection,
+  SessionSnapshot,
+  SessionSummary,
+} from '@salidium/protocol';
+import {
+  EffectiveOperationalConfigSchema,
+  OperationsOverviewSchema,
+  QueueInspectionSchema,
+} from '@salidium/protocol';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { type DaemonHandle, startDaemon } from './daemon.ts';
+import { updateOperationalConfig } from './operations/configuration.ts';
 import { SqliteStore } from './storage/sqliteStore.ts';
 
 const tmp = mkdtempSync(join(tmpdir(), 'salidium-test-'));
@@ -40,6 +61,18 @@ async function waitFor<T>(fn: () => Promise<T | undefined>, timeoutMs = 5000): P
   }
 }
 
+async function availablePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  const port = typeof address === 'object' && address ? address.port : 0;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
+
 beforeAll(async () => {
   mkdirSync(projectDir, { recursive: true });
   // Write the transcript except the last few records; the rest is appended live later.
@@ -61,6 +94,181 @@ afterAll(async () => {
 });
 
 describe('daemon', () => {
+  it('cleans up the listener and store when post-listen startup fails', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'salidium-startup-cleanup-'));
+    const home = join(root, 'salidium');
+    mkdirSync(join(home, 'spool'), { recursive: true });
+    writeFileSync(join(home, 'spool', 'pending'), 'blocks the pending directory');
+    const port = await availablePort();
+    await expect(
+      startDaemon({
+        home,
+        userHome: join(root, 'providers'),
+        port,
+        providers: [],
+        historyDays: 0,
+        gitEnrichment: false,
+        logLevel: 'silent',
+      }),
+    ).rejects.toThrow();
+    expect(existsSync(join(home, 'daemon.json'))).toBe(false);
+
+    rmSync(join(home, 'spool', 'pending'));
+    const recovered = await startDaemon({
+      home,
+      userHome: join(root, 'providers'),
+      port,
+      providers: [],
+      historyDays: 0,
+      gitEnrichment: false,
+      logLevel: 'silent',
+    });
+    await recovered.stop();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('routes alert transitions to the configured sink when native notifications are enabled', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'salidium-notification-daemon-'));
+    const home = join(root, 'salidium');
+    const pending = join(home, 'spool', 'pending');
+    mkdirSync(pending, { recursive: true });
+    const quarantined = join(pending, 'claude-code_visual.ready.json.processing.oversized');
+    writeFileSync(quarantined, 'metadata-only test fixture');
+    const old = new Date(Date.now() - 2 * 60_000);
+    utimesSync(quarantined, old, old);
+    updateOperationalConfig(home, {
+      alerts: { nativeNotifications: true, queueAgeMinutes: 1 },
+    });
+    const received: LocalAlert[] = [];
+    const controlled = await startDaemon({
+      home,
+      userHome: join(root, 'providers'),
+      port: 0,
+      providers: [],
+      historyDays: 0,
+      gitEnrichment: false,
+      logLevel: 'silent',
+      alertSink: { publish: (alert) => received.push(structuredClone(alert)) },
+    });
+    try {
+      await waitFor(async () => received.find((alert) => alert.kind === 'queue-age'));
+      expect(received).toHaveLength(1);
+      expect(received[0]).toMatchObject({ kind: 'queue-age', state: 'active' });
+    } finally {
+      await controlled.stop();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reschedules health sampling and evaluates changed alert thresholds immediately', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'salidium-live-health-config-'));
+    const home = join(root, 'salidium');
+    const pending = join(home, 'spool', 'pending');
+    mkdirSync(pending, { recursive: true });
+    const queued = join(pending, 'claude-code_visual.ready.json.processing.oversized');
+    writeFileSync(queued, 'metadata-only test fixture');
+    const old = new Date(Date.now() - 2 * 60_000);
+    utimesSync(queued, old, old);
+    updateOperationalConfig(home, {
+      health: { sampleIntervalSeconds: 300 },
+      alerts: { nativeNotifications: true, queueAgeMinutes: 10 },
+    });
+    const received: LocalAlert[] = [];
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+    const controlled = await startDaemon({
+      home,
+      userHome: join(root, 'providers'),
+      port: 0,
+      providers: [],
+      historyDays: 0,
+      gitEnrichment: false,
+      logLevel: 'silent',
+      alertSink: { publish: (alert) => received.push(structuredClone(alert)) },
+    });
+    try {
+      const oldSchedule = setTimeoutSpy.mock.calls.findIndex((call) => call[1] === 300_000);
+      expect(oldSchedule).toBeGreaterThanOrEqual(0);
+      const oldTimer = setTimeoutSpy.mock.results[oldSchedule]?.value;
+
+      const current = (
+        await fetch(`http://127.0.0.1:${controlled.port}/api/operations`, {
+          headers: { Authorization: `Bearer ${controlled.token}` },
+        })
+      ).json() as Promise<OperationsOverview>;
+      const revision = (await current).config.revision;
+      const changed = await fetch(`http://127.0.0.1:${controlled.port}/api/operations/config`, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${controlled.token}`,
+          'Content-Type': 'application/json',
+          'If-Match': String(revision),
+        },
+        body: JSON.stringify({
+          health: { sampleIntervalSeconds: 5 },
+          alerts: { queueAgeMinutes: 1 },
+        }),
+      });
+
+      expect(changed.status).toBe(200);
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(oldTimer);
+      expect(setTimeoutSpy.mock.calls.some((call) => call[1] === 5_000)).toBe(true);
+      await waitFor(async () => received.find((alert) => alert.kind === 'queue-age'));
+      expect(received).toHaveLength(1);
+    } finally {
+      await controlled.stop();
+      setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('serves the versioned operations contract and applies configuration optimistically', async () => {
+    const overviewResponse = await api<OperationsOverview>('/api/operations');
+    expect(overviewResponse.status).toBe(200);
+    const overview = OperationsOverviewSchema.parse(overviewResponse.body);
+    expect(overview.contractVersion).toBe(1);
+    expect(overview.health.queue.availability).toBe('exact');
+    expect(overview.health.store.availability).toBe('exact');
+
+    const changedResponse = await api<EffectiveOperationalConfig>('/api/operations/config', {
+      method: 'PUT',
+      headers: { 'If-Match': String(overview.config.revision) },
+      body: JSON.stringify({ ui: { operationsDetail: 'expanded' } }),
+    });
+    expect(changedResponse.status).toBe(200);
+    const changed = EffectiveOperationalConfigSchema.parse(changedResponse.body);
+    expect(changed.revision).toBe(overview.config.revision + 1);
+    expect(changed.values.ui.operationsDetail).toMatchObject({
+      value: 'expanded',
+      source: 'stored',
+    });
+
+    const stale = await api<{ error: string }>('/api/operations/config', {
+      method: 'PUT',
+      headers: { 'If-Match': String(overview.config.revision) },
+      body: JSON.stringify({ ui: { operationsDetail: 'summary' } }),
+    });
+    expect(stale).toEqual({ status: 409, body: { error: 'configuration changed' } });
+
+    const restoredResponse = await api<EffectiveOperationalConfig>(
+      '/api/operations/config?key=ui.operationsDetail',
+      { method: 'DELETE', headers: { 'If-Match': String(changed.revision) } },
+    );
+    expect(restoredResponse.status).toBe(200);
+    const restored = EffectiveOperationalConfigSchema.parse(restoredResponse.body);
+    expect(restored.values.ui.operationsDetail).toMatchObject({
+      value: 'summary',
+      source: 'default',
+    });
+
+    const queueResponse = await api<QueueInspection>('/api/operations/queue?limit=0');
+    expect(queueResponse.status).toBe(200);
+    const queue = QueueInspectionSchema.parse(queueResponse.body);
+    expect(queue.entries).toEqual([]);
+    expect(queue.entriesTruncated).toBe(queue.totalFiles !== 0);
+  });
+
   it('pauses and resumes both collection paths through the authenticated control', async () => {
     const home = join(tmp, 'collection-control');
     const controlled = await startDaemon({

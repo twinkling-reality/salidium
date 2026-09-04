@@ -16,7 +16,11 @@ import { normalizeProviderTimestamp, type ProviderAdapter } from '@salidium/adap
 import { CanonicalTimestampSchema, type ProviderId } from '@salidium/protocol';
 import type { Logger } from '../logging/logger.ts';
 import type { SessionRegistry } from '../sessions/sessionRegistry.ts';
-import { archiveCollectionGap, COLLECTION_GAP_LEDGER_FILE } from './collectionGaps.ts';
+import {
+  archiveCollectionGap,
+  COLLECTION_GAP_LEDGER_FILE,
+  recordCollectionGap,
+} from './collectionGaps.ts';
 import {
   HOOK_BREAKER_FILE,
   HOOK_SHED_FIRST_FILE,
@@ -88,21 +92,23 @@ export class HookIngress {
   /** Handles one hook payload; returns the number of events accepted. */
   handle(providerId: string, payload: unknown, receivedAt = new Date().toISOString()): number {
     if (!this.collectionEnabled()) return 0;
+    const received = CanonicalTimestampSchema.safeParse(receivedAt);
+    if (!received.success) {
+      this.recordObservedGap('hook-envelope-invalid-timestamp', providerId, null);
+      this.log.warn('hook envelope has a noncanonical receivedAt and was skipped', {
+        provider: providerId,
+      });
+      return 0;
+    }
     if (
       payload !== null &&
       typeof payload === 'object' &&
       (payload as Record<string, unknown>)[TRUNCATED_HOOK_PAYLOAD_KEY] === true
     ) {
+      this.recordObservedGap('hook-payload-truncated', providerId, received.data);
       this.log.warn('hook payload exceeded the relay limit and was skipped', {
         provider: providerId,
         limitBytes: this.maxPayloadBytes,
-      });
-      return 0;
-    }
-    const received = CanonicalTimestampSchema.safeParse(receivedAt);
-    if (!received.success) {
-      this.log.warn('hook envelope has a noncanonical receivedAt and was skipped', {
-        provider: providerId,
       });
       return 0;
     }
@@ -127,7 +133,8 @@ export class HookIngress {
     receivedAt: string,
   ): { accepted: number; sessionId?: string } {
     const adapter = this.adapters.get(providerId as ProviderId);
-    if (!adapter) return { accepted: 0 };
+    if (!adapter)
+      throw new Error(`provider ${providerId} is not enabled; the durable payload was retained`);
     const transcript = adapter.transcriptPathFromHook(payload);
     const events = adapter.parseHookPayload(payload, { receivedAt });
     let accepted = 0;
@@ -187,8 +194,16 @@ export class HookIngress {
         let complete = true;
         try {
           let count = 0;
+          let lineNo = 0;
           for (const item of boundedLines(processing, this.maxSpoolRecordBytes)) {
+            lineNo += 1;
             if (item.oversized) {
+              this.recordObservedGap(
+                'hook-spool-record-oversized',
+                this.providerFromSpoolName(f),
+                null,
+                `legacy-spool-line-${lineNo}`,
+              );
               this.log.warn('oversized hook spool record skipped', {
                 file: f,
                 limitBytes: this.maxSpoolRecordBytes,
@@ -202,6 +217,12 @@ export class HookIngress {
               rec = JSON.parse(line) as typeof rec;
             } catch {
               // A malformed line cannot become valid on retry; preserve the remaining valid lines.
+              this.recordObservedGap(
+                'hook-spool-record-malformed',
+                this.providerFromSpoolName(f),
+                null,
+                `legacy-spool-line-${lineNo}`,
+              );
               continue;
             }
             try {
@@ -213,6 +234,12 @@ export class HookIngress {
                 ? normalizeProviderTimestamp(rec.receivedAt)
                 : new Date().toISOString();
               if (!receivedAt) {
+                this.recordObservedGap(
+                  'hook-envelope-invalid-timestamp',
+                  provider,
+                  null,
+                  `legacy-spool-line-${lineNo}`,
+                );
                 this.log.warn('hook spool envelope has an invalid receivedAt and was skipped', {
                   file: f,
                 });
@@ -338,6 +365,11 @@ export class HookIngress {
         }
         const claimed = statSync(processing);
         if (claimed.size > this.maxPayloadBytes) {
+          this.recordObservedGap(
+            'hook-payload-oversized',
+            this.providerFromPendingName(f),
+            claimed.mtime.toISOString(),
+          );
           const quarantined = `${processing}.oversized`;
           renameSync(processing, quarantined);
           this.log.warn('oversized orphaned hook payload quarantined', {
@@ -353,6 +385,7 @@ export class HookIngress {
           payload = JSON.parse(readFileSync(processing, 'utf8')) as unknown;
         } catch {
           // A truncated/malformed pending file cannot become valid on retry.
+          this.recordObservedGap('hook-payload-malformed', provider, claimed.mtime.toISOString());
           unlinkSync(processing);
           continue;
         }
@@ -411,10 +444,29 @@ export class HookIngress {
     // Current relays encode the one namespacing slash as `~` and use `_` as a separator. Both
     // characters are excluded by ProviderIdSchema, making this reversible without letting one
     // provider id become a path. Keep accepting the old `id-...` form for built-in spool files.
+    const separator = file.indexOf('_');
+    if (separator > 0) return file.slice(0, separator).replaceAll('~', '/');
     for (const id of this.adapters.keys())
       if (file.startsWith(`${id.replaceAll('/', '~')}_`)) return id;
     for (const id of this.adapters.keys()) if (file.startsWith(`${id}-`)) return id;
+    for (const id of ['claude-code', 'codex']) if (file.startsWith(`${id}-`)) return id;
     return file.split('-')[0] ?? 'claude-code';
+  }
+
+  private recordObservedGap(
+    reason: string,
+    provider: string | null,
+    firstDroppedAt: string | null,
+    event: string | null = null,
+  ): void {
+    recordCollectionGap(this.gapLedgerFile, {
+      reason,
+      provider,
+      event,
+      pressure: null,
+      firstDroppedAt,
+      exactCount: null,
+    });
   }
 
   startSpoolWatcher(intervalMs = 5000): void {

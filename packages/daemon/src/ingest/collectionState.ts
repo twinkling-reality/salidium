@@ -117,12 +117,13 @@ export function observeCollectionStatus(args: {
   lastIngestAt?: string;
   daemonReachable: boolean;
   anyHooksConfigured: boolean;
+  queue?: CollectionStatus['queue'];
   now?: Date;
 }): CollectionStatus {
   const now = args.now ?? new Date();
   const pause = readCollectionPause(args.home);
   const pauseMarkerExists = existsSync(join(args.home, HOOK_PAUSE_FILE));
-  const queue = observeQueue(join(args.home, 'spool', 'pending'));
+  const queue = args.queue ?? observeQueue(join(args.home, 'spool', 'pending'));
   const active = [
     HOOK_SHED_FIRST_FILE,
     HOOK_SHED_SECOND_FILE,

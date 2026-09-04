@@ -6,7 +6,11 @@ import { DatabaseSync } from 'node:sqlite';
 import { createInitialState } from '@salidium/core';
 import type { StoredEvent } from '@salidium/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { inspectStoreLayout, optimizeStoreLayout } from './optimizeStore.ts';
+import {
+  inspectStoreLayout,
+  optimizeStoreLayout,
+  storeOptimizationRequiredFreeBytes,
+} from './optimizeStore.ts';
 import { MAX_RAW_FINGERPRINT_CONFLICTS, SqliteStore } from './sqliteStore.ts';
 
 let directory: string;
@@ -93,6 +97,14 @@ function seedLegacyStore(): StoredEvent[] {
 }
 
 describe('offline storage layout optimization', () => {
+  it('preflights a multi-gigabyte store from byte metadata without allocating its contents', () => {
+    const fiveGiB = 5 * 1024 * 1024 * 1024;
+    expect(storeOptimizationRequiredFreeBytes(fiveGiB)).toBe(fiveGiB * 1.1);
+    expect(() => storeOptimizationRequiredFreeBytes(Number.MAX_SAFE_INTEGER + 1)).toThrow(
+      /safe integer/,
+    );
+  });
+
   it('streams encoded rows under fixed row and byte transaction ceilings', () => {
     const source = readFileSync(join(import.meta.dirname, 'optimizeStore.ts'), 'utf8');
     expect(source).toContain(

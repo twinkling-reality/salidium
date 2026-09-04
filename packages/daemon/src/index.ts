@@ -23,6 +23,15 @@ export type {
   ExplainerStatus,
 } from './enrich/explainerBackends.ts';
 export { getExplainerStatus } from './enrich/explainerBackends.ts';
+export type {
+  CodexHookTrust,
+  CodexHookTrustInspection,
+} from './ingest/codexHookTrust.ts';
+export {
+  inspectCodexHookTrust,
+  MAX_CODEX_HOOK_TRUST_OUTPUT_BYTES,
+  summarizeCodexHookTrustResponse,
+} from './ingest/codexHookTrust.ts';
 export type { CollectionPause } from './ingest/collectionState.ts';
 export {
   expireCollectionPause,
@@ -43,6 +52,74 @@ export {
   DEFAULT_LOG_MAX_BYTES,
   rotateLogFile,
 } from './logging/logger.ts';
+export type { AlertSink } from './operations/alerts.ts';
+export {
+  acknowledgeLocalAlert,
+  evaluateLocalAlerts,
+  NoopAlertSink,
+  readLocalAlerts,
+} from './operations/alerts.ts';
+export type {
+  OperationalConfigBackend,
+  OperationalConfigKey,
+  OperationalConfigRead,
+} from './operations/configuration.ts';
+export {
+  createFileOperationalConfigBackend,
+  DEFAULT_OPERATIONAL_CONFIG,
+  isOperationalConfigKey,
+  migrateOperationalConfig,
+  migrateRetentionPolicy,
+  OPERATIONAL_CONFIG_KEYS,
+  operationalConfigPaths,
+  readOperationalConfig,
+  resetOperationalConfig,
+  resolveOperationalConfig,
+  setOperationalConfigValue,
+  updateOperationalConfig,
+} from './operations/configuration.ts';
+export type {
+  DiagnosticBundleInput,
+  DiagnosticBundleResult,
+  DiagnosticRedaction,
+} from './operations/diagnostics.ts';
+export {
+  createDiagnosticBundle,
+  diagnosticManifest,
+  MAX_DIAGNOSTIC_LOG_BYTES,
+  redactDiagnosticValue,
+} from './operations/diagnostics.ts';
+export {
+  calculateHealthEstimates,
+  collectionStatusFromHealth,
+  createHealthSnapshot,
+  inspectQueue,
+  MAX_HEALTH_SAMPLES,
+  MAX_QUEUE_STATUS_FILES,
+  retainHealthSample,
+  sampleFromSnapshot,
+} from './operations/health.ts';
+export type {
+  MaintenanceLock,
+  QueueDrainResult,
+  StorageOptimizationPreflight,
+} from './operations/maintenance.ts';
+export {
+  acquireMaintenanceLock,
+  maintenancePaths,
+  readMaintenanceState,
+  runQueueDrainMaintenance,
+  runRetentionCompactionMaintenance,
+  runStorageOptimizationMaintenance,
+  storageOptimizationPreflight,
+  transitionMaintenance,
+} from './operations/maintenance.ts';
+export {
+  NativeAlertSink,
+  type NativeNotificationInvocation,
+  type NativeNotificationOptions,
+  resolveNativeNotification,
+} from './operations/nativeNotifications.ts';
 export { effectiveCadence } from './sessions/sessionCoordinator.ts';
 export type {
   StoreLayoutInspection,
@@ -53,6 +130,7 @@ export { inspectStoreLayout, optimizeStoreLayout } from './storage/optimizeStore
 export type {
   AuditMessageRow,
   CheckpointRow,
+  HealthHistorySample,
   RawRecordFingerprint,
   ReingestJob,
   RetentionDays,

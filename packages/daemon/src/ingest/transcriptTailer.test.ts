@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -218,6 +218,39 @@ describe('TranscriptTailer', () => {
     }
     expect(await messages()).toEqual(['line 9']);
     expect(store.reingestJobs()[0]?.attempts).toBe(2);
+  });
+
+  it('keeps an interrupted durable re-ingestion job retryable until the whole file is read', async () => {
+    const records = `${Array.from({ length: 14_000 }, (_, index) =>
+      JSON.stringify({ n: index, padding: 'x'.repeat(100) }),
+    ).join('\n')}\n`;
+    writeFileSync(file, records);
+    store.enqueueReingest({
+      path: file,
+      sessionId: 'claude-code:s1',
+      provider: 'claude-code',
+      byteOffset: Buffer.byteLength(records),
+      lineNo: 14_000,
+    });
+
+    const interrupted = tailer.start(tmp, 0);
+    tailer.stop();
+    await interrupted;
+
+    expect(store.reingestJobs()[0]?.status).toBe('failed');
+    expect(store.getSource(file)?.byteOffset ?? 0).toBeLessThan(statSync(file).size);
+
+    tailer = new TranscriptTailer({
+      adapters: [lineAdapter],
+      registry,
+      store,
+      log: createLogger('silent'),
+    });
+    await tailer.start(tmp, 0);
+
+    expect(store.reingestJobs()[0]?.status).toBe('completed');
+    expect(store.getSource(file)?.byteOffset).toBe(statSync(file).size);
+    expect(store.latestSeq('claude-code:s1')).toBe(13_999);
   });
 
   it('leaves the recovery cursor unchanged when the related flush fails', async () => {

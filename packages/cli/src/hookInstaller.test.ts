@@ -47,7 +47,14 @@ describe('provider hook configuration', () => {
           {
             matcher: 'Bash',
             label: 'keep me',
-            hooks: [{ type: 'command', command: 'other-tool check', timeout: 30 }],
+            hooks: [
+              { type: 'command', command: 'other-tool check', timeout: 30 },
+              {
+                type: 'command',
+                command: "printf 'SALIDIUM_HOOK=1 /.salidium/hooks/'",
+                timeout: 30,
+              },
+            ],
           },
         ],
       },

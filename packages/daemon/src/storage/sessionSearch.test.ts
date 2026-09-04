@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import type { SessionSummary } from '@salidium/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SqliteStore } from './sqliteStore.ts';
@@ -169,5 +170,24 @@ describe('searchSessions', () => {
       'started-only',
       'older',
     ]);
+  });
+
+  it('serves the default page from the internal/activity index without a temporary sort', () => {
+    fill(25);
+    const db = new DatabaseSync(join(dir, 'test.db'), { readOnly: true });
+    try {
+      const plan = db
+        .prepare(`EXPLAIN QUERY PLAN
+          SELECT summary_json FROM sessions
+           WHERE internal = 0
+           ORDER BY activity_at DESC, id DESC
+           LIMIT 500`)
+        .all() as Array<{ detail: string }>;
+      const detail = plan.map((row) => row.detail).join('\n');
+      expect(detail).toContain('sessions_internal_activity');
+      expect(detail).not.toContain('USE TEMP B-TREE');
+    } finally {
+      db.close();
+    }
   });
 });

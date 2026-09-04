@@ -14,6 +14,7 @@ import type { CanonicalEvent } from '@salidium/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createLogger } from '../logging/logger.ts';
 import type { SessionRegistry } from '../sessions/sessionRegistry.ts';
+import { readCollectionGapLedger } from './collectionGaps.ts';
 import { HookIngress } from './hookIngress.ts';
 import { MAX_SPOOL_DRAIN_BATCH, TRUNCATED_HOOK_PAYLOAD_KEY } from './limits.ts';
 import type { TranscriptTailer } from './transcriptTailer.ts';
@@ -73,7 +74,7 @@ function fixture(
     log: createLogger('silent'),
     ...limits,
   });
-  return { dir, hooks, seenPayloads, receivedTimes, flushes: () => flushes };
+  return { dir, hooks, adapter, registry, seenPayloads, receivedTimes, flushes: () => flushes };
 }
 
 describe('HookIngress durability and recovery', () => {
@@ -144,6 +145,40 @@ describe('HookIngress durability and recovery', () => {
 
     expect(seenPayloads).toEqual([{ recovered: 'ready' }]);
     expect(existsSync(path)).toBe(false);
+    expect(existsSync(`${path}.processing`)).toBe(false);
+  });
+
+  it('retains a current envelope while its provider is disabled and drains it when re-enabled', () => {
+    const { dir, adapter, registry, seenPayloads } = fixture();
+    const pending = join(dir, 'pending');
+    mkdirSync(pending);
+    const path = join(pending, 'claude-code_1-2-disabled.ready.json');
+    writeFileSync(path, JSON.stringify({ recovered: 'after-enable' }));
+    const disabled = new HookIngress({
+      adapters: [],
+      registry,
+      tailer: { track() {} } as unknown as TranscriptTailer,
+      spoolDir: dir,
+      breakerFile: join(dir, 'hooks-off'),
+      userHome: dir,
+      log: createLogger('silent'),
+    });
+
+    disabled.drainSpool();
+    expect(seenPayloads).toEqual([]);
+    expect(existsSync(`${path}.processing`)).toBe(true);
+
+    const enabled = new HookIngress({
+      adapters: [adapter],
+      registry,
+      tailer: { track() {} } as unknown as TranscriptTailer,
+      spoolDir: dir,
+      breakerFile: join(dir, 'hooks-off'),
+      userHome: dir,
+      log: createLogger('silent'),
+    });
+    enabled.drainSpool();
+    expect(seenPayloads).toEqual([{ recovered: 'after-enable' }]);
     expect(existsSync(`${path}.processing`)).toBe(false);
   });
 
@@ -227,6 +262,9 @@ describe('HookIngress durability and recovery', () => {
     expect(seenPayloads).toEqual([]);
     expect(existsSync(pending)).toBe(false);
     expect(existsSync(`${pending}.processing.oversized`)).toBe(true);
+    expect(readCollectionGapLedger(join(dir, 'collection-gaps.json')).episodes).toMatchObject([
+      { reason: 'hook-payload-oversized', provider: 'claude-code', exactCount: null },
+    ]);
   });
 
   it('streams past an oversized spool record and still recovers the next bounded payload', () => {
@@ -241,11 +279,17 @@ describe('HookIngress durability and recovery', () => {
 
     expect(seenPayloads).toEqual([{ recovered: 'after oversized' }]);
     expect(existsSync(processing)).toBe(false);
+    expect(readCollectionGapLedger(join(dir, 'collection-gaps.json')).episodes).toMatchObject([
+      { reason: 'hook-spool-record-oversized', provider: 'claude-code', exactCount: null },
+    ]);
   });
 
   it('reports the relay truncation marker as skipped instead of passing it to an adapter', () => {
-    const { hooks, seenPayloads } = fixture();
+    const { dir, hooks, seenPayloads } = fixture();
     expect(hooks.handle('claude-code', { [TRUNCATED_HOOK_PAYLOAD_KEY]: true })).toBe(0);
     expect(seenPayloads).toEqual([]);
+    expect(readCollectionGapLedger(join(dir, 'collection-gaps.json')).episodes).toMatchObject([
+      { reason: 'hook-payload-truncated', provider: 'claude-code', exactCount: null },
+    ]);
   });
 });

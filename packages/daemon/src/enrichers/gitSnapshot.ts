@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { resolveTrustedExecutable, trustedPathEntries } from '@salidium/adapter-kit';
 import { type CanonicalEvent, makeEventId, type StoredEvent } from '@salidium/protocol';
 import type { Logger } from '../logging/logger.ts';
 import type { SessionRegistry } from '../sessions/sessionRegistry.ts';
@@ -100,10 +101,17 @@ export class GitSnapshotEnricher {
 
 async function git(cwd: string, args: string[]): Promise<string | undefined> {
   try {
-    const { stdout } = await run('git', ['-C', cwd, ...args], {
+    const trust = { environment: process.env, untrustedRoots: [process.cwd(), cwd] };
+    const command = resolveTrustedExecutable('git', trust);
+    if (!command) return undefined;
+    const { stdout } = await run(command, ['-C', cwd, ...args], {
       timeout: 5000,
       maxBuffer: 4 * 1024 * 1024,
-      env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+      env: {
+        ...process.env,
+        PATH: trustedPathEntries(trust).join(process.platform === 'win32' ? ';' : ':'),
+        GIT_OPTIONAL_LOCKS: '0',
+      },
     });
     return stdout;
   } catch {

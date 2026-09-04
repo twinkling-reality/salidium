@@ -48,6 +48,7 @@ describe('CLI runtime boundaries', () => {
     const launch = resolveBrowserLaunch('http://127.0.0.1:47822/', {
       platform: 'darwin',
       environment: { PATH: [projectBin, systemBin].join(delimiter) },
+      resolveExecutable: (name) => realpathSync(join(systemBin, name)),
     });
     const resolvedSystemBin = realpathSync(systemBin);
     expect(launch?.command).toBe(join(resolvedSystemBin, 'open'));

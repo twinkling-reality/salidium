@@ -36,11 +36,15 @@ export function buildCodexHooks(relayCommand: string): {
 }
 
 export function isSalidiumHook(spec: unknown): boolean {
-  return (
-    typeof spec === 'object' &&
-    spec !== null &&
-    typeof (spec as { command?: unknown }).command === 'string' &&
-    ((spec as { command: string }).command.includes(SALIDIUM_HOOK_MARKER) ||
-      (spec as { command: string }).command.includes(LEGACY_SALIDIUM_HOOK_MARKER))
-  );
+  if (
+    typeof spec !== 'object' ||
+    spec === null ||
+    typeof (spec as { command?: unknown }).command !== 'string'
+  )
+    return false;
+  const command = (spec as { command: string }).command.trim();
+  const current =
+    command.startsWith(`${SALIDIUM_HOOK_MARKER} '`) && /\/hooks\/relay\.sh'(?:\s|$)/.test(command);
+  const legacy = /^(?:\/bin\/sh\s+)?['"]?[^\s'"]*\/\.salidium\/hooks\//.test(command);
+  return current || (command.includes(LEGACY_SALIDIUM_HOOK_MARKER) && legacy);
 }

@@ -1,9 +1,10 @@
 import { delimiter } from 'node:path';
-import { resolveTrustedExecutable, trustedPathEntries } from '@salidium/adapter-kit';
+import { resolveSystemExecutable, trustedPathEntries } from '@salidium/adapter-kit';
 
 export interface RuntimePlatformOptions {
   environment?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
+  resolveExecutable?: typeof resolveSystemExecutable;
 }
 
 /** Rejects bad ports before a detached child is created and its failure becomes asynchronous. */
@@ -34,7 +35,10 @@ export function resolveBrowserLaunch(
   const environment = options.environment ?? process.env;
   const platform = options.platform ?? process.platform;
   const name = platform === 'darwin' ? 'open' : platform === 'win32' ? 'cmd' : 'xdg-open';
-  const command = resolveTrustedExecutable(name, { environment, platform });
+  const command = (options.resolveExecutable ?? resolveSystemExecutable)(name, {
+    environment,
+    platform,
+  });
   if (!command) return undefined;
   const args = platform === 'win32' ? ['/d', '/c', 'start', '', url] : [url];
   const safePath = trustedPathEntries({ environment, platform }).join(

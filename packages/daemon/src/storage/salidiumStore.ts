@@ -80,6 +80,24 @@ export interface SessionSearchResult {
   total: number;
 }
 
+/** Privacy-minimized inputs retained for bounded operational rate calculations. */
+export interface HealthHistorySample {
+  observedAt: string;
+  queueFiles: number | null;
+  queueBytes: number | null;
+  storeBytes: number | null;
+  activeGaps: number;
+  totalGaps: number;
+  daemonState: 'running' | 'unresponsive' | 'stopped';
+  collectionState: 'active' | 'paused';
+  maintenancePhase: string | null;
+}
+
+export interface UsageBackfillProgress {
+  complete: boolean;
+  scannedEvents: number;
+}
+
 /**
  * Internal persistence contract. SQLite remains Salidium's authoritative event store; this seam
  * exists so the daemon core is testable and so future storage work has a versioned boundary
@@ -113,6 +131,7 @@ export interface SalidiumStore {
     limit?: number,
   ): StoredEvent[];
   eventById(sessionId: string, eventId: string): StoredEvent | undefined;
+  existingEventIds(sessionId: string, eventIds: readonly string[]): string[];
   eventIds(sessionId: string): string[];
   latestSeq(sessionId: string): number;
   changesBefore(sessionId: string, beforeSeq: number, limit: number): SemanticChange[];
@@ -122,7 +141,13 @@ export interface SalidiumStore {
   getSession(id: string): SessionSummary | undefined;
   deleteSession(sessionId: string): void;
   usageTotals(internal: boolean): UsageTotals | undefined;
+  /** Optional for injected stores; SQLite reconstructs old usage cooperatively after startup. */
+  usageBackfillProgress?(): UsageBackfillProgress;
+  advanceUsageBackfill?(batchSize?: number): UsageBackfillProgress;
   agentMessagesBySession(): Generator<{ sessionId: string; messages: AuditMessageRow[] }>;
+
+  appendHealthSample(sample: HealthHistorySample, retainAfter: string, maxSamples: number): void;
+  healthSamples(since: string, limit: number): HealthHistorySample[];
 
   recordRawFingerprint(event: CanonicalEvent, origin?: RawRecordFingerprint['origin']): boolean;
   rawFingerprint(

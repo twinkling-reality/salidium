@@ -1,16 +1,9 @@
 import { randomBytes } from 'node:crypto';
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Worker } from 'node:worker_threads';
 import { claudeCodeProvider } from '@salidium/adapter-claude-code';
 import { codexProvider } from '@salidium/adapter-codex';
 import {
@@ -22,11 +15,14 @@ import type { RunState } from '@salidium/core';
 import {
   type CollectionStatus,
   type DaemonInfo,
+  type EffectiveOperationalConfig,
   type ExplainerBackend,
   type ExplainerCadence,
-  ExplainerModelSchema,
   type ExplainerSettings,
   type ExplainerSettingsRequest,
+  type OperationalConfigPatch,
+  type OperationsHealthSnapshot,
+  type OperationsOverview,
   type PersonalizationSettingsRequest,
   PROTOCOL_VERSION,
 } from '@salidium/protocol';
@@ -42,6 +38,7 @@ import { explainWithStatus } from './enrich/explainer.ts';
 import { explainedConfiguration } from './enrich/explainerBackends.ts';
 import { personalizeExplanation } from './enrich/personalizeExplanation.ts';
 import { GitSnapshotEnricher } from './enrichers/gitSnapshot.ts';
+import { type CodexHookTrust, inspectCodexHookTrust } from './ingest/codexHookTrust.ts';
 import {
   expireCollectionPause,
   observeCollectionStatus,
@@ -70,9 +67,27 @@ import {
 } from './ingest/limits.ts';
 import { TranscriptTailer } from './ingest/transcriptTailer.ts';
 import { createLogger } from './logging/logger.ts';
+import {
+  type AlertSink,
+  acknowledgeLocalAlert,
+  evaluateLocalAlerts,
+  readLocalAlerts,
+} from './operations/alerts.ts';
+import {
+  createFileOperationalConfigBackend,
+  DEFAULT_OPERATIONAL_CONFIG,
+  isOperationalConfigKey,
+  readOperationalConfig,
+  updateOperationalConfig,
+} from './operations/configuration.ts';
+import { writePrivateJsonAtomic, writePrivateTextAtomic } from './operations/files.ts';
+import { createHealthSnapshot, inspectQueue, retainHealthSample } from './operations/health.ts';
+import { readMaintenanceState, runQueueDrainMaintenance } from './operations/maintenance.ts';
+import { NativeAlertSink } from './operations/nativeNotifications.ts';
 import { createHttpServer } from './server/httpServer.ts';
 import { effectiveCadence } from './sessions/sessionCoordinator.ts';
 import { SessionRegistry } from './sessions/sessionRegistry.ts';
+import { inspectStoreLayout } from './storage/optimizeStore.ts';
 import type { SalidiumStoreFactory } from './storage/salidiumStore.ts';
 import { createSqliteStore, SCHEMA_VERSION } from './storage/sqliteStore.ts';
 
@@ -84,6 +99,7 @@ export interface DaemonHandle {
   hooks: HookIngress;
   tailer: TranscriptTailer;
   collectionStatus(): CollectionStatus;
+  operationsSnapshot(): OperationsHealthSnapshot;
   pauseCollection(reason?: 'manual' | 'stop'): CollectionStatus;
   resumeCollection(): CollectionStatus;
   stop(): Promise<void>;
@@ -109,6 +125,8 @@ export type StartDaemonOptions = Partial<DaemonConfig> & {
   providerDescriptors?: readonly ProviderDescriptor[];
   /** Internal persistence seam; SQLite is the production authority and default. */
   storeFactory?: SalidiumStoreFactory;
+  /** Test/embedding seam; the native desktop sink is used when notification policy enables it. */
+  alertSink?: AlertSink;
   /** Test/embedding seam. Production retention sweeps run once per hour. */
   retentionSweepIntervalMs?: number;
   /** Test/fixture seam for the one derivation that reads the wall clock; see `CoordinatorOptions.now`. */
@@ -128,11 +146,11 @@ const VERSION: string = (() => {
 })();
 
 /**
- * The choices that outlive a restart, in `settings.json` beside `daemon.json`.
+ * Compatibility view of the explainer choices that outlive a restart.
  *
- * A separate file from `daemon.json` on purpose: that one is written fresh on every start and is
- * how the CLI and the hook relay find a running daemon, so anything the reader chose would be
- * destroyed by the next `salidium restart`. This one is only ever written when a choice is made.
+ * Operational choices live in the versioned `operations-config.json`, separate from
+ * `daemon.json`: that file is written fresh on every start so the CLI and hook relay can locate a
+ * running daemon. The compatibility type remains for the older explainer API surface.
  *
  * Not in `daemon.json`'s directory config either. `DaemonConfig` is resolved from flags and the
  * environment on each start — it describes how this process was launched, and a stop the reader
@@ -144,81 +162,32 @@ export interface StoredSettings {
   explainerModel: string | null;
 }
 
-/** Safe until the reader explicitly enables optional model calls. */
-const DEFAULT_SETTINGS: StoredSettings = {
-  explainerCadence: 'off',
-  explainerBackend: 'auto',
-  explainerModel: null,
-};
-
-function settingsPath(home: string): string {
-  return join(home, 'settings.json');
-}
-
 /**
- * Reads the stored choices. A missing file gets the shipped default; an existing invalid file
- * fails closed so corruption can never silently resume optional provider calls.
- *
- * A settings file that cannot be parsed must not stop the daemon: it holds preferences, and the
- * product is complete without them. It is validated field by field rather than trusted, because a
- * cadence of `"maybe"` would otherwise reach the coordinator as one.
+ * Compatibility projection for callers that predate the versioned operational configuration.
+ * The legacy settings file is read only by the migration in `readOperationalConfig`; every new
+ * write has one authority and a recoverable previous copy.
  */
 export function readSettings(home: string, onInvalid?: (reason: string) => void): StoredSettings {
-  const path = settingsPath(home);
-  if (!existsSync(path)) return { ...DEFAULT_SETTINGS };
-  try {
-    const raw: unknown = JSON.parse(readFileSync(path, 'utf8'));
-    const candidate = raw as {
-      explainerCadence?: unknown;
-      explainerBackend?: unknown;
-      explainerModel?: unknown;
-    } | null;
-    const cadence = candidate?.explainerCadence;
-    if (cadence !== 'off' && cadence !== 'session' && cadence !== 'turn') {
-      onInvalid?.('explainerCadence is missing or unknown');
-      return { ...DEFAULT_SETTINGS, explainerCadence: 'off' };
-    }
-    const backend = candidate?.explainerBackend ?? 'auto';
-    if (backend !== 'auto' && backend !== 'claude' && backend !== 'codex') {
-      onInvalid?.('explainerBackend is unknown');
-      return { ...DEFAULT_SETTINGS, explainerCadence: 'off' };
-    }
-    const model = candidate?.explainerModel ?? null;
-    const parsedModel =
-      model === null
-        ? { success: true as const, data: null }
-        : ExplainerModelSchema.safeParse(model);
-    if (!parsedModel.success) {
-      onInvalid?.('explainerModel is invalid');
-      return { ...DEFAULT_SETTINGS, explainerCadence: 'off' };
-    }
-    return {
-      explainerCadence: cadence,
-      explainerBackend: backend,
-      explainerModel: parsedModel.data,
-    };
-  } catch (err) {
-    onInvalid?.(err instanceof Error ? err.message : String(err));
-  }
-  return { ...DEFAULT_SETTINGS, explainerCadence: 'off' };
+  const read = readOperationalConfig(home, { migrate: true });
+  if (read.warning) onInvalid?.(read.warning);
+  return {
+    explainerCadence:
+      read.stored.settings.explainer?.cadence ?? DEFAULT_OPERATIONAL_CONFIG.explainer.cadence,
+    explainerBackend:
+      read.stored.settings.explainer?.backend ?? DEFAULT_OPERATIONAL_CONFIG.explainer.backend,
+    explainerModel:
+      read.stored.settings.explainer?.model ?? DEFAULT_OPERATIONAL_CONFIG.explainer.model,
+  };
 }
 
 export function writeSettings(home: string, settings: StoredSettings): void {
-  mkdirSync(home, { recursive: true, mode: 0o700 });
-  const path = settingsPath(home);
-  const temporary = join(home, `.settings-${process.pid}-${randomBytes(6).toString('hex')}.tmp`);
-  try {
-    writeFileSync(temporary, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
-    chmodSync(temporary, 0o600);
-    renameSync(temporary, path);
-  } catch (err) {
-    try {
-      unlinkSync(temporary);
-    } catch {
-      /* never hide the original write/replace error */
-    }
-    throw err;
-  }
+  updateOperationalConfig(home, {
+    explainer: {
+      cadence: settings.explainerCadence,
+      backend: settings.explainerBackend,
+      model: settings.explainerModel,
+    },
+  });
 }
 
 export function readDaemonJson(home: string): DaemonJson | undefined {
@@ -255,7 +224,16 @@ export function defaultUiDist(): string | undefined {
 
 export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<DaemonHandle> {
   const runtimeVersion = overrides.version ?? VERSION;
-  const config = resolveDaemonConfig(overrides);
+  const bootstrap = resolveDaemonConfig(overrides);
+  const configBackend = createFileOperationalConfigBackend(bootstrap.home);
+  const launchOperations = configBackend.resolve({ migrate: true });
+  const config = resolveDaemonConfig({
+    ...overrides,
+    home: bootstrap.home,
+    historyDays: overrides.historyDays ?? launchOperations.values.history.days.value,
+    gitEnrichment: overrides.gitEnrichment ?? launchOperations.values.git.enabled.value,
+    providers: overrides.providers ?? launchOperations.values.providers.enabled.value,
+  });
   const paths = daemonPaths(config.home);
   mkdirSync(config.home, { recursive: true, mode: 0o700 });
   mkdirSync(paths.spoolDir, { recursive: true, mode: 0o700 });
@@ -266,12 +244,41 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
   chmodSync(paths.spoolDir, 0o700);
   chmodSync(paths.hooksDir, 0o700);
   const log = createLogger(config.logLevel, process.env.SALIDIUM_LOG_FILE ?? undefined);
+  const alertSink =
+    overrides.alertSink ??
+    new NativeAlertSink({
+      onError: (error) =>
+        log.warn('native notification could not be delivered', { err: String(error) }),
+    });
   const providerRegistry = new ProviderRegistry(
     overrides.providerDescriptors ?? BUILT_IN_PROVIDERS,
   );
   const adapters = providerRegistry.adaptersFor(config.providers);
 
   const store = (overrides.storeFactory ?? createSqliteStore)(paths.db);
+  const persistedOperations = configBackend.read({ migrate: true });
+  if (
+    persistedOperations.stored.settings.retention?.days === undefined &&
+    store.retentionPolicy() !== DEFAULT_OPERATIONAL_CONFIG.retention.days
+  )
+    configBackend.migrateRetention(store.retentionPolicy());
+  const operationalConfig = (): EffectiveOperationalConfig => {
+    const effective = configBackend.resolve({
+      migrate: true,
+      retentionFallback: store.retentionPolicy(),
+    });
+    const restartRequired: string[] = [];
+    if (effective.values.history.days.value !== config.historyDays)
+      restartRequired.push('history.days');
+    if (effective.values.git.enabled.value !== config.gitEnrichment)
+      restartRequired.push('git.enabled');
+    if (effective.values.providers.enabled.value.join('\0') !== config.providers.join('\0'))
+      restartRequired.push('providers.enabled');
+    return { ...effective, restartRequired };
+  };
+  const initiallyEffective = operationalConfig();
+  if (store.retentionPolicy() !== initiallyEffective.values.retention.days.value)
+    store.setRetentionPolicy(initiallyEffective.values.retention.days.value);
   /*
    * The stop is read once, here, and the environment is folded into it once, here. Everything
    * downstream is handed a single answer to "when does the explainer run", so there is no second
@@ -318,6 +325,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
       activeModel: active.model ?? null,
       availableBackends: active.availableBackends,
       routes: active.routes,
+      usageStatus: store.usageBackfillProgress?.().complete === false ? 'preparing' : 'ready',
       ...(usage ? { usage } : {}),
     };
   };
@@ -343,6 +351,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
   const descriptorsById = new Map(
     providerRegistry.list().map((descriptor) => [descriptor.adapter.id, descriptor] as const),
   );
+  let codexHookTrust: CodexHookTrust = 'unknown';
   const hookInspections = (): HookConfigurationInspection[] =>
     adapters.flatMap((adapter) =>
       adapter.id === 'claude-code' || adapter.id === 'codex'
@@ -365,7 +374,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
         displayName: descriptorsById.get(a.id)?.displayName ?? a.id,
         hooksInstalled: inspection?.status === 'configured',
         ...(inspection ? { hookStatus: inspection.status } : {}),
-        hookTrust: a.id === 'codex' ? 'unknown' : 'not-applicable',
+        hookTrust: a.id === 'codex' ? codexHookTrust : 'not-applicable',
         sourcesWatched: tailer.countForProvider(a.id),
       };
     }),
@@ -396,6 +405,84 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     return collectionStatus();
   };
 
+  const storeLayout = inspectStoreLayout(paths.db);
+  const operationsSnapshot = (): OperationsHealthSnapshot => {
+    const effective = operationalConfig();
+    const now = new Date();
+    const queue = inspectQueue(config.home, { entryLimit: 1, now });
+    const cutoff = new Date(
+      now.getTime() - effective.values.health.historyMinutes.value * 60_000,
+    ).toISOString();
+    const sampleLimit = Math.min(
+      Math.ceil(
+        (effective.values.health.historyMinutes.value * 60) /
+          effective.values.health.sampleIntervalSeconds.value,
+      ) + 1,
+      17_280,
+    );
+    const daemonInfo = info();
+    const latest = registry.listSessions()[0];
+    const collection = observeCollectionStatus({
+      home: config.home,
+      retention: store.retentionPolicy(),
+      lastIngestAt: latest?.lastEventAt ?? latest?.startedAt,
+      daemonReachable: true,
+      anyHooksConfigured: daemonInfo.providers.some(
+        (provider) => provider.hookStatus && provider.hookStatus !== 'not-configured',
+      ),
+      queue: {
+        files: queue.totalFiles ?? 0,
+        bytes: queue.totalBytes ?? 0,
+        oldestAt: queue.entries[0]?.queuedAt ?? null,
+      },
+      now,
+    });
+    return createHealthSnapshot({
+      home: config.home,
+      queue,
+      collection,
+      daemon: {
+        state: 'running',
+        pid: process.pid,
+        startedAt,
+        version: runtimeVersion,
+      },
+      hooks: daemonInfo.providers.map((provider) => ({
+        id: provider.id,
+        name: provider.displayName ?? provider.id,
+        detected: true,
+        configuration: provider.hookStatus ?? 'unavailable',
+        trust: provider.hookTrust ?? 'unknown',
+      })),
+      maintenance: readMaintenanceState(config.home, now),
+      config: effective,
+      history: store.healthSamples(cutoff, sampleLimit),
+      schemaVersion: storeLayout.schemaVersion,
+      layoutVersion: storeLayout.layoutVersion,
+      now,
+    });
+  };
+  const operationsOverview = (): OperationsOverview => ({
+    contractVersion: 1,
+    config: operationalConfig(),
+    health: operationsSnapshot(),
+    alerts: readLocalAlerts(config.home),
+  });
+  let refreshHealthSampling: (() => void) | undefined;
+  const applyOperationalConfig = (): EffectiveOperationalConfig => {
+    const effective = operationalConfig();
+    if (store.retentionPolicy() !== effective.values.retention.days.value)
+      store.setRetentionPolicy(effective.values.retention.days.value);
+    const nextSettings = readSettings(config.home);
+    Object.assign(stored, nextSettings);
+    registry.setExplainerCadence(effectiveCadence(stored.explainerCadence));
+    // A timer already waiting on the old cadence cannot observe a shorter live interval until it
+    // fires. Replace it after every successful config write and evaluate once now so newly lowered
+    // alert thresholds are effective in this response cycle rather than one old interval later.
+    refreshHealthSampling?.();
+    return effective;
+  };
+
   let port = config.port;
   const server = createHttpServer({
     registry,
@@ -415,6 +502,30 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
         disconnectBuiltInHooks(provider, config.userHome);
         return collectionStatus();
       },
+    },
+    operations: {
+      overview: operationsOverview,
+      setConfig: (patch: OperationalConfigPatch, expectedRevision: number | undefined) => {
+        configBackend.update(patch, { expectedRevision });
+        return applyOperationalConfig();
+      },
+      resetConfig: (key: string | undefined, expectedRevision: number | undefined) => {
+        const validatedKey =
+          key === undefined
+            ? undefined
+            : isOperationalConfigKey(key)
+              ? key
+              : (() => {
+                  throw new Error(`unknown configuration key: ${key}`);
+                })();
+        configBackend.reset(validatedKey, { expectedRevision });
+        return applyOperationalConfig();
+      },
+      inspectQueue: (limit: number) => {
+        return inspectQueue(config.home, { entryLimit: limit });
+      },
+      drainQueue: () => runQueueDrainMaintenance(config.home, () => hooks.drainSpool()),
+      acknowledgeAlert: (id: string) => acknowledgeLocalAlert(config.home, id),
     },
     settings: {
       explainer: explainerSettings,
@@ -489,101 +600,25 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     },
     log,
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(config.port, '127.0.0.1', () => {
-      server.off('error', reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  port = typeof address === 'object' && address ? address.port : config.port;
-  writeRelayScript(paths.hooksDir, config.home);
-  const daemonJson: DaemonJson = {
-    pid: process.pid,
-    port,
-    token,
-    startedAt,
-    version: runtimeVersion,
-    protocolVersion: PROTOCOL_VERSION,
-    storeSchemaVersion: SCHEMA_VERSION,
-  };
-  if (config.gitEnrichment) git.start();
-  // Recover the spool before publishing daemon.json, not after. The file is what both the CLI's
-  // readiness probe and every relay treat as "there is a daemon here", and the first drain is the
-  // one moment a fresh daemon is busiest: announcing first meant a backlog could make `salidium
-  // start` report that the daemon had not started while it was in fact reading, which invites a
-  // retry that opens a second writer on the store.
-  hooks.startSpoolWatcher();
-  writeFileSync(paths.daemonJson, JSON.stringify(daemonJson, null, 2), { mode: 0o600 });
-  chmodSync(paths.daemonJson, 0o600);
-  const initialBackfill = tailer.start(config.userHome, config.historyDays);
-  log.info('salidium daemon listening', {
-    port,
-    home: config.home,
-    providers: adapters.map((a) => a.id),
-  });
-
-  // Retention is deliberately opt-in and session-granular. Run the first bounded pass only after
-  // startup discovery has loaded every currently active transcript. The registry, rather than the
-  // store directly, excludes all loaded coordinators and broadcasts removals to connected clients.
-  const retentionSweepIntervalMs =
-    overrides.retentionSweepIntervalMs ?? DEFAULT_RETENTION_SWEEP_INTERVAL_MS;
-  const retentionEnabled = store.retentionPolicy() !== 'forever';
   let stopped = false;
-  const applyRetention = () => {
-    if (stopped || !retentionEnabled) return;
-    try {
-      const removed = registry.applyRetention();
-      if (removed.sessions.length > 0) {
-        log.info('retention sweep removed inactive sessions', {
-          policy: removed.policy,
-          sessions: removed.sessions.length,
-          events: removed.eventCount,
-          bytes: removed.bytes,
-        });
-      }
-    } catch (err) {
-      log.warn('retention sweep failed; will retry', { err: String(err) });
-    }
-  };
-  void initialBackfill.then(applyRetention).catch((err) => {
-    if (!stopped) log.warn('initial backfill failed; retention deferred', { err: String(err) });
-  });
-  const retentionTimer = retentionEnabled
-    ? setInterval(applyRetention, retentionSweepIntervalMs)
-    : undefined;
-  retentionTimer?.unref();
-
-  const reconcileCollectionPause = () => {
-    const markerExists = existsSync(join(config.home, HOOK_PAUSE_FILE));
-    if (collectionPaused && markerExists && expireCollectionPause(config.home)) {
-      collectionPaused = false;
-      tailer.resume();
-      hooks.drainSpool();
-      log.info('collection pause expired');
-      return;
-    }
-    if (collectionPaused && !markerExists) {
-      collectionPaused = false;
-      tailer.resume();
-      hooks.drainSpool();
-      log.info('collection resumed');
-    } else if (!collectionPaused && markerExists) {
-      collectionPaused = true;
-      tailer.pause();
-      log.info('collection paused', { expiresAt: readCollectionPause(config.home)?.expiresAt });
-    }
-  };
-  const collectionControlTimer = setInterval(reconcileCollectionPause, 1000);
-  collectionControlTimer.unref();
-
+  let retentionTimer: NodeJS.Timeout | undefined;
+  let usageBackfillWorker: Worker | undefined;
+  let usageBackfillRetryTimer: NodeJS.Timeout | undefined;
+  let healthTimer: NodeJS.Timeout | undefined;
+  let hookTrustTimer: NodeJS.Timeout | undefined;
+  let trustRefreshController: AbortController | undefined;
+  let collectionControlTimer: NodeJS.Timeout | undefined;
   const stop = async () => {
     if (stopped) return;
     stopped = true;
     abortPersonalization();
     if (retentionTimer) clearInterval(retentionTimer);
-    clearInterval(collectionControlTimer);
+    if (usageBackfillRetryTimer) clearTimeout(usageBackfillRetryTimer);
+    if (usageBackfillWorker) void usageBackfillWorker.terminate();
+    if (healthTimer) clearTimeout(healthTimer);
+    if (hookTrustTimer) clearInterval(hookTrustTimer);
+    trustRefreshController?.abort();
+    if (collectionControlTimer) clearInterval(collectionControlTimer);
     tailer.stop();
     hooks.stop();
     git.stop();
@@ -602,18 +637,225 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
       /* ignore */
     }
   };
-  return {
-    config,
-    port,
-    token,
-    registry,
-    hooks,
-    tailer,
-    collectionStatus,
-    pauseCollection: setCollectionPaused,
-    resumeCollection: setCollectionActive,
-    stop,
-  };
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(config.port, '127.0.0.1', () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
+  try {
+    const address = server.address();
+    port = typeof address === 'object' && address ? address.port : config.port;
+    writeRelayScript(paths.hooksDir, config.home);
+    const daemonJson: DaemonJson = {
+      pid: process.pid,
+      port,
+      token,
+      startedAt,
+      version: runtimeVersion,
+      protocolVersion: PROTOCOL_VERSION,
+      storeSchemaVersion: SCHEMA_VERSION,
+    };
+    if (config.gitEnrichment) git.start();
+    // Recover the spool before publishing daemon.json, not after. The file is what both the CLI's
+    // readiness probe and every relay treat as "there is a daemon here", and the first drain is the
+    // one moment a fresh daemon is busiest: announcing first meant a backlog could make `salidium
+    // start` report that the daemon had not started while it was in fact reading, which invites a
+    // retry that opens a second writer on the store.
+    hooks.startSpoolWatcher();
+    writePrivateJsonAtomic(paths.daemonJson, daemonJson);
+    const initialBackfill = tailer.start(config.userHome, config.historyDays);
+    log.info('salidium daemon listening', {
+      port,
+      home: config.home,
+      providers: adapters.map((a) => a.id),
+    });
+
+    // Retention is deliberately opt-in and session-granular. Run the first bounded pass only after
+    // startup discovery has loaded every currently active transcript. The registry, rather than the
+    // store directly, excludes all loaded coordinators and broadcasts removals to connected clients.
+    const retentionSweepIntervalMs =
+      overrides.retentionSweepIntervalMs ?? DEFAULT_RETENTION_SWEEP_INTERVAL_MS;
+    let initialBackfillComplete = false;
+    const applyRetention = () => {
+      if (
+        stopped ||
+        !initialBackfillComplete ||
+        store.usageBackfillProgress?.().complete === false ||
+        store.retentionPolicy() === 'forever'
+      )
+        return;
+      try {
+        const removed = registry.applyRetention();
+        if (removed.sessions.length > 0) {
+          log.info('retention sweep removed inactive sessions', {
+            policy: removed.policy,
+            sessions: removed.sessions.length,
+            events: removed.eventCount,
+            bytes: removed.bytes,
+          });
+        }
+      } catch (err) {
+        log.warn('retention sweep failed; will retry', { err: String(err) });
+      }
+    };
+    void initialBackfill
+      .then(() => {
+        initialBackfillComplete = true;
+        applyRetention();
+      })
+      .catch((err) => {
+        if (!stopped) log.warn('initial backfill failed; retention deferred', { err: String(err) });
+      });
+    retentionTimer = setInterval(applyRetention, retentionSweepIntervalMs);
+    retentionTimer.unref();
+
+    // Schema upgrades never traverse the archive before listen. The same reviewed runtime advances
+    // historical accounting on a separate worker event loop and SQLite connection; a crash resumes
+    // at the durable cursor, while HTTP health and control remain isolated from reconstruction.
+    const startUsageBackfillWorker = () => {
+      if (
+        stopped ||
+        !store.advanceUsageBackfill ||
+        store.usageBackfillProgress?.().complete !== false
+      )
+        return;
+      const runtime = process.argv[1];
+      if (!runtime) {
+        log.warn('historical usage preparation could not locate the running Salidium runtime');
+        return;
+      }
+      const worker = new Worker(resolve(runtime), {
+        argv: ['__usage-backfill', paths.db],
+      });
+      usageBackfillWorker = worker;
+      worker.unref();
+      worker.once('error', (error) =>
+        log.warn('historical usage preparation worker failed', { err: String(error) }),
+      );
+      worker.once('exit', (code) => {
+        if (usageBackfillWorker === worker) usageBackfillWorker = undefined;
+        if (stopped) return;
+        const progress = store.usageBackfillProgress?.();
+        if (code === 0 && progress?.complete) {
+          log.info('historical usage preparation complete', {
+            scannedEvents: progress.scannedEvents,
+          });
+          applyRetention();
+          return;
+        }
+        log.warn('historical usage preparation stopped; will retry', {
+          code,
+          scannedEvents: progress?.scannedEvents ?? 0,
+        });
+        usageBackfillRetryTimer = setTimeout(startUsageBackfillWorker, 1_000);
+        usageBackfillRetryTimer.unref();
+      });
+    };
+    startUsageBackfillWorker();
+
+    const sampleOperations = () => {
+      if (stopped) return;
+      try {
+        const snapshot = operationsSnapshot();
+        const effective = operationalConfig();
+        retainHealthSample(store, snapshot, effective);
+        void evaluateLocalAlerts(config.home, snapshot, effective, {
+          ...(effective.values.alerts.nativeNotifications.value ? { sink: alertSink } : {}),
+        }).catch((error) =>
+          log.warn('local alert evaluation failed; will retry', { err: String(error) }),
+        );
+      } catch (error) {
+        log.warn('health sampling failed; will retry', { err: String(error) });
+      }
+    };
+    const scheduleHealthSample = () => {
+      if (stopped) return;
+      const seconds = operationalConfig().values.health.sampleIntervalSeconds.value;
+      healthTimer = setTimeout(() => {
+        sampleOperations();
+        scheduleHealthSample();
+      }, seconds * 1000);
+      healthTimer.unref();
+    };
+    refreshHealthSampling = () => {
+      if (healthTimer) clearTimeout(healthTimer);
+      sampleOperations();
+      scheduleHealthSample();
+    };
+    refreshHealthSampling();
+
+    // Codex exposes trust through its app protocol rather than its config file. Refresh it on a
+    // fixed, bounded cadence and cache the result so the five-second UI poll never spawns work.
+    let trustRefreshInFlight = false;
+    const refreshCodexHookTrust = () => {
+      if (stopped || trustRefreshInFlight || !adapters.some((adapter) => adapter.id === 'codex'))
+        return;
+      trustRefreshInFlight = true;
+      const controller = new AbortController();
+      trustRefreshController = controller;
+      void inspectCodexHookTrust(
+        process.cwd(),
+        process.env,
+        3_000,
+        controller.signal,
+        runtimeVersion,
+      )
+        .then((result) => {
+          const changed = result.trust !== codexHookTrust;
+          codexHookTrust = result.trust;
+          if (changed) sampleOperations();
+        })
+        .catch((error) => log.warn('Codex hook trust inspection failed', { err: String(error) }))
+        .finally(() => {
+          trustRefreshInFlight = false;
+          if (trustRefreshController === controller) trustRefreshController = undefined;
+        });
+    };
+    refreshCodexHookTrust();
+    hookTrustTimer = setInterval(refreshCodexHookTrust, 5 * 60_000);
+    hookTrustTimer.unref();
+
+    const reconcileCollectionPause = () => {
+      const markerExists = existsSync(join(config.home, HOOK_PAUSE_FILE));
+      if (collectionPaused && markerExists && expireCollectionPause(config.home)) {
+        collectionPaused = false;
+        tailer.resume();
+        hooks.drainSpool();
+        log.info('collection pause expired');
+        return;
+      }
+      if (collectionPaused && !markerExists) {
+        collectionPaused = false;
+        tailer.resume();
+        hooks.drainSpool();
+        log.info('collection resumed');
+      } else if (!collectionPaused && markerExists) {
+        collectionPaused = true;
+        tailer.pause();
+        log.info('collection paused', { expiresAt: readCollectionPause(config.home)?.expiresAt });
+      }
+    };
+    collectionControlTimer = setInterval(reconcileCollectionPause, 1000);
+    collectionControlTimer.unref();
+    return {
+      config,
+      port,
+      token,
+      registry,
+      hooks,
+      tailer,
+      collectionStatus,
+      operationsSnapshot,
+      pauseCollection: setCollectionPaused,
+      resumeCollection: setCollectionActive,
+      stop,
+    };
+  } catch (error) {
+    await stop();
+    throw error;
+  }
 }
 
 /**
@@ -703,6 +945,44 @@ if [ "$1" = "--send" ]; then
   # Every sender owns one file. Publishing it with a same-directory rename is atomic, so a drain
   # can never observe interleaved or partially-written envelopes from concurrent hooks.
   READY="\${FILE%.json}.ready.json"
+  # Serialize quota observation and publication across concurrent hook processes. Without this
+  # small filesystem lock, many senders can all observe one remaining slot and overrun the hard
+  # physical ceiling. A timed-out contender leaves its plain .json input durable for orphan drain.
+  QUOTA_LOCK="$PENDING/.quota-lock"
+  QUOTA_ATTEMPTS=0
+  while :; do
+    set -C
+    if printf '%s\n' "$$" > "$QUOTA_LOCK" 2>/dev/null; then
+      set +C
+      break
+    fi
+    set +C
+    QUOTA_ATTEMPTS=$((QUOTA_ATTEMPTS + 1))
+    if [ -r "$QUOTA_LOCK" ]; then
+      IFS= read -r LOCK_OWNER < "$QUOTA_LOCK"
+      case "$LOCK_OWNER" in
+        ''|*[!0-9]*) ;;
+        *)
+          if ! kill -0 "$LOCK_OWNER" 2>/dev/null; then
+            rm -f "$QUOTA_LOCK" 2>/dev/null
+          fi;;
+      esac
+      if [ -n "$(find "$QUOTA_LOCK" -mmin +0 -print 2>/dev/null)" ]; then
+        rm -f "$QUOTA_LOCK" 2>/dev/null
+      fi
+    fi
+    [ "$QUOTA_ATTEMPTS" -lt 5000 ] || exit 0
+    sleep 0.01
+  done
+  release_quota_lock() {
+    CURRENT_OWNER=''
+    [ ! -r "$QUOTA_LOCK" ] || IFS= read -r CURRENT_OWNER < "$QUOTA_LOCK"
+    if [ "$CURRENT_OWNER" = "$$" ]; then
+      rm -f "$QUOTA_LOCK" 2>/dev/null
+    fi
+  }
+  trap 'release_quota_lock' EXIT
+  trap 'exit 0' HUP INT TERM
   # Measure the backlog with the shell alone. An earlier version summed every envelope with a
   # wc/tr pair per file, which made the cost of delivering one hook proportional to the queue it
   # was joining: a backlog made each sender slower, which grew the backlog. Globbing into the
@@ -778,7 +1058,6 @@ else
 fi
 exit 0
 `;
-  writeFileSync(path, script, { mode: 0o700 });
-  chmodSync(path, 0o700);
+  writePrivateTextAtomic(path, script, { mode: 0o700 });
   return path;
 }

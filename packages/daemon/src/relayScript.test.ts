@@ -282,8 +282,47 @@ describe('the installed hook relay', () => {
       clearInterval(drain);
       ingress.drainSpool();
 
+      expect(readdirSync(pendingDir)).toEqual([]);
       expect(seen.sort((a, b) => a - b)).toEqual(Array.from({ length: 48 }, (_, i) => i));
       expect(readdirSync(pendingDir).filter((name) => name.includes('.ready.json'))).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('serializes concurrent quota checks so ready envelopes cannot overrun the hard ceiling', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'salidium-relay-quota-'));
+    try {
+      const home = join(root, 'state');
+      const pendingDir = join(home, 'spool', 'pending');
+      const relay = writeRelayScript(join(home, 'hooks'), home, { PATH: '/bin:/usr/bin' });
+      mkdirSync(pendingDir, { recursive: true });
+      for (let index = 0; index < MAX_HOOK_PENDING_FILES - 1; index++)
+        writeFileSync(join(pendingDir, `claude-code-seed-${index}.ready.json`), '{}');
+
+      const senders = Array.from({ length: 48 }, (_, index) => {
+        const file = join(pendingDir, `claude-code-race-${index}.json`);
+        writeFileSync(file, JSON.stringify({ index }));
+        return new Promise<void>((resolve, reject) => {
+          const child = spawn(
+            '/bin/sh',
+            [relay, '--send', 'claude-code', 'Notification', 'retain', file],
+            { env: {} },
+          );
+          child.once('error', reject);
+          child.once('exit', (code) =>
+            code === 0 ? resolve() : reject(new Error(`exit ${code}`)),
+          );
+        });
+      });
+      await Promise.all(senders);
+
+      const entries = readdirSync(pendingDir);
+      expect(entries.filter((name) => name.endsWith('.ready.json'))).toHaveLength(
+        MAX_HOOK_PENDING_FILES,
+      );
+      expect(entries.some((name) => name === '.quota-lock')).toBe(false);
+      expect(existsSync(join(home, HOOK_SHED_RETAIN_FILE))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -443,6 +482,8 @@ describe('the installed hook relay', () => {
       });
       ingress.drainSpool();
       expect(existsSync(join(home, 'hooks-off'))).toBe(true);
+      rmSync(pendingDir, { recursive: true, force: true });
+      mkdirSync(pendingDir);
       ingress.drainSpool();
       expect(existsSync(join(home, 'hooks-off'))).toBe(false);
       expect(existsSync(join(home, HOOK_SHED_RETAIN_FILE))).toBe(false);

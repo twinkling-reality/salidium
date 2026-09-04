@@ -7,6 +7,7 @@ export const PROTOCOL_VERSION = '2';
 export * from './changes.ts';
 export * from './events.ts';
 export * from './ids.ts';
+export * from './operations.ts';
 export * from './provenance.ts';
 export * from './timestamps.ts';
 export * from './wire.ts';
