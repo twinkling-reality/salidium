@@ -3505,6 +3505,27 @@
   color: var(--warn);
 }
 
+/* The one control in this rail that deletes evidence rather than adjusting a setting. It carries
+   the danger colour, not the warning colour, and states what is removed before the button says so. */
+.operations-retention-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  border-left: 2px solid var(--danger);
+  background: var(--danger-soft);
+}
+
+.operations-retention-confirm p {
+  flex: 1 1 100%;
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
 .operations-reset {
   justify-self: start;
 }

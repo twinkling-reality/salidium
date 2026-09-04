@@ -343,6 +343,17 @@ function PolicySettings({ config }: { config: EffectiveOperationalConfig }) {
   const change = (patch: Parameters<typeof save>[0]) => void save(patch).catch(() => {});
   const locked = (source: string) => source === 'environment';
   const busy = pending !== undefined;
+  const retention = config.values.retention.days.value;
+  // Narrowing retention is the one control here that destroys evidence rather than adjusting a
+  // preference: the daemon applies the policy on save and its sweep then removes matching sessions
+  // and their events permanently. It presents as a dropdown, and on Firefox and WebKit a closed
+  // <select> commits on each arrow key, so `Forever` is one keystroke from `30 days`. Hold a
+  // narrowing choice locally and make the person confirm the deletion it causes; widening and
+  // `Forever` delete nothing, so they still save immediately.
+  const [proposedRetention, setProposedRetention] = useState<typeof retention>();
+  const span = (value: typeof retention) =>
+    value === 'forever' ? Number.POSITIVE_INFINITY : value;
+  const narrows = (value: typeof retention) => span(value) < span(retention);
 
   useEffect(() => {
     setOpen(config.values.ui.operationsDetail.value === 'expanded');
@@ -379,18 +390,19 @@ function PolicySettings({ config }: { config: EffectiveOperationalConfig }) {
               <Source {...config.values.retention.days} />
             </span>
             <select
-              value={config.values.retention.days.value}
+              value={proposedRetention ?? retention}
               disabled={busy || locked(config.values.retention.days.source)}
-              onChange={(event) =>
-                change({
-                  retention: {
-                    days:
-                      event.target.value === 'forever'
-                        ? 'forever'
-                        : (Number(event.target.value) as 30 | 90 | 365),
-                  },
-                })
-              }
+              onChange={(event) => {
+                const next =
+                  event.target.value === 'forever'
+                    ? ('forever' as const)
+                    : (Number(event.target.value) as 30 | 90 | 365);
+                if (narrows(next)) setProposedRetention(next);
+                else {
+                  setProposedRetention(undefined);
+                  change({ retention: { days: next } });
+                }
+              }}
             >
               <option value="forever">Forever</option>
               <option value="30">30 days</option>
@@ -398,6 +410,35 @@ function PolicySettings({ config }: { config: EffectiveOperationalConfig }) {
               <option value="365">365 days</option>
             </select>
           </label>
+          {proposedRetention !== undefined && (
+            <div className="operations-retention-confirm" role="alert">
+              <p>
+                Keeping {proposedRetention} days permanently deletes every unpinned session with no
+                activity in the last {proposedRetention} days, and all of its events. This cannot be
+                undone.
+              </p>
+              <button
+                type="button"
+                className="btn is-confirm"
+                disabled={busy}
+                onClick={() => {
+                  const days = proposedRetention;
+                  setProposedRetention(undefined);
+                  change({ retention: { days } });
+                }}
+              >
+                Delete older sessions
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={busy}
+                onClick={() => setProposedRetention(undefined)}
+              >
+                Keep {retentionLabel(retention).toLowerCase()}
+              </button>
+            </div>
+          )}
           <label className="operations-notification">
             <span>
               Native desktop notifications
