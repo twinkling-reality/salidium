@@ -575,6 +575,49 @@ test('the narrow layout uses the same models and usage rail', async ({
   await expectNoA11yViolations(page);
 });
 
+test('ingest and storage reports local cost and controls collection', async ({ page, daemon }) => {
+  await openSalidium(page, daemon);
+  const narrow = page.viewportSize()?.width === 390;
+  if (narrow) {
+    await page.getByRole('button', { name: 'Hide the session list' }).click();
+  }
+
+  await page.getByRole('button', { name: 'Ingest & Storage', exact: true }).click();
+  const ingest = page.getByRole('complementary', { name: 'Ingest & Storage' });
+  await expect(ingest).toBeVisible();
+  await expect(ingest.getByRole('heading', { name: 'Readout' })).toBeVisible();
+  await expect(ingest).toContainText('CollectionActive');
+  await expect(ingest).toContainText('Queued now');
+  await expect(ingest).toContainText('Store now');
+  await expect(ingest).toContainText('Retention');
+  await expect(ingest.getByRole('heading', { name: 'Collection ledger' })).toBeVisible();
+  await expect(ingest).toContainText('No collection gaps observed');
+
+  await ingest.getByRole('button', { name: 'Pause collection' }).click();
+  await expect(ingest.getByRole('button', { name: 'Resume collection' })).toBeVisible();
+  await expect(ingest).toContainText('CollectionPaused');
+  await ingest.getByRole('button', { name: 'Resume collection' }).click();
+  await expect(ingest.getByRole('button', { name: 'Pause collection' })).toBeVisible();
+  await expect(ingest).toContainText('Paused interval');
+  await expect(ingest).toContainText('Hook-only evidence may be absent · count unavailable');
+
+  const layout = await ingest.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      width: Math.round(rect.width),
+      right: Math.round(innerWidth - rect.right),
+      overflow: document.documentElement.scrollWidth - innerWidth,
+    };
+  });
+  expect(layout.width).toBeLessThanOrEqual(narrow ? 390 : 320);
+  expect(layout.right).toBe(0);
+  expect(layout.overflow).toBe(0);
+  await expectNoA11yViolations(page);
+
+  await ingest.getByTitle('Hide Ingest & Storage').click();
+  await expect(ingest).toBeHidden();
+});
+
 test('a compact desktop keeps Personalize visible and its editor inside the report', async ({
   page,
   daemon,

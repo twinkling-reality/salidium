@@ -53,10 +53,17 @@ and built interface it needs.
 
 Provider adapters emit events with deterministic identifiers, exact UTC millisecond timestamps,
 provider provenance, and the smallest useful payload. Explicit RFC 3339 provider offsets are
-normalized at the adapter boundary. A transcript record with a missing or invalid timestamp emits
-only a deterministic ingest warning at the parser's observation time; it is not assigned an epoch
-or neighboring provider time. Examples include session and turn boundaries, agent messages, tool
-calls and results, file edits, verification runs, permissions, and usage reports.
+normalized at the adapter boundary. A canonical record family with a missing or invalid timestamp
+emits only a deterministic ingest warning at the parser's observation time; it is not assigned an
+epoch or neighboring provider time. Valid timestamp-free provider bookkeeping that Salidium does
+not interpret is ignored instead of becoming a permanent warning. Examples include session and turn
+boundaries, agent messages, tool calls and results, file edits, verification runs, permissions, and
+usage reports.
+
+Provider adapter contract version 2 requires a declared hook event budget. Each subscribed event is
+named once, assigned a pressure class, and paired with the fixed and per-tool-call traffic model that
+adapter registration validates. This makes a provider's collection cost reviewable before its hooks
+can run.
 
 Hook and durable-session records use channel-specific identifiers. When both describe the same
 activity, the reducer uses information content first and durable provider records as the tie-break.
@@ -105,9 +112,17 @@ User settings and provider settings are replaced with same-directory temporary f
 renames. Existing invalid explainer settings fail closed so corruption cannot silently resume model
 calls. Missing settings still receive the documented first-run default.
 
-The store rejects a schema created by a newer Salidium version. Older schemas are migrated in one
-offline transaction before hooks or the HTTP listener start; derived checkpoints and change logs are
-replayed when their reducer contract changes.
+The store rejects a schema created by a newer Salidium version. Older logical schemas are migrated
+in one offline transaction before hooks or the HTTP listener start; derived checkpoints and change
+logs are replayed when their reducer contract changes.
+
+New physical stores use 16 KiB pages. `events` is an ordinary rowid table with a unique
+`(session_id, seq)` primary-key index, and JSON payloads at or above 1 KiB use a versioned fast gzip
+BLOB. Checkpoints use binary plaintext or gzip BLOBs while retaining legacy text decoding. An
+existing physical layout is not a startup migration: `salidium storage optimize` creates a separate
+same-directory store, copies every schema-6 table, verifies per-table row counts, logical event and
+checkpoint SHA-256, and SQLite integrity, syncs it, and atomically replaces the old file. A
+hard-linked rollback copy remains until the replacement reopens successfully.
 
 Session retention defaults to `forever`. A user can opt into 30, 90, or 365 days; after startup
 discovery has had time to identify live work, the daemon removes complete inactive sessions in
@@ -115,9 +130,9 @@ bounded hourly batches while preserving source cursors and tombstones so old pro
 resurrect deleted sessions. Currently loaded and pinned sessions are excluded; stored status is not
 trusted as the only liveness signal. Aggregate token usage is rolled forward before automatic
 expiry. `salidium retention compact` performs an integrity-checked offline compaction after a
-free-space preflight; cleanup itself leaves pages available for SQLite to reuse. Large new checkpoints use
-a versioned fast gzip encoding; existing plaintext checkpoints remain readable, and corrupt cache
-rows are discarded in favor of replaying the authoritative event log.
+free-space preflight; cleanup itself leaves pages available for SQLite to reuse. New checkpoints use
+a versioned binary fast gzip encoding; existing plaintext and base64 checkpoints remain readable,
+and corrupt cache rows are discarded in favor of replaying the authoritative event log.
 
 Structured and launcher logs use bounded numbered rotation. Logs contain operational fields rather
 than transcript content.
