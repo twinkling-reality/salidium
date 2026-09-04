@@ -398,9 +398,9 @@ export class HookIngress {
       }
     }
 
-    // One transaction per session in the batch rather than one per envelope. The observed backlog
-    // was 1,677 files across 16 sessions, so this is the difference between 1,677 commits against
-    // a multi-gigabyte store and 16.
+    // One transaction per session in the batch rather than one per envelope. A large backlog
+    // spread across a few sessions is the common shape, so this is the difference between one
+    // commit per queued file and one per session.
     const undurable = new Set<string>();
     for (const sessionId of touched) {
       try {
