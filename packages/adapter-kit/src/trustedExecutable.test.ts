@@ -90,16 +90,24 @@ describe('trusted executable resolution', () => {
     ).toBeUndefined();
   });
 
-  it('rejects group- or world-writable executable directories', () => {
-    const root = temporaryDirectory();
-    const writable = join(root, 'shared-bin');
-    mkdirSync(writable, { mode: 0o777 });
-    chmodSync(writable, 0o777);
-    executable(join(writable, 'git'));
+  // Only a POSIX host states access in the mode bits this rule reads. Windows reports 0o777 for
+  // any writable directory and keeps the real permission in an ACL, so asserting the rule there
+  // would test the fixture's attributes rather than the boundary.
+  it.skipIf(process.platform === 'win32')(
+    'rejects group- or world-writable executable directories',
+    () => {
+      const root = temporaryDirectory();
+      const writable = join(root, 'shared-bin');
+      mkdirSync(writable, { mode: 0o777 });
+      chmodSync(writable, 0o777);
+      executable(join(writable, 'git'));
 
-    expect(trustedPathEntries({ environment: { PATH: writable }, untrustedRoots: [] })).toEqual([]);
-    expect(
-      resolveTrustedExecutable('git', { environment: { PATH: writable }, untrustedRoots: [] }),
-    ).toBeUndefined();
-  });
+      expect(trustedPathEntries({ environment: { PATH: writable }, untrustedRoots: [] })).toEqual(
+        [],
+      );
+      expect(
+        resolveTrustedExecutable('git', { environment: { PATH: writable }, untrustedRoots: [] }),
+      ).toBeUndefined();
+    },
+  );
 });

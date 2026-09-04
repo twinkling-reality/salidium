@@ -47,8 +47,9 @@ function trusted(path: string, platform: NodeJS.Platform, roots: readonly string
  * PATH entries inherited from a package runner can put the current project's binaries first.
  * They are not an installation boundary: a dependency in the repository can supply a same-named
  * executable and receive daemon tokens, prompts, or provider credentials. Keep only absolute,
- * existing directories outside every `node_modules/.bin`. Absolute user paths remain valid even
- * when Salidium was started from the user's home directory.
+ * existing directories outside every `node_modules/.bin` and every untrusted root, and on a POSIX
+ * host only those no other user can write to. Absolute user paths remain valid even when Salidium
+ * was started from the user's home directory.
  */
 export function trustedPathEntries(options: TrustedPathOptions = {}): string[] {
   const environment = options.environment ?? process.env;
@@ -64,7 +65,13 @@ export function trustedPathEntries(options: TrustedPathOptions = {}): string[] {
     if (!trusted(directory, platform, roots)) continue;
     try {
       const metadata = statSync(directory);
-      if (!metadata.isDirectory() || (metadata.mode & 0o022) !== 0) continue;
+      if (!metadata.isDirectory()) continue;
+      // The shared-writable rule reads host permission bits, so it is a fact about the host rather
+      // than about the platform being modelled for path semantics. Windows derives `mode` from the
+      // read-only attribute alone and reports 0o777 for every writable directory, while the access
+      // that actually governs it lives in an ACL these bits cannot express. Applying the rule there
+      // would reject the whole PATH without observing a single permission.
+      if (process.platform !== 'win32' && (metadata.mode & 0o022) !== 0) continue;
     } catch {
       continue;
     }
