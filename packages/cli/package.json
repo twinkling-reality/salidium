@@ -1,9 +1,10 @@
 {
   "name": "salidium",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "files": [
-    "bundle"
+    "bundle",
+    "THIRD_PARTY_NOTICES"
   ],
   "scripts": {
     "build": "tsc --build",

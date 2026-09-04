@@ -7,12 +7,35 @@ The website is separate and neither release workflow deploys it.
 ## Prepare
 
 1. Update the root and CLI versions together and summarize user-visible changes.
-2. Run `pnpm install --frozen-lockfile`, `pnpm audit --audit-level high`, `pnpm lint`, `pnpm build`,
-   and `pnpm test` from a clean checkout.
-3. Inspect `npm pack --dry-run` from `packages/cli`, then install that tarball into a temporary home
-   and exercise `salidium --version`, first run, `doctor`, and `stop`.
-4. Confirm CI has succeeded on the current `main` commit, then create and review a tag named exactly
-   `v<package version>` at that same commit.
+2. From a clean checkout run `pnpm install --frozen-lockfile`, `pnpm audit --audit-level high`,
+   `pnpm lint`, `pnpm typecheck`, `pnpm build`, and `pnpm test`.
+3. Run `pnpm test:e2e:full`. This must exercise the real daemon in Chromium, Firefox, and WebKit;
+   an ordinary push run that covers Chromium alone is not equivalent release evidence.
+4. From `apps/site`, run `npm ci`, `npm audit --audit-level=high`, `npm run lint`, `npm test`, and
+   `npx wrangler deploy --dry-run`. This validates the release documentation without deploying it.
+5. Inspect `npm pack --dry-run` from `packages/cli`, then create the actual tarball once and record
+   its SHA-256. Install that exact file outside the monorepo with scripts disabled and fresh
+   temporary Salidium and provider homes. Exercise `salidium --version`, first run, authenticated
+   and unauthenticated HTTP behavior, `doctor`, the operations CLI, interface assets, and `stop`; do
+   not substitute a workspace command for this test.
+6. Test a fresh home and an upgrade copy independently. Create the upgrade source with the released
+   `salidium@0.3.0`, ingest only synthetic fixtures, and stop it cleanly at schema 6. Open a copy with
+   the exact candidate tarball and verify the transactional schema-8 upgrade, responsive collection
+   and control while **Preparing token history** is shown, correct eventual usage totals, and no
+   missing or duplicate sessions. Interrupt historical usage preparation, restart, and verify that
+   it resumes from its durable cursor. Confirm retention, compaction, and optimization remain blocked
+   until preparation finishes and work normally afterward.
+7. On macOS, install the exact candidate tarball and exercise `service install`, `status`, `disable`,
+   `enable`, update over a 0.3.0 copied runtime, and `uninstall`. Verify the menu-bar readings and
+   actions, a successful deliberate stop that stays stopped, recovery after an unsuccessful exit,
+   separately opt-in native alert and recovery notifications, and preservation of the event store,
+   queue, settings, and reports. Finish with the candidate service healthy and collection active.
+8. Inspect the complete diff and packed file list for credentials, transcripts, databases, logs,
+   provider settings, raw prompts, identifying paths, private measurements, and internal release or
+   account state. Check generated and binary files rather than relying only on text search.
+9. Confirm a manually dispatched full-browser CI run, including the site job, succeeded for the exact
+   current `main` SHA. Do not use an older scheduled run or a Chromium-only push run as the release
+   gate. Then create and review a tag named exactly `v<package version>` at that same commit.
 
 For the first public launch, do not change the existing development repository from private to
 public: deleted historical files and old workflow references can remain retrievable. Preserve and

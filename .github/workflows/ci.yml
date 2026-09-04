@@ -53,7 +53,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/install"
           tar -xzf "$RUNNER_TEMP"/salidium-*.tgz -C "$RUNNER_TEMP/install" --strip-components=1
           cd "$RUNNER_TEMP"
-          node -e "const p=require('$RUNNER_TEMP/install/package.json'); if (p.exports) throw new Error('CLI package must not advertise an import surface'); if (p.bin?.salidium !== 'bundle/salidium.mjs') throw new Error('wrong salidium bin')"
+          node "$GITHUB_WORKSPACE/scripts/verify-cli-package.mjs" "$RUNNER_TEMP/install"
           node "$RUNNER_TEMP/install/bundle/salidium.mjs" help > /dev/null
 
           # Exercise npm's real installed bin shim as well as the unpacked script. The package is a
@@ -158,20 +158,23 @@ jobs:
       # touches an Ubuntu mirror. The nightly run keeps `--with-deps` because it is the one place a
       # genuinely missing library should be caught, and a slow mirror there only delays a cron job.
       #
-      # Engine count is the second lever, not the first. A push to `main` is what the release
-      # workflow reads to decide whether a commit is publishable, so pushes and pull requests run
-      # Chromium and the schedule carries cross-engine coverage.
+      # Engine count is the second lever, not the first. Pushes and pull requests run Chromium;
+      # schedules and the manually dispatched release gate carry cross-engine coverage.
       - name: Choose the browser install
         id: engines
         run: |
           if [ "$GITHUB_EVENT_NAME" = "schedule" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "list=chromium firefox webkit" >> "$GITHUB_OUTPUT"
-            echo "deps=--with-deps" >> "$GITHUB_OUTPUT"
-            echo "full=1" >> "$GITHUB_OUTPUT"
+            {
+              echo "list=chromium firefox webkit"
+              echo "deps=--with-deps"
+              echo "full=1"
+            } >> "$GITHUB_OUTPUT"
           else
-            echo "list=chromium" >> "$GITHUB_OUTPUT"
-            echo "deps=" >> "$GITHUB_OUTPUT"
-            echo "full=" >> "$GITHUB_OUTPUT"
+            {
+              echo "list=chromium"
+              echo "deps="
+              echo "full="
+            } >> "$GITHUB_OUTPUT"
           fi
 
       - name: Install browsers

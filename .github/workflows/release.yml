@@ -93,9 +93,9 @@ jobs:
           successful=$(gh api \
             -H 'Accept: application/vnd.github+json' \
             "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$release_sha&status=success&per_page=20" \
-            --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")] | length')
+            --jq '[.workflow_runs[] | select(.event == "workflow_dispatch")] | length')
           test "$successful" -gt 0 || {
-            echo "No successful main/manual CI run exists for $release_sha"
+            echo "No successful full-engine manual CI run exists for $release_sha"
             exit 1
           }
 
@@ -118,7 +118,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/unpacked"
           tar -xzf "$package" -C "$RUNNER_TEMP/unpacked" --strip-components=1
           npm install --prefix "$RUNNER_TEMP/install" "$package" --ignore-scripts --no-audit --no-fund
-          node -e "const p=require('$RUNNER_TEMP/unpacked/package.json'); if (p.exports) throw new Error('CLI package must not advertise an import surface'); if (p.bin?.salidium !== 'bundle/salidium.mjs') throw new Error('wrong salidium bin')"
+          node "$GITHUB_WORKSPACE/scripts/verify-cli-package.mjs" "$RUNNER_TEMP/unpacked"
           "$RUNNER_TEMP/install/node_modules/.bin/salidium" --version
           "$RUNNER_TEMP/install/node_modules/.bin/salidium" help > /dev/null
 
@@ -146,6 +146,42 @@ jobs:
           printf '%s\n' "$doctor_output" | grep -F "daemon running on $SALIDIUM_PORT"
           "$RUNNER_TEMP/install/node_modules/.bin/salidium" stop
           wait "$daemon_pid"
+          trap - EXIT
+
+          # Exercise the exact candidate against a state directory created by the previous
+          # release. This starts from the tagged 0.3.0 runtime (schema 6), not a hand-built fixture.
+          mkdir -p "$RUNNER_TEMP/v030"
+          git archive v0.3.0 | tar -x -C "$RUNNER_TEMP/v030"
+          pnpm --dir "$RUNNER_TEMP/v030" install --frozen-lockfile
+          pnpm --dir "$RUNNER_TEMP/v030" package
+          export SALIDIUM_HOME="$RUNNER_TEMP/upgrade-home"
+          export SALIDIUM_PORT=47951
+          export SALIDIUM_HISTORY_DAYS=0
+          node "$RUNNER_TEMP/v030/packages/cli/bundle/salidium.mjs" daemon &
+          old_pid=$!
+          trap 'kill "$old_pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 40); do [ -f "$SALIDIUM_HOME/daemon.json" ] && break; sleep 0.5; done
+          node "$RUNNER_TEMP/v030/packages/cli/bundle/salidium.mjs" stop
+          wait "$old_pid"
+          trap - EXIT
+
+          "$RUNNER_TEMP/install/node_modules/.bin/salidium" daemon &
+          upgraded_pid=$!
+          trap 'kill "$upgraded_pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 40); do
+            schema=$(node -e "try { console.log(require(process.env.SALIDIUM_HOME + '/daemon.json').storeSchemaVersion ?? '') } catch {}")
+            [ "$schema" = 8 ] && break
+            sleep 0.5
+          done
+          [ "$schema" = 8 ] || { echo "0.3.0 store did not upgrade to schema 8"; exit 1; }
+          upgraded_status=$("$RUNNER_TEMP/install/node_modules/.bin/salidium" status --json)
+          STATUS_JSON="$upgraded_status" node <<'NODE'
+          const status = JSON.parse(process.env.STATUS_JSON);
+          if (status.operations?.health?.store?.schemaVersion !== 8) throw new Error('upgraded health is not schema 8');
+          if (status.operations?.health?.collection?.state !== 'active') throw new Error('collection is not active after upgrade');
+          NODE
+          "$RUNNER_TEMP/install/node_modules/.bin/salidium" stop
+          wait "$upgraded_pid"
           trap - EXIT
 
       - name: Preserve the verified package for the isolated publisher

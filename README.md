@@ -23,6 +23,15 @@ may contact its provider; the first run asks before enabling them.
 An optional local profile can restate an existing generated Why and How in familiar terms. Saving
 it sends nothing; each personalization call is explicit, ephemeral, and never changes evidence.
 
+Local operations are available through the interface and CLI: queue and storage readings are exact
+when safely observable and explicitly unavailable rather than partial, while health trends remain
+bounded estimates. Both surfaces show durable maintenance progress, transition-based local alerts,
+and versioned policy with source labels. The CLI can also produce a redacted diagnostic bundle, and
+native desktop notifications are separately opt-in. The browser is only a control panel: closing it
+does not stop the local daemon, and CLI status and control remain available without it. On macOS,
+optional always-on mode adds login startup, crash recovery, and a native menu-bar control without
+adding telemetry or a cloud dependency.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="apps/site/public/report-dark.png">
   <img src="apps/site/public/report-light.png" alt="A full report: the verdict, Why drawn as two paths converging on one order charged twice, How drawn as one idempotency key per order, and the approach the agent abandoned beside the one it adopted.">

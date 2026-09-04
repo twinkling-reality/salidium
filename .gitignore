@@ -10,6 +10,7 @@ test-results/
 # Copied in at pack time from the repo root; the tracked copies live there.
 packages/cli/README.md
 packages/cli/LICENSE
+packages/cli/THIRD_PARTY_NOTICES
 packages/cli/bundle/
 
 # Throwaway measurement harnesses run against the real store; not part of the build.

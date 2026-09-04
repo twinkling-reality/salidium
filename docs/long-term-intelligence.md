@@ -64,10 +64,6 @@ Phase 0 implements the released contract candidate and local durable outbox only
 version is pinned by the private repository, this must be described as a protocol alpha, not
 cross-device intelligence.
 
-The public npm registry still returned `E404` for `@salidium/sync-contract` on 2026-09-04. The
-publication and private-consumer gates therefore remain closed; this work does not claim a hosted or
-second-device path exists.
-
 ## Retrieval and lifecycle policy
 
 Future retrieval must first enforce authenticated tenant, current membership, consent epoch, scope,

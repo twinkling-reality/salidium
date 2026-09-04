@@ -81,11 +81,28 @@ const RAW: Array<Omit<Page, "n">> = [
       h("Running it again"),
       list(
         "Run the same command later and it reopens whatever is already running.",
-        "If the CLI is newer than the running daemon, it stops and restarts it.",
+        "If the CLI is newer than an ordinary running daemon, it stops and restarts it. An enabled macOS always-on service uses a stable copied runtime instead; run `salidium service install` to update that copy.",
         "In a terminal that is not interactive it prints the address instead of opening a browser, and without `--yes` it changes no agent settings.",
       ),
       p(
         "`salidium stop` stops the background service but keeps your saved explanation choice. To prevent model calls while keeping local reports live, run `salidium explanations off`. `salidium status` shows both the service and explanation state.",
+      ),
+      h("Without a browser window"),
+      p(
+        "The page is a control panel, not the daemon. Closing it does not stop collection. `salidium open` returns to it, and `salidium status --watch` monitors the daemon, queue, storage, and alerts in a terminal.",
+      ),
+      p(
+        "On macOS, `salidium service install` adds login startup, crash recovery, and a native menu-bar control. The menu shows health, PID, collection, queue, storage, alerts, and maintenance, and can open, start, stop, pause, resume, or drain the queue toward empty for a bounded interval. Queue and storage values are exact when safely observable and say unavailable rather than showing a partial value. A deliberate stop stays stopped; a crash is relaunched. `salidium service disable` turns both login items off, and `salidium service uninstall` removes their copied runtime while keeping reports and settings.",
+      ),
+      note(
+        "The macOS installer compiles its small native helper with Apple's Swift compiler. If it is unavailable, install Xcode Command Line Tools and retry. Native lock-screen notifications remain separately opt-in.",
+      ),
+      h("Upgrading from 0.3.0"),
+      p(
+        "Keep the same Salidium home. The first 0.4.0 daemon start upgrades the version 0.3.0 schema transactionally before it starts listening. It then prepares historical token usage in bounded background batches, so collection, status, stop, and the page remain responsive. Models & Usage says Preparing token history until the exact all-time ledger is ready.",
+      ),
+      p(
+        "Preparation records a durable cursor and resumes after a stop or crash. Retention, compaction, and storage optimization wait or refuse to run until it finishes. If always-on mode is installed, run `salidium service install` after upgrading the package so the copied runtime is updated before restart.",
       ),
     ],
   },
@@ -328,6 +345,9 @@ const RAW: Array<Omit<Page, "n">> = [
         ["Usage", "Exact session tokens and the separate all-time explanation ledger."],
       ]),
       note(
+        "After an upgrade from 0.3.0, the all-time ledger can say Preparing token history while a resumable background worker builds it. No partial token total is presented as exact.",
+      ),
+      note(
         "No figure appears in currency. That would be Salidium's arithmetic over a price table it does not carry, and on a subscription no amount is charged.",
       ),
     ],
@@ -487,6 +507,16 @@ const RAW: Array<Omit<Page, "n">> = [
         "The directories it creates are readable only by you, and it repairs their permissions on every start.",
         "Optional saved personalization terms live separately in `personalization.json`; Delete saved terms removes the file.",
       ),
+      h("Local operations"),
+      p(
+        "Ingest & Storage and `salidium status` read the same versioned local operations state. Queue and store values are exact when safely observable and explicitly unavailable when a bounded scan cannot establish a total. Queue velocity, drain rate, storage growth, and time to empty are labelled estimates and appear only after enough exact samples exist.",
+      ),
+      list(
+        "Local policy records whether each value came from a shipped default, the stored file, or an environment override.",
+        "Alerts cover queue age and growth, storage size, collection gaps, daemon health, maintenance failure, and hook-trust changes. Acknowledgement lasts until recovery.",
+        "Native notifications are separately opt-in because previews may appear on a lock screen. They contain minimized alert metadata, no session content or filesystem paths, and delivery depends on the operating system.",
+        "`salidium doctor --bundle --dry-run` previews a diagnostic manifest. Writing the bundle is a CLI-only action; it excludes raw events, transcripts, prompts, commands and output, tokens, secrets, and identifying paths.",
+      ),
       h("Your repository"),
       p(
         "When a turn ends, when a session starts, and after the agent commits, for a live session inside a git repository, Salidium runs four read-only commands to record where the work sat.",
@@ -530,24 +560,51 @@ const RAW: Array<Omit<Page, "n">> = [
     blocks: [
       terms([
         ["`salidium`", "Start it and open the page. This is what `npx salidium` runs."],
+        ["`salidium start`", "Start the daemon in the background without opening the page."],
+        ["`salidium daemon`", "Run the daemon in the foreground."],
         ["`salidium open`", "Open the page with the current token attached."],
-        ["`salidium status`", "Show the daemon and connection state."],
+        ["`salidium status`", "Show daemon, always-on, collection, queue, storage, maintenance, alert, and gap state. Observations are exact or explicitly unavailable; rates are labelled estimates."],
+        ["`salidium status --watch`", "Continuously refresh local operational state without the browser."],
+        ["`salidium pause`", "Pause every new collection path for up to 24 hours."],
+        ["`salidium resume`", "Resume collection immediately."],
+        ["`salidium restart`", "Restart it and reopen the page. Add `--no-open` to skip the page."],
+        ["`salidium stop`", "Pause new collection, account for queued work, and stop the daemon."],
+        ["`salidium service install`", "On macOS, add login startup, crash recovery, and menu-bar control."],
+        ["`salidium service status`", "Inspect the macOS login service and menu bar."],
+        ["`salidium service enable`", "Re-enable installed macOS always-on mode."],
+        ["`salidium service disable`", "Stop and disable always-on mode without deleting data."],
+        ["`salidium service uninstall`", "Remove only the macOS service files and keep local data."],
+        ["`salidium config show`", "Show every effective policy value and whether it came from defaults, storage, or the environment."],
+        ["`salidium config set KEY VALUE`", "Set one supported local policy value."],
+        ["`salidium config reset [KEY]`", "Reset one stored value or all of them to inheritance."],
+        ["`salidium maintenance status`", "Show durable maintenance completion, failure, or recovery state."],
+        ["`salidium maintenance queue`", "Inspect bounded queue file metadata without reading payloads."],
+        ["`salidium maintenance drain`", "Drain toward empty through bounded daemon passes. Use `--wait=SECONDS` to change the default 30-second interval."],
+        ["`salidium maintenance optimize [--dry-run]`", "Preflight or run coordinated, verified storage optimization."],
+        ["`salidium maintenance acknowledge ALERT_ID`", "Acknowledge one local alert episode until it recovers."],
         ["`salidium explanations`", "Show the active model-call mode, or set `off`, `when-done`, or `each-reply`."],
         ["`salidium doctor`", "Check the local setup and report problems."],
+        ["`salidium doctor --bundle [--dry-run]`", "Preview or write a bounded, redacted local diagnostic bundle."],
         ["`salidium show`", "Print a session as a report in the terminal."],
-        ["`salidium restart`", "Restart it and reopen the page."],
-        ["`salidium stop`", "Stop the local daemon."],
         ["`salidium install-hooks`", "Connect an agent, or reconnect one."],
         ["`salidium uninstall-hooks`", "Disconnect it again."],
         ["`salidium reingest`", "Queue session files to be re-read on the next daemon start. One session, or `--all`, then `salidium restart`."],
         ["`salidium retention`", "Show or set how long sessions are kept."],
+        ["`salidium retention apply`", "Apply one bounded cleanup batch while the daemon is stopped."],
+        ["`salidium retention compact`", "Integrity-check and return reusable SQLite pages to the operating system while stopped."],
+        ["`salidium storage`", "Inspect the event layout and SQLite page size."],
+        ["`salidium storage optimize`", "Alias for coordinated, verified storage optimization."],
         ["`salidium pin`", "Exempt a session from automatic retention."],
         ["`salidium unpin`", "Remove that exemption."],
         ["`salidium forget`", "Delete one session for good. Requires `--yes`."],
         ["`salidium audit-claims`", "Measure the claim classifier against every session in your store."],
+        ["`salidium --version`", "Print the installed version."],
       ]),
       note(
         "`reingest`, `retention`, `pin`, `unpin` and `forget` will not write while Salidium is running. Stop it first; offline maintenance does not rewrite a store under a running daemon.",
+      ),
+      note(
+        "An ordinary command implicitly resumes paused collection. `pause`, `stop`, every `service` command, and coordinated `storage optimize` do not; `resume` changes collection state explicitly.",
       ),
     ],
   },
@@ -593,7 +650,7 @@ const RAW: Array<Omit<Page, "n">> = [
         ],
         [
           "A session read once",
-          "It is not read again, however much the adapter improves, because its cursor still matches. `salidium reingest --all` then `salidium restart` is what recovers it.",
+          "During normal operation it is not read again, however much the adapter improves, because its cursor still matches. `salidium reingest --all` then `salidium restart` is what recovers it. A product upgrade may also queue a bounded repair when the stored evidence contract changes.",
         ],
         [
           "Retention",
@@ -601,7 +658,7 @@ const RAW: Array<Omit<Page, "n">> = [
         ],
         [
           "Ingest problems",
-          "An unreadable transcript record becomes an ingest warning. A dropped hook payload does not: it reaches the daemon log and nothing else.",
+          "An unreadable transcript record becomes an ingest warning. A malformed or oversized hook payload is logged. When relay pressure drops hook evidence, Salidium records a durable collection gap; the exact dropped-event count can be unavailable under concurrent saturation.",
         ],
       ]),
       note(

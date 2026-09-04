@@ -34,16 +34,17 @@ instead of a claim the implementation cannot keep.
    not silently change provider settings or trust state.
 4. The lossless storage redesign applies directly to new stores. Existing stores are rewritten only
    through an explicit offline copy-and-swap operation with free-space preflight, integrity checks,
-   recovery of the original, and measurement against a copy of real data before release. A daemon
-   startup must not turn into an unannounced multi-gigabyte rewrite.
+   recovery of the original, and reproducible verification against representative stores before
+   release. A daemon startup must not turn into an unannounced large rewrite.
 5. Size-based destructive retention is deferred until lossless waste is reclaimed and the product
    can preview what a byte target would actually delete. Database file size is not treated as an
    exact measure of deletable session content.
-6. An ordinary pause is a 24-hour lease. The running daemon clears it when it expires, and any CLI
-   command implicitly resumes collection. The relay keeps the zero-subprocess marker check. If the
-   daemon crashes while paused and no CLI command is run, automatic wall-clock expiry is not
-   guaranteed; the next command must preserve the stopped interval in the collection-gap ledger
-   while it resumes collection.
+6. An ordinary pause is a 24-hour lease. The running daemon clears it when it expires, and an
+   ordinary CLI command implicitly resumes collection. State-preserving lifecycle and offline
+   maintenance commands do not. The relay keeps the zero-subprocess marker check. If the daemon
+   crashes while paused and no ordinary command is run, automatic wall-clock expiry is not
+   guaranteed; the next ordinary command must preserve the stopped interval in the collection-gap
+   ledger while it resumes collection.
 
 ## Consequences
 
@@ -63,20 +64,9 @@ Existing large stores require an explicit maintenance window. Retention deletion
 the first remedy for bytes that can be reclaimed without deleting evidence.
 
 The zero-subprocess paused path is favored over pretending a marker can expire by itself after the
-only process able to clear it has died. Starting or inspecting Salidium clears that stale state.
-
-## Storage verification
-
-The offline rewrite was exercised against a private, read-only backup of the development machine's
-real store on 2026-09-04. It copied 1,017,242 events and 5,604 checkpoints, reduced the database from
-4.90 GiB to 2.21 GiB, matched every table count and the logical SHA-256 over decoded events and
-checkpoints, passed SQLite integrity checks on both stores, and reopened after the atomic swap. The
-scratch copy was deleted after verification; the authoritative store was not rewritten.
-
-The fully paged run completed in about 160 seconds and reached about 808 MiB maximum resident
-memory. Copy and digest iteration have fixed row and decoded-byte ceilings, but synchronous gzip and
-native allocation still make peak memory material on a million-event store. The command therefore
-remains an explicit offline maintenance operation, not a daemon-startup migration.
+only process able to clear it has died. Starting or running an ordinary Salidium command clears that
+stale state; commands whose purpose is to preserve lifecycle state, including service inspection,
+do not implicitly resume collection.
 
 ## Rejected alternatives
 
