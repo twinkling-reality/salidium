@@ -512,7 +512,19 @@ export function optimizeStoreLayout(
     const source = new DatabaseSync(path);
     try {
       source.exec('PRAGMA busy_timeout = 1000; BEGIN IMMEDIATE; ROLLBACK;');
-      source.exec('PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode = DELETE;');
+      source.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+      // Leaving WAL mode is the exclusivity proof, and it has to be read rather than executed.
+      // `BEGIN IMMEDIATE` only shows that nobody held the write lock for that instant; an idle
+      // connection does not block it but does block this. SQLite reports that refusal by
+      // returning the unchanged mode, not by raising, so running this through `exec` would
+      // discard the one answer that matters and unlink a WAL another writer still owns.
+      const mode = source.prepare('PRAGMA journal_mode = DELETE').get() as
+        | { journal_mode?: string }
+        | undefined;
+      if (mode?.journal_mode?.toLowerCase() !== 'delete')
+        throw new Error(
+          'refusing to replace a store that is still open elsewhere; stop Salidium and retry',
+        );
     } finally {
       source.close();
     }
