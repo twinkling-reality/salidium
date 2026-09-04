@@ -116,7 +116,6 @@
 .conn {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
   padding: 3px var(--space-2);
   border-radius: var(--radius-sm);
   font-size: var(--text-xs);
@@ -126,10 +125,17 @@
 }
 
 .conn-mark {
+  display: block;
+  flex: 0 0 6px;
   width: 6px;
   height: 6px;
+  margin-right: var(--space-1);
   border-radius: 50%;
   background: currentColor;
+}
+
+.conn .loading {
+  gap: var(--space-1);
 }
 
 .conn-warn {
@@ -3022,12 +3028,6 @@
   white-space: nowrap;
 }
 
-.mu-loading {
-  margin: var(--space-4) 0;
-  color: var(--text-tertiary);
-  font-size: var(--text-sm);
-}
-
 /* ------------------------------------------------------ ingest and storage */
 
 /*
@@ -3048,8 +3048,53 @@
   border-top: 1px solid var(--border);
 }
 
+.operations-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.operations-section-head > span {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.operations-health {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  text-transform: capitalize;
+}
+
+.operations-health::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+  content: "";
+}
+
+.operations-health.is-attention {
+  color: var(--warn);
+}
+
+.operations-health.is-attention::before {
+  background: var(--warn);
+}
+
+.operations-health.is-critical {
+  color: var(--danger);
+}
+
+.operations-health.is-critical::before {
+  background: var(--danger);
+}
+
 .is-alert,
-.is-load-error {
+.is-load-error,
+.is-action-error {
   margin: 0 0 var(--space-3);
   padding: var(--space-2) var(--space-3);
   border-left: 2px solid var(--warn);
@@ -3058,7 +3103,8 @@
   font-size: var(--text-xs);
 }
 
-.is-load-error {
+.is-load-error,
+.is-action-error {
   margin-top: var(--space-3);
   border-left-color: var(--danger);
   background: var(--danger-soft);
@@ -3087,6 +3133,18 @@
   font-size: var(--text-sm);
 }
 
+.measure-kind {
+  display: block;
+  margin-top: 1px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
 .is-readout dd {
   display: grid;
   gap: 2px;
@@ -3101,6 +3159,144 @@
 .is-readout dd small {
   color: var(--text-tertiary);
   font-family: var(--font-sans);
+}
+
+.operations-velocity {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  padding: var(--space-5) 0 0;
+  border-top: 1px solid var(--border);
+}
+
+/* A restrained trace: direction is encoded by the line, while values stay labelled as estimates. */
+.operations-velocity-line {
+  position: absolute;
+  top: 6px;
+  right: 0;
+  left: 0;
+  height: 9px;
+  background:
+    linear-gradient(174deg, transparent 46%, var(--border-strong) 47% 53%, transparent 54%) 0 0 /
+    25% 100% repeat-x;
+  opacity: 0.72;
+}
+
+.operations-velocity.is-growing .operations-velocity-line {
+  background:
+    linear-gradient(6deg, transparent 46%, var(--warn) 47% 53%, transparent 54%) 0 0 / 25% 100%
+    repeat-x;
+}
+
+.operations-velocity.is-draining .operations-velocity-line {
+  background:
+    linear-gradient(174deg, transparent 46%, var(--ok) 47% 53%, transparent 54%) 0 0 / 25% 100%
+    repeat-x;
+}
+
+.operations-velocity > div {
+  display: grid;
+  min-width: 0;
+}
+
+.operations-velocity strong,
+.operations-velocity small {
+  color: var(--text-tertiary);
+  font-size: 9px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-transform: uppercase;
+}
+
+.operations-velocity span {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.operations-retention-note,
+.operations-control-help,
+.operations-policy-note,
+.operations-restart,
+.operations-runtime-note {
+  margin: var(--space-3) 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.operations-runtime-path {
+  display: block;
+  overflow: hidden;
+  direction: rtl;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operations-runtime-path bdi {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+.operations-runtime-note code {
+  color: var(--text-secondary);
+  font-size: 0.94em;
+}
+
+.operations-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.maintenance-state {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding: var(--space-2) 0;
+  border-top: 1px dashed var(--border-strong);
+  border-bottom: 1px dashed var(--border-strong);
+}
+
+.maintenance-state span {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-transform: capitalize;
+}
+
+.maintenance-state p {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.maintenance-state > div {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.maintenance-state small {
+  overflow-wrap: anywhere;
+  color: var(--danger);
+  font-size: var(--text-xs);
+}
+
+.maintenance-state progress {
+  width: 100%;
+  height: 5px;
+  accent-color: var(--accent);
+}
+
+.maintenance-state.is-failure,
+.maintenance-state.is-recovery {
+  border-color: var(--danger);
 }
 
 .is-control-row {
@@ -3118,6 +3314,203 @@
   color: var(--text-tertiary);
   font-size: var(--text-xs);
   line-height: 1.4;
+}
+
+.operations-alerts {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.operations-alerts li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  padding: var(--space-2) 0 var(--space-2) var(--space-3);
+  border-left: 2px solid var(--warn);
+}
+
+.operations-alerts li.is-critical {
+  border-color: var(--danger);
+}
+
+.operations-alerts li.is-recovered {
+  border-color: var(--ok);
+}
+
+.operations-alerts li > div {
+  display: grid;
+  gap: 1px;
+}
+
+.operations-alerts strong {
+  color: var(--text);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.operations-alerts span,
+.operations-alerts small {
+  overflow-wrap: anywhere;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.operations-alerts small {
+  text-transform: capitalize;
+}
+
+.operations-alerts-subtitle {
+  margin: var(--space-3) 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.operations-alerts.is-recent {
+  margin-top: var(--space-2);
+}
+
+.operations-action-status {
+  margin-top: var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.operations-alerts .btn {
+  align-self: start;
+  height: 28px;
+  font-size: var(--text-xs);
+}
+
+.operations-fold {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: var(--control-h);
+  color: var(--text);
+  text-align: left;
+}
+
+.operations-fold > span:first-child {
+  display: grid;
+}
+
+.operations-fold strong {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.operations-fold small,
+.operations-fold > span:last-child {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.operations-settings {
+  display: grid;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+}
+
+.operations-settings > label {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(96px, 42%);
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.operations-settings > label.operations-notification {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.operations-notification input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.setting-help {
+  color: var(--text-tertiary);
+  line-height: 1.35;
+}
+
+.operations-settings > label > span {
+  display: grid;
+  gap: 1px;
+}
+
+.operations-settings select {
+  width: 100%;
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--text-xs);
+}
+
+.operations-settings select:disabled {
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+}
+
+.setting-source {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: capitalize;
+}
+
+.operations-settings fieldset {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3) 0 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.operations-settings legend {
+  padding: 0 var(--space-2) 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.operations-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.operations-check input {
+  accent-color: var(--accent);
+}
+
+.operations-restart {
+  margin-top: 0;
+  padding: var(--space-2);
+  border-left: 2px solid var(--warn);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.operations-reset {
+  justify-self: start;
+}
+
+.operations-policy-note {
+  margin-top: 0;
 }
 
 .is-providers {
@@ -4637,6 +5030,15 @@ button.cov-cell:hover {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+  line-height: 1.25;
+}
+
+/* A panel can own the placement without inventing another visual loading treatment. */
+.loading.is-block {
+  display: flex;
+  margin: var(--space-4) 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
 }
 /* Takes the colour of the sentence it sits in, like every other mark in the app. */
 .orb {

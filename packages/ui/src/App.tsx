@@ -276,6 +276,7 @@ function FirstRun() {
   const toggleIngest = useAppStore((state) => state.toggleIngest);
   const explainer = useAppStore((state) => state.explainer);
   const explanationMode = activeExplanationMode(explainer);
+  const ingestTriggerRef = useRef<HTMLButtonElement>(null);
   return (
     <div className={`first-run ${statsOpen || ingestOpen ? 'has-inspector' : ''}`}>
       <div className="main-empty first-run-main">
@@ -291,6 +292,9 @@ function FirstRun() {
             icon="storage"
             label="Ingest & Storage"
             on={ingestOpen}
+            controls="ingest-storage-inspector"
+            expanded={ingestOpen}
+            buttonRef={ingestTriggerRef}
             title="Show collection state, queued observations, storage, and loss history"
             onClick={toggleIngest}
           />
@@ -329,7 +333,7 @@ function FirstRun() {
           </div>
         </aside>
       ) : ingestOpen ? (
-        <IngestStorageRail onClose={toggleIngest} />
+        <IngestStorageRail onClose={toggleIngest} returnFocusRef={ingestTriggerRef} />
       ) : null}
     </div>
   );

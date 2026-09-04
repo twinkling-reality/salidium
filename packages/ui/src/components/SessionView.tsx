@@ -82,6 +82,7 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
     'personalized',
   );
   const [personalizerOpen, setPersonalizerOpen] = useState(false);
+  const ingestTriggerRef = useRef<HTMLButtonElement>(null);
   const contentRef = useScrollState<HTMLDivElement>();
   /*
    * The floating scrubber costs the layout no height, so the document has to keep its own last
@@ -371,6 +372,9 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
               icon="storage"
               label="Ingest & Storage"
               on={ingestOpen}
+              controls="ingest-storage-inspector"
+              expanded={ingestOpen}
+              buttonRef={ingestTriggerRef}
               title="Show collection state, queued observations, storage, and loss history"
               onClick={toggleCollection}
             />
@@ -580,7 +584,7 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
           onClose={toggleStats}
         />
       ) : ingestOpen ? (
-        <IngestStorageRail onClose={toggleIngest} />
+        <IngestStorageRail onClose={toggleIngest} returnFocusRef={ingestTriggerRef} />
       ) : historyMode === 'rail' ? (
         <HistoryRail
           changes={live.changes}

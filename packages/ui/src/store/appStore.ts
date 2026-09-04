@@ -5,6 +5,8 @@ import type {
   ExplainerSettings,
   ExplainerSettingsRequest,
   Facet,
+  OperationalConfigPatch,
+  OperationsOverview,
   PersonalizationSettings,
   PersonalizationSettingsRequest,
   PersonalizedExplanation,
@@ -20,6 +22,8 @@ import { ApiClient, clearToken } from '../api/client.ts';
 export const ALL_FACETS: Facet[] = ['status', 'what', 'why', 'how', 'verified', 'left', 'review'];
 
 export type ConnectionStatus = 'connecting' | 'open' | 'reconnecting' | 'closed';
+
+export type OperationsAction = 'collection' | 'policy' | 'reset' | 'drain' | 'alert' | 'disconnect';
 
 /** Why a session's snapshot could not be loaded; rendered in place of the session. */
 export interface LiveError {
@@ -203,10 +207,16 @@ interface AppState {
    * and a copy kept here would be the one a second tab disagreed with.
    */
   explainer: ExplainerSettings | undefined;
+  /** One versioned daemon-owned model for health, policy, maintenance, and local alerts. */
+  operations: OperationsOverview | undefined;
   collection: CollectionStatus | undefined;
   collectionInfo: DaemonInfo | undefined;
   collectionLoading: boolean;
   collectionError: string | undefined;
+  /** The one explicit operations mutation in flight; mutations are serialized per tab. */
+  operationsPending: OperationsAction | undefined;
+  /** Mutation failures persist across background health polls until the next explicit action. */
+  operationsActionError: string | undefined;
   /** Daemon-owned and independently deletable; never copied into browser storage. */
   personalization: PersonalizationSettings | undefined;
   personalizationLoading: boolean;
@@ -228,6 +238,10 @@ interface AppState {
   setDetail(detail: Detail): void;
   loadExplainer(): void;
   loadCollection(): void;
+  setOperationalConfig(settings: OperationalConfigPatch): Promise<void>;
+  resetOperationalConfig(key?: string): Promise<void>;
+  drainQueue(): Promise<void>;
+  acknowledgeAlert(id: string): Promise<void>;
   setCollection(action: 'pause' | 'resume'): Promise<void>;
   disconnectHooks(provider: string): Promise<void>;
   loadPersonalization(): void;
@@ -266,6 +280,12 @@ export function byTime(a: SemanticChange, b: SemanticChange): number {
 
 /** Invalidates older profile reads when a write, reconnect, or newer read overtakes them. */
 let personalizationLoadGeneration = 0;
+/** Invalidates older operations reads when a mutation, reconnect, or newer read overtakes them. */
+let operationsLoadGeneration = 0;
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /**
  * Salidium's own enrichment runs are agent sessions too. The daemon filters them, but a session's
@@ -295,6 +315,46 @@ function sortIds(sessions: Record<string, SessionSummary>): string[] {
     .map((s) => s.id);
 }
 
+/** Compatibility view for the few existing collection controls; health itself is not recomputed. */
+function collectionFromOperations(operations: OperationsOverview): CollectionStatus {
+  const health = operations.health;
+  return {
+    observedAt: health.observedAt,
+    state: health.collection.state,
+    pause:
+      health.collection.pausedAt &&
+      health.collection.pauseExpiresAt &&
+      health.collection.pauseReason
+        ? {
+            pausedAt: health.collection.pausedAt,
+            expiresAt: health.collection.pauseExpiresAt,
+            reason: health.collection.pauseReason,
+          }
+        : null,
+    queue: {
+      files: health.queue.files ?? 0,
+      bytes: health.queue.bytes ?? 0,
+      oldestAt: health.queue.oldestAt,
+    },
+    store: {
+      bytes: health.store.totalBytes,
+      retention: health.store.retention,
+      lastIngestAt: health.store.lastIngestAt,
+    },
+    health:
+      health.overall === 'critical'
+        ? 'runaway'
+        : health.overall === 'attention'
+          ? 'attention'
+          : 'healthy',
+    gaps: {
+      active: health.gaps.activeEpisodes,
+      recovered: health.gaps.recoveredEpisodes,
+      omittedEpisodes: health.gaps.omitted,
+    },
+  };
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   api: undefined,
   detail: storedDetail(),
@@ -318,10 +378,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   liveErrors: {},
   rawOpen: undefined,
   explainer: undefined,
+  operations: undefined,
   collection: undefined,
   collectionInfo: undefined,
   collectionLoading: false,
   collectionError: undefined,
+  operationsPending: undefined,
+  operationsActionError: undefined,
   personalization: undefined,
   personalizationLoading: false,
   personalizationLoadError: undefined,
@@ -334,15 +397,19 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setToken: (token) => {
     personalizationLoadGeneration++;
+    operationsLoadGeneration++;
     set({
       api: new ApiClient(token, { onUnauthorized: () => get().unauthorized() }),
       authRejected: false,
       daemonError: undefined,
       personalization: undefined,
+      operations: undefined,
       collection: undefined,
       collectionInfo: undefined,
       collectionLoading: false,
       collectionError: undefined,
+      operationsPending: undefined,
+      operationsActionError: undefined,
       personalizationLoading: false,
       personalizationLoadError: undefined,
       personalized: {},
@@ -351,6 +418,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   unauthorized: () => {
     if (!get().api) return;
     personalizationLoadGeneration++;
+    operationsLoadGeneration++;
     clearToken();
     set({
       api: undefined,
@@ -359,10 +427,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       liveErrors: {},
       rawOpen: undefined,
       explainer: undefined,
+      operations: undefined,
       collection: undefined,
       collectionInfo: undefined,
       collectionLoading: false,
       collectionError: undefined,
+      operationsPending: undefined,
+      operationsActionError: undefined,
       personalization: undefined,
       personalizationLoading: false,
       personalizationLoadError: undefined,
@@ -386,18 +457,27 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   loadCollection: () => {
     const api = get().api;
-    if (!api) return;
-    set({ collectionLoading: true, collectionError: undefined });
-    void Promise.all([api.collectionStatus(), api.info()]).then(
-      ([collection, collectionInfo]) => {
-        if (api !== get().api) return;
-        set({ collection, collectionInfo, collectionLoading: false });
+    // A mutation owns the current revision. Let it finish rather than launching a read that can
+    // capture the pre-mutation snapshot and later paint it over the accepted write.
+    if (!api || get().operationsPending) return;
+    const request = ++operationsLoadGeneration;
+    if (!get().operations) set({ collectionLoading: true, collectionError: undefined });
+    void Promise.all([api.operations(), api.info()]).then(
+      ([operations, collectionInfo]) => {
+        if (request !== operationsLoadGeneration || api !== get().api) return;
+        set({
+          operations,
+          collection: collectionFromOperations(operations),
+          collectionInfo,
+          collectionLoading: false,
+          collectionError: undefined,
+        });
       },
       (error) => {
-        if (api !== get().api) return;
+        if (request !== operationsLoadGeneration || api !== get().api) return;
         set({
           collectionLoading: false,
-          collectionError: error instanceof Error ? error.message : String(error),
+          collectionError: errorMessage(error),
         });
       },
     );
@@ -405,37 +485,133 @@ export const useAppStore = create<AppState>((set, get) => ({
   setCollection: async (action) => {
     const api = get().api;
     if (!api) {
-      set({ collectionError: 'daemon is not connected' });
+      set({ operationsActionError: 'daemon is not connected' });
       return;
     }
-    set({ collectionLoading: true, collectionError: undefined });
+    if (get().operationsPending) throw new Error('another operations action is still running');
+    const request = ++operationsLoadGeneration;
+    set({ operationsPending: 'collection', operationsActionError: undefined });
     try {
       const collection = await api.setCollection(action);
-      if (api === get().api) set({ collection, collectionLoading: false });
+      const operations = await api.operations();
+      if (request === operationsLoadGeneration && api === get().api)
+        set({ collection, operations, operationsPending: undefined });
     } catch (error) {
-      if (api === get().api)
+      if (request === operationsLoadGeneration && api === get().api)
         set({
-          collectionLoading: false,
-          collectionError: error instanceof Error ? error.message : String(error),
+          operationsPending: undefined,
+          operationsActionError: errorMessage(error),
         });
+    }
+  },
+  setOperationalConfig: async (settings) => {
+    const api = get().api;
+    const current = get().operations;
+    if (!api || !current) throw new Error('operational configuration is not loaded');
+    if (get().operationsPending) throw new Error('another operations action is still running');
+    const request = ++operationsLoadGeneration;
+    set({ operationsPending: 'policy', operationsActionError: undefined });
+    try {
+      const config = await api.setOperationalConfig(settings, current.config.revision);
+      if (request === operationsLoadGeneration && api === get().api)
+        set((state) => ({
+          operations: state.operations ? { ...state.operations, config } : state.operations,
+          operationsPending: undefined,
+        }));
+    } catch (error) {
+      if (request === operationsLoadGeneration && api === get().api)
+        set({
+          operationsPending: undefined,
+          operationsActionError: errorMessage(error),
+        });
+      throw error;
+    }
+  },
+  resetOperationalConfig: async (key) => {
+    const api = get().api;
+    const current = get().operations;
+    if (!api || !current) throw new Error('operational configuration is not loaded');
+    if (get().operationsPending) throw new Error('another operations action is still running');
+    const request = ++operationsLoadGeneration;
+    set({ operationsPending: 'reset', operationsActionError: undefined });
+    try {
+      const config = await api.resetOperationalConfig(key, current.config.revision);
+      if (request === operationsLoadGeneration && api === get().api)
+        set((state) => ({
+          operations: state.operations ? { ...state.operations, config } : state.operations,
+          operationsPending: undefined,
+        }));
+    } catch (error) {
+      if (request === operationsLoadGeneration && api === get().api)
+        set({ operationsPending: undefined, operationsActionError: errorMessage(error) });
+      throw error;
+    }
+  },
+  drainQueue: async () => {
+    const api = get().api;
+    if (!api) throw new Error('daemon is not connected');
+    if (get().operationsPending) throw new Error('another operations action is still running');
+    const request = ++operationsLoadGeneration;
+    set({ operationsPending: 'drain', operationsActionError: undefined });
+    try {
+      await api.drainQueue();
+      const operations = await api.operations();
+      if (request === operationsLoadGeneration && api === get().api)
+        set({
+          operations,
+          collection: collectionFromOperations(operations),
+          operationsPending: undefined,
+        });
+    } catch (error) {
+      if (request === operationsLoadGeneration && api === get().api)
+        set({
+          operationsPending: undefined,
+          operationsActionError: errorMessage(error),
+        });
+      throw error;
+    }
+  },
+  acknowledgeAlert: async (id) => {
+    const api = get().api;
+    if (!api || !get().operations) throw new Error('operations are not loaded');
+    if (get().operationsPending) throw new Error('another operations action is still running');
+    const request = ++operationsLoadGeneration;
+    set({ operationsPending: 'alert', operationsActionError: undefined });
+    try {
+      const alerts = await api.acknowledgeAlert(id);
+      if (request === operationsLoadGeneration && api === get().api)
+        set((state) => ({
+          // Merge into the latest overview rather than the snapshot captured before the request.
+          // A newer health/config update must survive an alert acknowledgement.
+          operations: state.operations ? { ...state.operations, alerts } : state.operations,
+          operationsPending: undefined,
+        }));
+    } catch (error) {
+      if (request === operationsLoadGeneration && api === get().api)
+        set({ operationsPending: undefined, operationsActionError: errorMessage(error) });
+      throw error;
     }
   },
   disconnectHooks: async (provider) => {
     const api = get().api;
     if (!api) {
-      set({ collectionError: 'daemon is not connected' });
+      set({ operationsActionError: 'daemon is not connected' });
       return;
     }
-    set({ collectionLoading: true, collectionError: undefined });
+    if (get().operationsPending) throw new Error('another operations action is still running');
+    const request = ++operationsLoadGeneration;
+    set({ operationsPending: 'disconnect', operationsActionError: undefined });
     try {
       const collection = await api.disconnectHooks(provider);
       const collectionInfo = await api.info();
-      if (api === get().api) set({ collection, collectionInfo, collectionLoading: false });
+      const operations = await api.operations();
+      if (request === operationsLoadGeneration && api === get().api)
+        set({ collection, operations, collectionInfo, operationsPending: undefined });
     } catch (error) {
-      if (api === get().api)
+      if (request === operationsLoadGeneration && api === get().api)
         set({
-          collectionLoading: false,
-          collectionError: error instanceof Error ? error.message : String(error),
+          operationsPending: undefined,
+          operationsActionError: errorMessage(error),
         });
     }
   },

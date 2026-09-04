@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from 'react';
 import { activeExplanationCadence, EXPLANATION_MODE_COPY } from '../lib/explanationMode.ts';
 import { isAutomaticModel, modelName } from '../lib/modelName.ts';
 import { useAppStore } from '../store/appStore.ts';
+import { Loading } from './Loading.tsx';
 
 const STOPS: Array<{ value: ExplainerCadence; name: string }> = [
   { value: 'off', name: EXPLANATION_MODE_COPY.off.label },
@@ -105,10 +106,12 @@ function UsageLedger({
   label,
   scope,
   usage,
+  preparing = false,
 }: {
   label: string;
   scope?: string;
   usage?: ExplainerUsage;
+  preparing?: boolean;
 }) {
   return (
     <div className="mu-usage-ledger">
@@ -117,7 +120,15 @@ function UsageLedger({
           {label}
           {scope && <small>{scope}</small>}
         </span>
-        <strong>{usage ? `${usage.messages.toLocaleString()} responses` : 'No token data'}</strong>
+        <strong>
+          {preparing ? (
+            <Loading label="Preparing token history" />
+          ) : usage ? (
+            `${usage.messages.toLocaleString()} responses`
+          ) : (
+            'No token data'
+          )}
+        </strong>
       </div>
       {usage && (
         <dl className="mu-usage-grid">
@@ -167,17 +178,18 @@ export function ExplanationSettings({
   useEffect(() => {
     if (api) loadExplainer();
   }, [api, loadExplainer]);
+  useEffect(() => {
+    if (!api || explainer?.usageStatus !== 'preparing') return;
+    const timer = window.setInterval(() => void loadExplainer(), 2_000);
+    return () => window.clearInterval(timer);
+  }, [api, explainer?.usageStatus, loadExplainer]);
   useEffect(() => setModelDraft(explainer?.model ?? ''), [explainer?.model]);
   useEffect(() => {
     if (showCustomModel) modelFieldRef.current?.focus();
   }, [showCustomModel]);
 
   if (!explainer) {
-    return (
-      <p className="mu-loading" role="status">
-        Loading model settings…
-      </p>
-    );
+    return <Loading label="Loading model settings" block />;
   }
 
   const route =
@@ -448,7 +460,12 @@ export function ExplanationSettings({
         </h3>
         <div className="mu-usage-list">
           {provider && <UsageLedger label="Session" usage={sessionUsage} />}
-          <UsageLedger label="Explanations" scope="all runs" usage={explainer.usage} />
+          <UsageLedger
+            label="Explanations"
+            scope="all runs"
+            usage={explainer.usage}
+            preparing={explainer.usageStatus === 'preparing'}
+          />
         </div>
       </section>
     </div>

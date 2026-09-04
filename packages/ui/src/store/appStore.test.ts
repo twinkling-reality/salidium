@@ -1,4 +1,10 @@
-import type { PersonalizationSettings, PersonalizedExplanation } from '@salidium/protocol';
+import type {
+  EffectiveOperationalConfig,
+  LocalAlertState,
+  OperationsOverview,
+  PersonalizationSettings,
+  PersonalizedExplanation,
+} from '@salidium/protocol';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApiClient } from '../api/client.ts';
 
@@ -32,6 +38,35 @@ const presentation = (revision: string, basedOnSeq: number): PersonalizedExplana
   approachChange: null,
   analogies: { why: null, how: null },
 });
+
+const operationalConfig = (revision: number, queueAgeMinutes: number) =>
+  ({
+    revision,
+    values: {
+      alerts: {
+        queueAgeMinutes: { value: queueAgeMinutes, source: revision ? 'stored' : 'default' },
+      },
+    },
+  }) as unknown as EffectiveOperationalConfig;
+
+const operations = (revision: number, queueAgeMinutes: number): OperationsOverview =>
+  ({
+    config: operationalConfig(revision, queueAgeMinutes),
+    health: {
+      observedAt: `2026-08-24T12:00:0${revision}.000Z`,
+      overall: 'healthy',
+      collection: {
+        state: 'active',
+        pausedAt: null,
+        pauseExpiresAt: null,
+        pauseReason: null,
+      },
+      queue: { files: 0, bytes: 0, oldestAt: null },
+      store: { totalBytes: 0, retention: 'forever', lastIngestAt: null },
+      gaps: { activeEpisodes: [], recoveredEpisodes: [], omitted: 0 },
+    },
+    alerts: { contractVersion: 1, observedAt: '2026-08-24T12:00:00.000Z', active: [], recent: [] },
+  }) as unknown as OperationsOverview;
 
 beforeAll(async () => {
   vi.stubGlobal('localStorage', memoryStorage());
@@ -143,5 +178,75 @@ describe('daemon connection lifecycle', () => {
     useAppStore.getState().setListConnection('connecting');
 
     expect(useAppStore.getState().daemonError).toBeUndefined();
+  });
+});
+
+describe('operations store lifecycle', () => {
+  it('does not let an older health poll overwrite an accepted policy write', async () => {
+    let finishPoll = (_value: OperationsOverview) => undefined;
+    const delayedPoll = new Promise<OperationsOverview>((resolve) => {
+      finishPoll = resolve;
+    });
+    const updated = operationalConfig(1, 30);
+    const api = {
+      operations: () => delayedPoll,
+      info: async () => ({ home: '/tmp/salidium', providers: [] }),
+      setOperationalConfig: async () => updated,
+    } as unknown as ApiClient;
+    useAppStore.setState({ api, operations: operations(0, 10) });
+
+    useAppStore.getState().loadCollection();
+    await useAppStore.getState().setOperationalConfig({ alerts: { queueAgeMinutes: 30 } });
+    finishPoll(operations(0, 10));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useAppStore.getState().operations?.config).toBe(updated);
+    expect(useAppStore.getState().operations?.config.revision).toBe(1);
+    expect(useAppStore.getState().operationsPending).toBeUndefined();
+  });
+
+  it('merges acknowledged alerts into the latest health and configuration snapshot', async () => {
+    let finishAcknowledge = (_value: LocalAlertState) => undefined;
+    const acknowledged = new Promise<LocalAlertState>((resolve) => {
+      finishAcknowledge = resolve;
+    });
+    const api = { acknowledgeAlert: () => acknowledged } as unknown as ApiClient;
+    useAppStore.setState({ api, operations: operations(0, 10) });
+
+    const request = useAppStore.getState().acknowledgeAlert('queue-age');
+    const latest = operations(2, 60);
+    useAppStore.setState({ operations: latest });
+    const alerts: LocalAlertState = {
+      contractVersion: 1,
+      observedAt: '2026-08-24T12:00:03.000Z',
+      active: [],
+      recent: [],
+    };
+    finishAcknowledge(alerts);
+    await request;
+
+    expect(useAppStore.getState().operations?.health).toBe(latest.health);
+    expect(useAppStore.getState().operations?.config).toBe(latest.config);
+    expect(useAppStore.getState().operations?.alerts).toBe(alerts);
+  });
+
+  it('keeps an action failure visible after a successful background refresh', async () => {
+    const api = {
+      acknowledgeAlert: async () => {
+        throw new Error('request failed: 500');
+      },
+      operations: async () => operations(1, 30),
+      info: async () => ({ home: '/tmp/salidium', providers: [] }),
+    } as unknown as ApiClient;
+    useAppStore.setState({ api, operations: operations(0, 10) });
+
+    await expect(useAppStore.getState().acknowledgeAlert('queue-age')).rejects.toThrow(
+      'request failed: 500',
+    );
+    useAppStore.getState().loadCollection();
+    await vi.waitFor(() => expect(useAppStore.getState().operations?.config.revision).toBe(1));
+
+    expect(useAppStore.getState().operationsActionError).toBe('request failed: 500');
   });
 });
