@@ -176,5 +176,5 @@ export interface SalidiumStore {
 
 export type SalidiumStoreFactory = (
   path: string,
-  options?: { readOnly?: boolean },
+  options?: { readOnly?: boolean; pageSize?: number },
 ) => SalidiumStore;

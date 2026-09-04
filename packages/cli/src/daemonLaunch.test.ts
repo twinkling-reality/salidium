@@ -124,6 +124,43 @@ afterEach(() => {
 });
 
 describe('detached daemon launch failures', () => {
+  it('pauses with a lease and any later CLI command resumes collection', () => {
+    const home = temporaryHome();
+    const paused = run(home, ['pause', '--json'], '0');
+    expect(paused.status).toBe(0);
+    expect(JSON.parse(paused.stdout)).toMatchObject({
+      state: 'paused',
+      pause: { reason: 'manual' },
+      queue: { files: 0, bytes: 0 },
+    });
+    expect(existsSync(join(home, 'hooks-paused'))).toBe(true);
+
+    const version = run(home, ['--version'], '0');
+    expect(version.status).toBe(0);
+    expect(existsSync(join(home, 'hooks-paused'))).toBe(false);
+    expect(JSON.parse(readFileSync(join(home, 'collection-gaps.json'), 'utf8'))).toMatchObject({
+      episodes: [{ reason: 'collection-paused', exactCount: null }],
+    });
+  });
+
+  it('reports machine cost as JSON and supports an exit-code-only status', () => {
+    const home = temporaryHome();
+    const json = run(home, ['status', '--json'], '0');
+    expect(json.status).toBe(1);
+    expect(JSON.parse(json.stdout)).toMatchObject({
+      daemon: { presence: 'absent' },
+      collection: {
+        state: 'active',
+        queue: { files: 0, bytes: 0, oldestAt: null },
+        store: { bytes: null, retention: null, lastIngestAt: null },
+      },
+    });
+    const quiet = run(home, ['status', '--quiet'], '0');
+    expect(quiet.status).toBe(1);
+    expect(quiet.stdout).toBe('');
+    expect(quiet.stderr).toBe('');
+  });
+
   it('keeps explanations local by default and changes the persisted setting while stopped', () => {
     const home = temporaryHome();
     const initial = run(home, ['explanations'], '0');
@@ -154,6 +191,35 @@ describe('detached daemon launch failures', () => {
       run(home, ['explanations', 'off'], '0');
       run(home, ['stop'], '0');
     }
+  }, 30_000);
+
+  it('stops collection as well as the daemon and accounts for the saved queue', () => {
+    const home = temporaryHome();
+    expect(start(home, '0').status).toBe(0);
+    const stopped = run(home, ['stop'], '0');
+    expect(stopped.status).toBe(0);
+    expect(stopped.stdout).toMatch(/Collection is paused until/);
+    expect(stopped.stdout).toMatch(/Observed queue at pause: 0 files, 0 B/);
+    expect(existsSync(join(home, 'hooks-paused'))).toBe(true);
+  }, 30_000);
+
+  it('reports the new lossless layout and preserves an existing pause during optimization', () => {
+    const home = temporaryHome();
+    expect(start(home, '0').status).toBe(0);
+    expect(run(home, ['stop'], '0').status).toBe(0);
+    const pause = readFileSync(join(home, 'hooks-paused'), 'utf8');
+
+    const status = run(home, ['storage'], '0');
+    expect(status.status).toBe(0);
+    expect(status.stdout).toMatch(/Layout: Optimized/);
+    // An ordinary status command follows the implicit-resume rule.
+    expect(existsSync(join(home, 'hooks-paused'))).toBe(false);
+
+    writeFileSync(join(home, 'hooks-paused'), pause);
+    const optimized = run(home, ['storage', 'optimize'], '0');
+    expect(optimized.status).toBe(0);
+    expect(optimized.stdout).toMatch(/already optimized/);
+    expect(readFileSync(join(home, 'hooks-paused'), 'utf8')).toBe(pause);
   }, 30_000);
 
   it('prints the installed version without starting the daemon', () => {
@@ -299,6 +365,10 @@ describe('detached daemon launch failures', () => {
       const retention = run(home, ['retention', '30'], '0');
       expect(retention.status).toBe(2);
       expect(retention.stderr).toMatch(/stop Salidium.*offline maintenance/);
+
+      const storage = run(home, ['storage', 'optimize'], '0');
+      expect(storage.status).toBe(2);
+      expect(storage.stderr).toMatch(/stop Salidium.*offline maintenance/);
     } finally {
       await dispose(sleeper);
     }

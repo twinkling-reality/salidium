@@ -18,6 +18,7 @@ import { ConnectionBadge, DOCS, ThemeToggle, ToolButton, ToolLink } from './Cont
 import { HistoryRail } from './HistoryRail.tsx';
 import { HistoryTable } from './HistoryTable.tsx';
 import { Icon } from './Icon.tsx';
+import { IngestStorageRail } from './IngestStorage.tsx';
 import { Loading } from './Loading.tsx';
 import { Panel, type PanelSection } from './Panel.tsx';
 import {
@@ -61,6 +62,8 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const statsOpen = useAppStore((s) => s.statsOpen);
   const toggleStats = useAppStore((s) => s.toggleStats);
+  const ingestOpen = useAppStore((s) => s.ingestOpen);
+  const toggleIngest = useAppStore((s) => s.toggleIngest);
   const explainer = useAppStore((s) => s.explainer);
   const personalization = useAppStore((s) => s.personalization);
   const personalizedPresentation = useAppStore((s) => s.personalized[sessionId]);
@@ -192,21 +195,23 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
   const showNew = useCallback(() => {
     setMarkedFrom(useAppStore.getState().live[sessionId]?.lastSeenSeq);
     if (useAppStore.getState().statsOpen) toggleStats();
+    if (useAppStore.getState().ingestOpen) toggleIngest();
     setHistoryMode('rail');
     markSeen(sessionId);
-  }, [sessionId, markSeen, setHistoryMode, toggleStats]);
+  }, [sessionId, markSeen, setHistoryMode, toggleStats, toggleIngest]);
 
   /** Closing history ends the reading, so the scoping does not come back with it. */
   const toggleHistory = useCallback(() => {
     const cur = useAppStore.getState().historyMode;
     if (cur === 'off') {
       if (useAppStore.getState().statsOpen) toggleStats();
+      if (useAppStore.getState().ingestOpen) toggleIngest();
       setHistoryMode('rail');
     } else {
       setMarkedFrom(undefined);
       setHistoryMode('off');
     }
-  }, [setHistoryMode, toggleStats]);
+  }, [setHistoryMode, toggleStats, toggleIngest]);
 
   /** Models and History occupy the one supporting inspector slot. */
   const toggleModels = useCallback(() => {
@@ -214,6 +219,13 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
     setHistoryMode('off');
     toggleStats();
   }, [setHistoryMode, toggleStats]);
+
+  /** Collection cost takes the same supporting inspector slot as models and History. */
+  const toggleCollection = useCallback(() => {
+    setMarkedFrom(undefined);
+    setHistoryMode('off');
+    toggleIngest();
+  }, [setHistoryMode, toggleIngest]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -276,7 +288,7 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
 
   return (
     <div
-      className={`session ${statsOpen || historyMode === 'rail' ? 'has-inspector' : ''} ${statsOpen ? 'has-models' : ''}`}
+      className={`session ${statsOpen || ingestOpen || historyMode === 'rail' ? 'has-inspector' : ''} ${statsOpen ? 'has-models' : ''}`}
     >
       <div className="session-main" ref={paneRef}>
         <div className="session-actions">
@@ -354,6 +366,13 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
               on={statsOpen}
               title={`Show explanation timing, models and usage${explanationMode ? `. ${explanationMode.label}: ${explanationMode.detail}.` : ''}`}
               onClick={toggleModels}
+            />
+            <ToolButton
+              icon="storage"
+              label="Ingest & Storage"
+              on={ingestOpen}
+              title="Show collection state, queued observations, storage, and loss history"
+              onClick={toggleCollection}
             />
             {ex && (
               <ToolButton
@@ -560,6 +579,8 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
           generatedModel={view.explained?.model}
           onClose={toggleStats}
         />
+      ) : ingestOpen ? (
+        <IngestStorageRail onClose={toggleIngest} />
       ) : historyMode === 'rail' ? (
         <HistoryRail
           changes={live.changes}

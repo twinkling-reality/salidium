@@ -8,7 +8,11 @@ import {
   type SessionFileMatch,
 } from '@salidium/adapter-kit';
 import { makeSessionId } from '@salidium/protocol';
-import { parseCodexHookPayload, transcriptPathFromCodexHook } from './hookPayloads.ts';
+import {
+  CODEX_HOOK_EVENT_BUDGET,
+  parseCodexHookPayload,
+  transcriptPathFromCodexHook,
+} from './hookPayloads.ts';
 import { CodexRolloutParser } from './rolloutParser.ts';
 
 /** ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<threadId>.jsonl or ~/.codex/archived_sessions/rollout-…jsonl */
@@ -41,5 +45,6 @@ export const codexAdapter: ProviderAdapter = {
 export const codexProvider = {
   contractVersion: PROVIDER_ADAPTER_CONTRACT_VERSION,
   displayName: 'Codex',
+  hookEventBudget: CODEX_HOOK_EVENT_BUDGET,
   adapter: codexAdapter,
 } satisfies ProviderDescriptor;

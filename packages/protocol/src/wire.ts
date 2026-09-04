@@ -135,11 +135,66 @@ export const DaemonInfoSchema = z.object({
       /** Descriptor-owned label. Optional so an older embedded daemon remains readable. */
       displayName: z.string().min(1).optional(),
       hooksInstalled: z.boolean(),
+      /** Exact configuration state. Optional so clients can still read older daemons. */
+      hookStatus: z.enum(['configured', 'not-configured', 'partial', 'invalid']).optional(),
+      /** Codex owns trust approval; unknown is a reported state, not an assumption. */
+      hookTrust: z
+        .enum(['trusted', 'untrusted', 'modified', 'managed', 'unknown', 'not-applicable'])
+        .optional(),
       sourcesWatched: z.number().int().nonnegative(),
     }),
   ),
 });
 export type DaemonInfo = z.infer<typeof DaemonInfoSchema>;
+
+export const CollectionGapEpisodeSchema = z.object({
+  reason: z.string(),
+  provider: z.string().nullable(),
+  event: z.string().nullable(),
+  pressure: z.string().nullable(),
+  firstDroppedAt: CanonicalTimestampSchema.nullable(),
+  recoveredAt: CanonicalTimestampSchema.nullable(),
+  /** Null means loss was observed but concurrent drops were intentionally not guessed. */
+  exactCount: z.null(),
+});
+export type CollectionGapEpisode = z.infer<typeof CollectionGapEpisodeSchema>;
+
+export const CollectionStatusSchema = z.object({
+  observedAt: CanonicalTimestampSchema,
+  state: z.enum(['active', 'paused']),
+  pause: z
+    .object({
+      pausedAt: CanonicalTimestampSchema,
+      expiresAt: CanonicalTimestampSchema,
+      reason: z.enum(['manual', 'stop']),
+    })
+    .nullable(),
+  queue: z.object({
+    files: z.number().int().nonnegative(),
+    bytes: z.number().int().nonnegative(),
+    oldestAt: CanonicalTimestampSchema.nullable(),
+  }),
+  store: z.object({
+    bytes: z.number().int().nonnegative().nullable(),
+    retention: z
+      .union([z.literal('forever'), z.literal(30), z.literal(90), z.literal(365)])
+      .nullable(),
+    lastIngestAt: CanonicalTimestampSchema.nullable(),
+  }),
+  health: z.enum(['healthy', 'attention', 'runaway']),
+  gaps: z.object({
+    active: z.array(CollectionGapEpisodeSchema),
+    recovered: z.array(CollectionGapEpisodeSchema),
+    omittedEpisodes: z.number().int().nonnegative(),
+  }),
+});
+export type CollectionStatus = z.infer<typeof CollectionStatusSchema>;
+
+export const CollectionControlRequestSchema = z.object({
+  action: z.enum(['pause', 'resume']),
+  reason: z.enum(['manual', 'stop']).optional(),
+});
+export type CollectionControlRequest = z.infer<typeof CollectionControlRequestSchema>;
 
 /**
  * When Salidium asks a model to explain a session.

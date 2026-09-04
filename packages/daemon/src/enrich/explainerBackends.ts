@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
@@ -33,6 +33,10 @@ export interface ExplainerBackendResult {
 
 /** Built-in process output is rejected before it can grow memory or reach JSON parsing. */
 export const MAX_EXPLAINER_OUTPUT_BYTES = 128 * 1024;
+/** A hard process ceiling shared by explanations and presentation-only personalization. */
+export const MAX_EXPLAINER_PROCESSES = 2;
+
+let activeExplainerProcesses = 0;
 
 /**
  * A generator turns bounded evidence into the shared explanation schema. It does not ingest agent
@@ -63,24 +67,41 @@ function runProcess(
   timeoutMs: number,
   signal?: AbortSignal,
 ): Promise<string> {
+  if (activeExplainerProcesses >= MAX_EXPLAINER_PROCESSES)
+    return Promise.reject(
+      new Error(`explainer process limit reached (${MAX_EXPLAINER_PROCESSES})`),
+    );
+  activeExplainerProcesses += 1;
   return new Promise((resolve, reject) => {
     const path = trustedPathEntries().join(delimiter);
-    const child = spawn(invocation.command, invocation.args, {
-      cwd: explainerCwd(),
-      // Both Claude Code and Codex can fire their configured hooks. Never ingest this helper run.
-      // A package runner prepends the current project's bins. The absolute provider command and
-      // its child processes must see only the same trusted PATH used to detect the provider.
-      env: { ...process.env, PATH: path, SALIDIUM_INTERNAL: '1' },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = spawn(invocation.command, invocation.args, {
+        cwd: explainerCwd(),
+        // Both Claude Code and Codex can fire their configured hooks. Never ingest this helper run.
+        // A package runner prepends the current project's bins. The absolute provider command and
+        // its child processes must see only the same trusted PATH used to detect the provider.
+        env: { ...process.env, PATH: path, SALIDIUM_INTERNAL: '1' },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      activeExplainerProcesses -= 1;
+      reject(error);
+      return;
+    }
     let out = '';
     let err = '';
     let outBytes = 0;
     let settled = false;
+    let capacityHeld = true;
     let timer: NodeJS.Timeout | undefined;
     const cleanup = () => {
       if (timer) clearTimeout(timer);
       signal?.removeEventListener('abort', abort);
+      if (capacityHeld) {
+        capacityHeld = false;
+        activeExplainerProcesses -= 1;
+      }
     };
     const fail = (error: Error) => {
       if (settled) return;

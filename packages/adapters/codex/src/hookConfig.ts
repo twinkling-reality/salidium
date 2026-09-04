@@ -1,4 +1,4 @@
-import { CODEX_HOOK_EVENTS } from './hookPayloads.ts';
+import { CODEX_HOOK_EVENT_BUDGET } from './hookPayloads.ts';
 
 /**
  * Builds the `~/.codex/hooks.json` entries. Codex runs only `command` handlers and requires the
@@ -18,13 +18,13 @@ export function buildCodexHooks(relayCommand: string): {
     string,
     Array<{ hooks: Array<{ type: 'command'; command: string; async: boolean; timeout: number }> }>
   > = {};
-  for (const event of CODEX_HOOK_EVENTS) {
+  for (const { name: event, pressure } of CODEX_HOOK_EVENT_BUDGET.events) {
     hooks[event] = [
       {
         hooks: [
           {
             type: 'command',
-            command: relayCommand,
+            command: `${relayCommand} ${event} ${pressure}`,
             async: event !== 'SessionEnd',
             timeout: event === 'SessionEnd' ? 1 : 5,
           },

@@ -3,6 +3,7 @@ import { readToken, rememberToken, resolveToken } from './api/client.ts';
 import { BrandLockup, BrandMark } from './components/Brand.tsx';
 import { ConnectionBadge, DOCS, ToolButton } from './components/Controls.tsx';
 import { Icon } from './components/Icon.tsx';
+import { IngestStorageRail } from './components/IngestStorage.tsx';
 import { RawDrawer } from './components/RawDrawer.tsx';
 import { MarksKey, SessionList } from './components/SessionList.tsx';
 import { SessionView } from './components/SessionView.tsx';
@@ -271,10 +272,12 @@ export function App() {
 function FirstRun() {
   const statsOpen = useAppStore((state) => state.statsOpen);
   const toggleStats = useAppStore((state) => state.toggleStats);
+  const ingestOpen = useAppStore((state) => state.ingestOpen);
+  const toggleIngest = useAppStore((state) => state.toggleIngest);
   const explainer = useAppStore((state) => state.explainer);
   const explanationMode = activeExplanationMode(explainer);
   return (
-    <div className={`first-run ${statsOpen ? 'has-inspector' : ''}`}>
+    <div className={`first-run ${statsOpen || ingestOpen ? 'has-inspector' : ''}`}>
       <div className="main-empty first-run-main">
         <div className="toolbar first-run-actions">
           <ToolButton
@@ -283,6 +286,13 @@ function FirstRun() {
             on={statsOpen}
             title={`Show explanation timing, models and usage${explanationMode ? `. ${explanationMode.label}: ${explanationMode.detail}.` : ''}`}
             onClick={toggleStats}
+          />
+          <ToolButton
+            icon="storage"
+            label="Ingest & Storage"
+            on={ingestOpen}
+            title="Show collection state, queued observations, storage, and loss history"
+            onClick={toggleIngest}
           />
         </div>
         {
@@ -308,7 +318,7 @@ function FirstRun() {
           </div>
         }
       </div>
-      {statsOpen && (
+      {statsOpen ? (
         <aside className="inspector models-usage" aria-label="Models & Usage">
           <div className="inspector-head">
             <ToolButton icon="panel" title="Hide Models & Usage" onClick={toggleStats} />
@@ -318,7 +328,9 @@ function FirstRun() {
             <ExplanationSettings />
           </div>
         </aside>
-      )}
+      ) : ingestOpen ? (
+        <IngestStorageRail onClose={toggleIngest} />
+      ) : null}
     </div>
   );
 }

@@ -16,8 +16,15 @@ import { normalizeProviderTimestamp, type ProviderAdapter } from '@salidium/adap
 import { CanonicalTimestampSchema, type ProviderId } from '@salidium/protocol';
 import type { Logger } from '../logging/logger.ts';
 import type { SessionRegistry } from '../sessions/sessionRegistry.ts';
+import { archiveCollectionGap, COLLECTION_GAP_LEDGER_FILE } from './collectionGaps.ts';
 import {
+  HOOK_BREAKER_FILE,
+  HOOK_SHED_FIRST_FILE,
+  HOOK_SHED_RETAIN_FILE,
+  HOOK_SHED_SECOND_FILE,
   MAX_HOOK_PENDING_FILES,
+  MAX_HOOK_SHED_FIRST_PENDING_FILES,
+  MAX_HOOK_SHED_SECOND_PENDING_FILES,
   MAX_HOOK_SPOOL_RECORD_BYTES,
   MAX_INGEST_PAYLOAD_BYTES,
   MAX_SPOOL_DRAIN_BATCH,
@@ -37,9 +44,11 @@ export class HookIngress {
   private readonly log: Logger;
   private readonly spoolDir: string;
   private readonly breakerFile: string;
+  private readonly gapLedgerFile: string;
   private readonly userHome: string;
   private readonly maxPayloadBytes: number;
   private readonly maxSpoolRecordBytes: number;
+  private readonly collectionEnabled: () => boolean;
   private spoolTimer: NodeJS.Timeout | undefined;
   /** Set only while a capped drain pass has more of the same backlog still to read. */
   private catchUp: NodeJS.Timeout | undefined;
@@ -52,25 +61,33 @@ export class HookIngress {
     spoolDir: string;
     /** Relay breaker sentinel, cleared once a drain leaves the spool under its ceiling. */
     breakerFile: string;
+    /** Bounded durable history of pressure episodes. */
+    gapLedgerFile?: string;
     userHome: string;
     log: Logger;
     /** Test seams; production uses the shared hostile-input ceilings. */
     maxPayloadBytes?: number;
     maxSpoolRecordBytes?: number;
+    /** Dynamic collection gate shared with transcript ingest. */
+    collectionEnabled?: () => boolean;
   }) {
     this.adapters = new Map(args.adapters.map((a) => [a.id, a]));
     this.registry = args.registry;
     this.tailer = args.tailer;
     this.spoolDir = args.spoolDir;
     this.breakerFile = args.breakerFile;
+    this.gapLedgerFile =
+      args.gapLedgerFile ?? join(dirname(args.breakerFile), COLLECTION_GAP_LEDGER_FILE);
     this.userHome = args.userHome;
     this.log = args.log;
     this.maxPayloadBytes = args.maxPayloadBytes ?? MAX_INGEST_PAYLOAD_BYTES;
     this.maxSpoolRecordBytes = args.maxSpoolRecordBytes ?? MAX_HOOK_SPOOL_RECORD_BYTES;
+    this.collectionEnabled = args.collectionEnabled ?? (() => true);
   }
 
   /** Handles one hook payload; returns the number of events accepted. */
   handle(providerId: string, payload: unknown, receivedAt = new Date().toISOString()): number {
+    if (!this.collectionEnabled()) return 0;
     if (
       payload !== null &&
       typeof payload === 'object' &&
@@ -136,9 +153,10 @@ export class HookIngress {
 
   /** Reads both atomic per-envelope payloads and legacy JSONL spools, deleting only durable work. */
   drainSpool(): void {
+    if (!this.collectionEnabled()) return;
     if (this.draining) return;
     if (!existsSync(this.spoolDir)) {
-      this.releaseBreaker();
+      this.releasePressureMarkers();
       return;
     }
     this.draining = true;
@@ -222,7 +240,7 @@ export class HookIngress {
       }
     } finally {
       this.draining = false;
-      this.releaseBreaker();
+      this.releasePressureMarkers();
     }
     // A capped pass left work behind. Come back on the next tick of the event loop rather than at
     // the next poll, so a large backlog still clears quickly without ever holding the loop.
@@ -254,13 +272,21 @@ export class HookIngress {
    * not to startup on purpose: clearing the sentinel when the daemon comes up would re-admit every
    * hook at the moment the queue is at its worst and the daemon has not read any of it yet.
    */
-  private releaseBreaker(): void {
+  private releasePressureMarkers(): void {
     try {
-      if (!existsSync(this.breakerFile)) return;
       const pending = this.pendingCount();
-      if (pending >= MAX_HOOK_PENDING_FILES) return;
-      unlinkSync(this.breakerFile);
-      this.log.info('hook relay resumed', { pending, limit: MAX_HOOK_PENDING_FILES });
+      const home = dirname(this.breakerFile);
+      const markers = [
+        { path: join(home, HOOK_SHED_FIRST_FILE), threshold: MAX_HOOK_SHED_FIRST_PENDING_FILES },
+        { path: join(home, HOOK_SHED_SECOND_FILE), threshold: MAX_HOOK_SHED_SECOND_PENDING_FILES },
+        { path: join(home, HOOK_SHED_RETAIN_FILE), threshold: MAX_HOOK_PENDING_FILES },
+        { path: join(home, HOOK_BREAKER_FILE), threshold: MAX_HOOK_PENDING_FILES },
+      ];
+      for (const marker of markers) {
+        if (!existsSync(marker.path) || pending >= marker.threshold) continue;
+        archiveCollectionGap(marker.path, this.gapLedgerFile);
+        this.log.info('hook relay pressure cleared', { pending, threshold: marker.threshold });
+      }
     } catch {
       /* ignore */
     }

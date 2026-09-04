@@ -45,19 +45,26 @@ export class ClaudeCodeTranscriptParser implements RecordParser {
       return [
         this.warning(lineNo, 'malformed-record', `line ${lineNo} is not a JSON object`, trimmed),
       ];
+    const type = asString(record.type);
     const ts = normalizeProviderTimestamp(record.timestamp);
     if (!ts)
-      return [
-        this.warning(
-          lineNo,
-          'malformed-record',
-          typeof record.timestamp === 'string'
-            ? `line ${lineNo} has an invalid RFC 3339 timestamp`
-            : `line ${lineNo} has no timestamp`,
-          trimmed,
-        ),
-      ];
-    const type = asString(record.type);
+      if (type !== 'user' && type !== 'assistant' && type !== 'system')
+        // Claude writes bookkeeping records such as custom titles and file-history snapshots without
+        // an instant. They cannot be placed in canonical history, but they are valid provider data,
+        // not a permanent malformed-record warning. Only record families Salidium interprets require
+        // a timestamp.
+        return [];
+      else
+        return [
+          this.warning(
+            lineNo,
+            'malformed-record',
+            typeof record.timestamp === 'string'
+              ? `line ${lineNo} has an invalid RFC 3339 timestamp`
+              : `line ${lineNo} has no timestamp`,
+            trimmed,
+          ),
+        ];
     const source: EventSource = {
       provider: 'claude-code',
       channel: 'transcript',

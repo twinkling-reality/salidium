@@ -20,6 +20,7 @@ import {
 } from '@salidium/adapter-kit';
 import type { RunState } from '@salidium/core';
 import {
+  type CollectionStatus,
   type DaemonInfo,
   type ExplainerBackend,
   type ExplainerCadence,
@@ -41,10 +42,29 @@ import { explainWithStatus } from './enrich/explainer.ts';
 import { explainedConfiguration } from './enrich/explainerBackends.ts';
 import { personalizeExplanation } from './enrich/personalizeExplanation.ts';
 import { GitSnapshotEnricher } from './enrichers/gitSnapshot.ts';
+import {
+  expireCollectionPause,
+  observeCollectionStatus,
+  pauseCollection,
+  readCollectionPause,
+  resumeCollection,
+} from './ingest/collectionState.ts';
+import {
+  disconnectBuiltInHooks,
+  type HookConfigurationInspection,
+  inspectBuiltInHooks,
+} from './ingest/hookConfiguration.ts';
 import { HookIngress } from './ingest/hookIngress.ts';
 import {
   HOOK_BREAKER_FILE,
+  HOOK_PAUSE_FILE,
+  HOOK_SHED_FIRST_FILE,
+  HOOK_SHED_RETAIN_FILE,
+  HOOK_SHED_SECOND_FILE,
+  MAX_HOOK_ABSOLUTE_PENDING_FILES,
   MAX_HOOK_PENDING_FILES,
+  MAX_HOOK_SHED_FIRST_PENDING_FILES,
+  MAX_HOOK_SHED_SECOND_PENDING_FILES,
   MAX_INGEST_PAYLOAD_BYTES,
   TRUNCATED_HOOK_PAYLOAD_KEY,
 } from './ingest/limits.ts';
@@ -63,6 +83,9 @@ export interface DaemonHandle {
   registry: SessionRegistry;
   hooks: HookIngress;
   tailer: TranscriptTailer;
+  collectionStatus(): CollectionStatus;
+  pauseCollection(reason?: 'manual' | 'stop'): CollectionStatus;
+  resumeCollection(): CollectionStatus;
   stop(): Promise<void>;
 }
 
@@ -301,12 +324,15 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
   registry.onPersistError = (sessionId, err) =>
     log.warn('persist failed; will retry', { sessionId, err: String(err) });
   const tailer = new TranscriptTailer({ adapters, registry, store, log });
+  let collectionPaused = existsSync(paths.pauseFile);
+  if (collectionPaused) tailer.pause();
   const hooks = new HookIngress({
     adapters,
     registry,
     tailer,
     spoolDir: paths.spoolDir,
     breakerFile: paths.breakerFile,
+    collectionEnabled: () => !collectionPaused,
     userHome: config.userHome,
     log,
   });
@@ -317,19 +343,58 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
   const descriptorsById = new Map(
     providerRegistry.list().map((descriptor) => [descriptor.adapter.id, descriptor] as const),
   );
+  const hookInspections = (): HookConfigurationInspection[] =>
+    adapters.flatMap((adapter) =>
+      adapter.id === 'claude-code' || adapter.id === 'codex'
+        ? [inspectBuiltInHooks(adapter.id, config.userHome, config.home)]
+        : [],
+    );
   const info = (): DaemonInfo => ({
     name: 'salidium',
     version: runtimeVersion,
     pid: process.pid,
     startedAt,
     home: config.home,
-    providers: adapters.map((a) => ({
-      id: a.id,
-      displayName: descriptorsById.get(a.id)?.displayName ?? a.id,
-      hooksInstalled: false,
-      sourcesWatched: tailer.countForProvider(a.id),
-    })),
+    providers: adapters.map((a) => {
+      const inspection =
+        a.id === 'claude-code' || a.id === 'codex'
+          ? inspectBuiltInHooks(a.id, config.userHome, config.home)
+          : undefined;
+      return {
+        id: a.id,
+        displayName: descriptorsById.get(a.id)?.displayName ?? a.id,
+        hooksInstalled: inspection?.status === 'configured',
+        ...(inspection ? { hookStatus: inspection.status } : {}),
+        hookTrust: a.id === 'codex' ? 'unknown' : 'not-applicable',
+        sourcesWatched: tailer.countForProvider(a.id),
+      };
+    }),
   });
+
+  const collectionStatus = (): CollectionStatus => {
+    const latest = registry.listSessions()[0];
+    const inspections = hookInspections();
+    return observeCollectionStatus({
+      home: config.home,
+      retention: store.retentionPolicy(),
+      lastIngestAt: latest?.lastEventAt ?? latest?.startedAt,
+      daemonReachable: true,
+      anyHooksConfigured: inspections.some((inspection) => inspection.status !== 'not-configured'),
+    });
+  };
+  const setCollectionPaused = (reason: 'manual' | 'stop' = 'manual'): CollectionStatus => {
+    pauseCollection(config.home, reason);
+    collectionPaused = true;
+    tailer.pause();
+    return collectionStatus();
+  };
+  const setCollectionActive = (): CollectionStatus => {
+    resumeCollection(config.home);
+    collectionPaused = false;
+    tailer.resume();
+    hooks.drainSpool();
+    return collectionStatus();
+  };
 
   let port = config.port;
   const server = createHttpServer({
@@ -339,6 +404,18 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     port: () => port,
     uiDist: config.uiDist ?? defaultUiDist(),
     info,
+    collection: {
+      status: collectionStatus,
+      set: (request) =>
+        request.action === 'pause'
+          ? setCollectionPaused(request.reason ?? 'manual')
+          : setCollectionActive(),
+      disconnect: (provider) => {
+        if (provider !== 'claude-code' && provider !== 'codex') return undefined;
+        disconnectBuiltInHooks(provider, config.userHome);
+        return collectionStatus();
+      },
+    },
     settings: {
       explainer: explainerSettings,
       setExplainerSettings: (change: ExplainerSettingsRequest) => {
@@ -478,11 +555,35 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     : undefined;
   retentionTimer?.unref();
 
+  const reconcileCollectionPause = () => {
+    const markerExists = existsSync(join(config.home, HOOK_PAUSE_FILE));
+    if (collectionPaused && markerExists && expireCollectionPause(config.home)) {
+      collectionPaused = false;
+      tailer.resume();
+      hooks.drainSpool();
+      log.info('collection pause expired');
+      return;
+    }
+    if (collectionPaused && !markerExists) {
+      collectionPaused = false;
+      tailer.resume();
+      hooks.drainSpool();
+      log.info('collection resumed');
+    } else if (!collectionPaused && markerExists) {
+      collectionPaused = true;
+      tailer.pause();
+      log.info('collection paused', { expiresAt: readCollectionPause(config.home)?.expiresAt });
+    }
+  };
+  const collectionControlTimer = setInterval(reconcileCollectionPause, 1000);
+  collectionControlTimer.unref();
+
   const stop = async () => {
     if (stopped) return;
     stopped = true;
     abortPersonalization();
     if (retentionTimer) clearInterval(retentionTimer);
+    clearInterval(collectionControlTimer);
     tailer.stop();
     hooks.stop();
     git.stop();
@@ -501,7 +602,18 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
       /* ignore */
     }
   };
-  return { config, port, token, registry, hooks, tailer, stop };
+  return {
+    config,
+    port,
+    token,
+    registry,
+    hooks,
+    tailer,
+    collectionStatus,
+    pauseCollection: setCollectionPaused,
+    resumeCollection: setCollectionActive,
+    stop,
+  };
 }
 
 /**
@@ -529,7 +641,7 @@ export function writeRelayScript(
     limitBytes: MAX_INGEST_PAYLOAD_BYTES,
   });
   const script = `#!/bin/sh
-# Salidium hook relay, installed by \`salidium install-hooks\`. Safe to delete; hooks then no-op.
+# Salidium hook relay, installed by \`salidium install-hooks\`. Use uninstall-hooks to disconnect it.
 # Reads the hook JSON from stdin, then hands off to a detached child so the agent's process
 # teardown (e.g. \`claude -p\`) can never cut the delivery short. Always exits 0.
 umask 077
@@ -541,13 +653,34 @@ PATH='${shellQuote(relayPath)}'; export PATH
 # The variable is set only by the explainer.
 [ -n "$SALIDIUM_INTERNAL" ] && exit 0
 HOME_DIR='${shellQuote(home)}'
-# The breaker. Once the offline spool is full there is nothing useful left for a hook to do, and
-# the cheapest possible no-op is the only safe thing to do a thousand times a minute: one test,
-# no subprocess, before stdin is even read. The daemon clears this after it drains the backlog.
-# Reading no stdin is already this script's behaviour under SALIDIUM_INTERNAL one line above.
+# A pause is one marker test before stdin is read. Its JSON lease is cleared by a running daemon or
+# any later CLI command; the relay itself stays fork-free on this path and does not pretend to own a clock.
+[ -e "$HOME_DIR/${HOOK_PAUSE_FILE}" ] && exit 0
+# Event and pressure class are fixed arguments in the provider hook definition. They let the relay
+# shed only explicitly declared low-fidelity observations without parsing untrusted JSON.
+if [ "$1" = "--send" ] && [ "$#" -ge 5 ]; then
+  EVENT="$3"; PRESSURE="$4"
+else
+  EVENT="\${2:-Unknown}"; PRESSURE="\${3:-retain}"
+fi
+# The terminal breaker is one test and no subprocess before stdin is read. It exists only after the
+# ordinary queue and protected lifecycle reserve are both full.
 [ -e "$HOME_DIR/${HOOK_BREAKER_FILE}" ] && exit 0
+# Earlier pressure levels stop only the event class that caused them. Lifecycle events continue
+# into reserved capacity instead of being discarded behind redundant tool observations.
+case "$PRESSURE" in
+  shed-first) [ -e "$HOME_DIR/${HOOK_SHED_FIRST_FILE}" ] && exit 0;;
+  shed-second) [ -e "$HOME_DIR/${HOOK_SHED_SECOND_FILE}" ] && exit 0;;
+  retain) [ -e "$HOME_DIR/${HOOK_SHED_RETAIN_FILE}" ] && exit 0;;
+esac
 if [ "$1" = "--send" ]; then
-  PROVIDER="$2"; FILE="$3"
+  PROVIDER="$2"
+  if [ "$#" -ge 5 ]; then
+    EVENT="$3"; PRESSURE="$4"; FILE="$5"
+  else
+    # Compatibility for a sender already detached while Salidium replaced the relay script.
+    EVENT="Unknown"; PRESSURE="retain"; FILE="$3"
+  fi
   # Bound old/external pending files too, not just stdin captured by this version of the relay.
   PAYLOAD_SIZE=$(wc -c < "$FILE" 2>/dev/null | tr -d ' ')
   case "$PAYLOAD_SIZE" in ''|*[!0-9]*) PAYLOAD_SIZE=0;; esac
@@ -581,14 +714,39 @@ if [ "$1" = "--send" ]; then
   set -- "$PENDING"/*.ready.json.processing
   [ -e "$1" ] || shift $#
   PENDING_COUNT=$((PENDING_COUNT + $#))
-  if [ "$PENDING_COUNT" -lt ${MAX_HOOK_PENDING_FILES} ]; then
+  write_pressure_marker() {
+    MARKER="$1"; REASON="$2"
+    if [ ! -e "$MARKER" ]; then
+      MARKED_AT=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+      set -C
+      printf '{"reason":"%s","provider":"%s","event":"%s","pressure":"%s","firstDroppedAt":"%s","exactCount":null}\\n' \\
+        "$REASON" "$PROVIDER" "$EVENT" "$PRESSURE" "$MARKED_AT" > "$MARKER" 2>/dev/null
+      set +C
+    fi
+  }
+  case "$PRESSURE" in
+    shed-first)
+      if [ "$PENDING_COUNT" -ge ${MAX_HOOK_SHED_FIRST_PENDING_FILES} ]; then
+        write_pressure_marker "$HOME_DIR/${HOOK_SHED_FIRST_FILE}" "pressure"
+        rm -f "$FILE"
+        exit 0
+      fi;;
+    shed-second)
+      if [ "$PENDING_COUNT" -ge ${MAX_HOOK_SHED_SECOND_PENDING_FILES} ]; then
+        write_pressure_marker "$HOME_DIR/${HOOK_SHED_SECOND_FILE}" "pressure"
+        rm -f "$FILE"
+        exit 0
+      fi;;
+  esac
+  if [ "$PENDING_COUNT" -lt ${MAX_HOOK_PENDING_FILES} ] || \\
+    { [ "$PRESSURE" = "lifecycle" ] && [ "$PENDING_COUNT" -lt ${MAX_HOOK_ABSOLUTE_PENDING_FILES} ]; }; then
     mv "$FILE" "$READY" 2>/dev/null && exit 0
   fi
-  # Full. Trip the breaker so the hooks behind this one cost a single test instead of a glob, and
-  # leave the reason where the daemon and \`salidium doctor\` can read it. A dropped payload was
-  # already the outcome here; recording it is what is new.
-  printf '{"reason":"pending-files","limit":%s,"at":"%s"}\\n' ${MAX_HOOK_PENDING_FILES} \\
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$HOME_DIR/${HOOK_BREAKER_FILE}" 2>/dev/null
+  if [ "$PRESSURE" = "lifecycle" ]; then
+    write_pressure_marker "$HOME_DIR/${HOOK_BREAKER_FILE}" "lifecycle-reserve-full"
+  else
+    write_pressure_marker "$HOME_DIR/${HOOK_SHED_RETAIN_FILE}" "ordinary-capacity-full"
+  fi
   rm -f "$FILE"
   exit 0
 fi
@@ -612,11 +770,11 @@ fi
 # Detach into a new session so the agent's teardown (which kills the hook's process group) cannot
 # interrupt delivery. If detaching is unavailable the daemon still drains the pending file later.
 if command -v setsid >/dev/null 2>&1; then
-  setsid sh "$0" --send "$PROVIDER" "$FILE" >/dev/null 2>&1 </dev/null &
+  setsid sh "$0" --send "$PROVIDER" "$EVENT" "$PRESSURE" "$FILE" >/dev/null 2>&1 </dev/null &
 elif command -v perl >/dev/null 2>&1; then
-  perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' -- sh "$0" --send "$PROVIDER" "$FILE" >/dev/null 2>&1 </dev/null &
+  perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' -- sh "$0" --send "$PROVIDER" "$EVENT" "$PRESSURE" "$FILE" >/dev/null 2>&1 </dev/null &
 else
-  nohup sh "$0" --send "$PROVIDER" "$FILE" >/dev/null 2>&1 </dev/null &
+  nohup sh "$0" --send "$PROVIDER" "$EVENT" "$PRESSURE" "$FILE" >/dev/null 2>&1 </dev/null &
 fi
 exit 0
 `;

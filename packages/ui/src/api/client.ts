@@ -1,4 +1,6 @@
 import type {
+  CollectionControlRequest,
+  CollectionStatus,
   DaemonInfo,
   ExplainerSettings,
   ExplainerSettingsRequest,
@@ -13,6 +15,7 @@ import type {
   StreamMessage,
 } from '@salidium/protocol';
 import {
+  CollectionStatusSchema,
   PersonalizationSettingsSchema,
   PersonalizedExplanationSchema,
   StreamMessageSchema,
@@ -62,6 +65,37 @@ export class ApiClient {
 
   info(): Promise<DaemonInfo> {
     return this.get('/api/info');
+  }
+
+  collectionStatus(): Promise<CollectionStatus> {
+    return this.get('/api/collection').then((value) => CollectionStatusSchema.parse(value));
+  }
+
+  async setCollection(action: CollectionControlRequest['action']): Promise<CollectionStatus> {
+    const res = await fetch('/api/collection', {
+      method: 'PUT',
+      headers: { ...this.headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, reason: 'manual' }),
+    });
+    if (res.status === 401) {
+      this.onUnauthorized?.();
+      throw new ApiError('unauthorized', 401);
+    }
+    if (!res.ok) throw new ApiError(`request failed: ${res.status}`, res.status);
+    return CollectionStatusSchema.parse(await res.json());
+  }
+
+  async disconnectHooks(provider: string): Promise<CollectionStatus> {
+    const res = await fetch(`/api/collection/hooks/${encodeURIComponent(provider)}`, {
+      method: 'DELETE',
+      headers: this.headers(),
+    });
+    if (res.status === 401) {
+      this.onUnauthorized?.();
+      throw new ApiError('unauthorized', 401);
+    }
+    if (!res.ok) throw new ApiError(`request failed: ${res.status}`, res.status);
+    return CollectionStatusSchema.parse(await res.json());
   }
 
   /**

@@ -40,9 +40,9 @@ describe('ClaudeCodeTranscriptParser', () => {
     expect(kinds.filter((k) => k === 'tool.failed')).toHaveLength(1);
     expect(kinds.filter((k) => k === 'plan.updated')).toHaveLength(2);
     expect(kinds).toContain('compaction');
-    // The malformed JSON plus two provider records with no timestamp are warnings only. A title
-    // without an instant cannot be placed into canonical history by borrowing a nearby time.
-    expect(kinds.filter((k) => k === 'ingest.warning')).toHaveLength(3);
+    // Timestamp-free provider bookkeeping is ignored rather than stored as a permanent malformed
+    // warning. A title without an instant still cannot be placed into canonical history.
+    expect(kinds.filter((k) => k === 'ingest.warning')).toHaveLength(1);
     expect(
       events
         .filter((e) => e.kind === 'session.updated')
@@ -62,6 +62,16 @@ describe('ClaudeCodeTranscriptParser', () => {
         .filter((event) => event.source.ref?.recordId)
         .every((event) => event.source.ref?.recordHash?.startsWith('sha256:')),
     ).toBe(true);
+  });
+
+  it('still warns when a canonical record family has no timestamp', () => {
+    const warning = parseAll(
+      [JSON.stringify({ type: 'user', message: { role: 'user', content: 'hello' } })],
+      sessionId,
+      pid,
+    );
+    expect(warning).toHaveLength(1);
+    expect(warning[0]).toMatchObject({ kind: 'ingest.warning', code: 'malformed-record' });
   });
 
   it('maps tool shapes precisely', () => {
@@ -135,7 +145,7 @@ describe('ClaudeCodeTranscriptParser', () => {
     expect(state.title).toBeUndefined();
     expect(state.model).toBe('claude-opus-5');
     expect(state.counters.compactions).toBe(1);
-    expect(state.counters.ingestWarnings).toBe(3);
+    expect(state.counters.ingestWarnings).toBe(1);
     const view = projectSession(state);
     expect(view.left.items.map((i) => i.text)).toContain(
       'Move refresh ownership into SessionManager',

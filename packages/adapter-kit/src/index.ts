@@ -5,7 +5,6 @@
  * The daemon owns file watching, tailing, HTTP ingress, and persistence.
  */
 export type {
-  HookInstallPlan,
   HookParseContext,
   ProviderAdapter,
   RecordParser,
@@ -13,6 +12,8 @@ export type {
   SessionFileMatch,
 } from './providerAdapter.ts';
 export {
+  type HookEventBudget,
+  type HookPressureClass,
   PROVIDER_ADAPTER_CONTRACT_VERSION,
   type ProviderDescriptor,
   ProviderRegistry,

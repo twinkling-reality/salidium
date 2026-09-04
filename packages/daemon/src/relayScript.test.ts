@@ -18,7 +18,13 @@ import { describe, expect, it } from 'vitest';
 import { writeRelayScript } from './daemon.ts';
 import { HookIngress } from './ingest/hookIngress.ts';
 import {
+  HOOK_SHED_FIRST_FILE,
+  HOOK_SHED_RETAIN_FILE,
+  HOOK_SHED_SECOND_FILE,
+  MAX_HOOK_ABSOLUTE_PENDING_FILES,
   MAX_HOOK_PENDING_FILES,
+  MAX_HOOK_SHED_FIRST_PENDING_FILES,
+  MAX_HOOK_SHED_SECOND_PENDING_FILES,
   MAX_INGEST_PAYLOAD_BYTES,
   TRUNCATED_HOOK_PAYLOAD_KEY,
 } from './ingest/limits.ts';
@@ -27,6 +33,28 @@ import { createLogger } from './logging/logger.ts';
 import type { SessionRegistry } from './sessions/sessionRegistry.ts';
 
 describe('the installed hook relay', () => {
+  it('honours pause before reading stdin or starting a sender', () => {
+    const root = mkdtempSync(join(tmpdir(), 'salidium-relay-pause-'));
+    try {
+      const home = join(root, 'state');
+      const relay = writeRelayScript(join(home, 'hooks'), home);
+      writeFileSync(join(home, 'hooks-paused'), '{"reason":"manual"}\n');
+      const result = spawnSync('/bin/sh', [relay, 'claude-code', 'Stop', 'lifecycle'], {
+        input: '{"hook_event_name":"Stop"}',
+        encoding: 'utf8',
+      });
+      expect(result.status).toBe(0);
+      expect(existsSync(join(home, 'spool', 'pending'))).toBe(false);
+      const source = readFileSync(relay, 'utf8');
+      expect(source.indexOf('[ -e "$HOME_DIR/hooks-paused" ]')).toBeGreaterThan(0);
+      expect(source.indexOf('[ -e "$HOME_DIR/hooks-paused" ]')).toBeLessThan(
+        source.indexOf('head -c'),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('safely spools and recovers a namespaced provider hook while the daemon is offline', async () => {
     const root = mkdtempSync(join(tmpdir(), 'salidium-relay-namespaced-'));
     try {
@@ -308,31 +336,102 @@ describe('the installed hook relay', () => {
     }
   });
 
-  it('trips the breaker and stops spooling once the pending ceiling is reached', async () => {
+  it('sheds tool observations in order while preserving lifecycle capacity', async () => {
     const root = mkdtempSync(join(tmpdir(), 'salidium-relay-ceiling-'));
     try {
       const home = join(root, 'state');
       const pendingDir = join(home, 'spool', 'pending');
       const relay = writeRelayScript(join(home, 'hooks'), home, { PATH: '/bin:/usr/bin' });
       mkdirSync(pendingDir, { recursive: true });
-      for (let i = 0; i < MAX_HOOK_PENDING_FILES; i++)
+      for (let i = 0; i < MAX_HOOK_SHED_FIRST_PENDING_FILES; i++)
         writeFileSync(join(pendingDir, `claude-code-${i}.ready.json`), '{}');
 
-      const file = join(pendingDir, 'claude-code-overflow.json');
-      writeFileSync(file, JSON.stringify({ hook: 'one too many' }));
-      const result = spawnSync('/bin/sh', [relay, '--send', 'claude-code', file], {
-        env: {},
-        encoding: 'utf8',
+      const pre = join(pendingDir, 'claude-code-pre.json');
+      writeFileSync(pre, JSON.stringify({ hook_event_name: 'PreToolUse' }));
+      const preResult = spawnSync(
+        '/bin/sh',
+        [relay, '--send', 'claude-code', 'PreToolUse', 'shed-first', pre],
+        { env: {}, encoding: 'utf8' },
+      );
+      expect(preResult.status).toBe(0);
+      expect(existsSync(pre)).toBe(false);
+      expect(JSON.parse(readFileSync(join(home, HOOK_SHED_FIRST_FILE), 'utf8'))).toMatchObject({
+        event: 'PreToolUse',
+        exactCount: null,
       });
 
-      expect(result.status).toBe(0);
-      // The arriving payload is dropped rather than queued, and the drop is now recorded.
-      expect(existsSync(file)).toBe(false);
-      expect(readdirSync(pendingDir)).toHaveLength(MAX_HOOK_PENDING_FILES);
-      const breaker = JSON.parse(readFileSync(join(home, 'hooks-off'), 'utf8'));
-      expect(breaker).toMatchObject({ reason: 'pending-files', limit: MAX_HOOK_PENDING_FILES });
+      for (let i = MAX_HOOK_SHED_FIRST_PENDING_FILES; i < MAX_HOOK_SHED_SECOND_PENDING_FILES; i++)
+        writeFileSync(join(pendingDir, `claude-code-${i}.ready.json`), '{}');
+      const post = join(pendingDir, 'claude-code-post.json');
+      writeFileSync(post, JSON.stringify({ hook_event_name: 'PostToolUse' }));
+      const postResult = spawnSync(
+        '/bin/sh',
+        [relay, '--send', 'claude-code', 'PostToolUse', 'shed-second', post],
+        { env: {}, encoding: 'utf8' },
+      );
+      expect(postResult.status).toBe(0);
+      expect(existsSync(post)).toBe(false);
+      expect(JSON.parse(readFileSync(join(home, HOOK_SHED_SECOND_FILE), 'utf8'))).toMatchObject({
+        event: 'PostToolUse',
+        exactCount: null,
+      });
 
-      // A drain that leaves the spool under the ceiling lets hooks back in.
+      for (let i = MAX_HOOK_SHED_SECOND_PENDING_FILES; i < MAX_HOOK_PENDING_FILES; i++)
+        writeFileSync(join(pendingDir, `claude-code-${i}.ready.json`), '{}');
+      const ordinary = join(pendingDir, 'claude-code-ordinary.json');
+      writeFileSync(ordinary, JSON.stringify({ hook_event_name: 'Notification' }));
+      const ordinaryResult = spawnSync(
+        '/bin/sh',
+        [relay, '--send', 'claude-code', 'Notification', 'retain', ordinary],
+        { env: {}, encoding: 'utf8' },
+      );
+      expect(ordinaryResult.status).toBe(0);
+      expect(existsSync(ordinary)).toBe(false);
+      expect(JSON.parse(readFileSync(join(home, HOOK_SHED_RETAIN_FILE), 'utf8'))).toMatchObject({
+        reason: 'ordinary-capacity-full',
+        exactCount: null,
+      });
+
+      const lifecycle = join(pendingDir, 'claude-code-lifecycle.json');
+      writeFileSync(lifecycle, JSON.stringify({ hook_event_name: 'Stop' }));
+      const lifecycleResult = spawnSync(
+        '/bin/sh',
+        [relay, '--send', 'claude-code', 'Stop', 'lifecycle', lifecycle],
+        { env: {}, encoding: 'utf8' },
+      );
+      expect(lifecycleResult.status).toBe(0);
+      expect(existsSync(lifecycle)).toBe(false);
+      expect(existsSync(join(pendingDir, 'claude-code-lifecycle.ready.json'))).toBe(true);
+
+      for (let i = MAX_HOOK_PENDING_FILES + 1; i < MAX_HOOK_ABSOLUTE_PENDING_FILES; i++)
+        writeFileSync(join(pendingDir, `claude-code-${i}.ready.json`), '{}');
+      const terminal = join(pendingDir, 'claude-code-terminal.json');
+      writeFileSync(terminal, JSON.stringify({ hook_event_name: 'SessionEnd' }));
+      const terminalResult = spawnSync(
+        '/bin/sh',
+        [relay, '--send', 'claude-code', 'SessionEnd', 'lifecycle', terminal],
+        { env: {}, encoding: 'utf8' },
+      );
+
+      expect(terminalResult.status).toBe(0);
+      expect(existsSync(terminal)).toBe(false);
+      expect(readdirSync(pendingDir)).toHaveLength(MAX_HOOK_ABSOLUTE_PENDING_FILES);
+      const breaker = JSON.parse(readFileSync(join(home, 'hooks-off'), 'utf8'));
+      expect(breaker).toMatchObject({
+        reason: 'lifecycle-reserve-full',
+        event: 'SessionEnd',
+        exactCount: null,
+      });
+
+      const result = spawnSync('/bin/sh', [relay, 'claude-code', 'SessionEnd', 'lifecycle'], {
+        env: {},
+        encoding: 'utf8',
+        input: JSON.stringify({ hook_event_name: 'SessionEnd' }),
+      });
+      expect(result.status).toBe(0);
+      expect(readdirSync(pendingDir)).toHaveLength(MAX_HOOK_ABSOLUTE_PENDING_FILES);
+
+      // The hard breaker stays until ordinary capacity is available again.
       const ingress = new HookIngress({
         adapters: [],
         registry: { ingest: () => 1, flush: () => true } as unknown as SessionRegistry,
@@ -343,8 +442,10 @@ describe('the installed hook relay', () => {
         log: createLogger('silent'),
       });
       ingress.drainSpool();
-
+      expect(existsSync(join(home, 'hooks-off'))).toBe(true);
+      ingress.drainSpool();
       expect(existsSync(join(home, 'hooks-off'))).toBe(false);
+      expect(existsSync(join(home, HOOK_SHED_RETAIN_FILE))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

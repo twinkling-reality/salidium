@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -61,6 +61,55 @@ afterAll(async () => {
 });
 
 describe('daemon', () => {
+  it('pauses and resumes both collection paths through the authenticated control', async () => {
+    const home = join(tmp, 'collection-control');
+    const controlled = await startDaemon({
+      home,
+      userHome,
+      port: 0,
+      providers: [],
+      gitEnrichment: false,
+      historyDays: 0,
+      logLevel: 'silent',
+    });
+    try {
+      const headers = {
+        Authorization: `Bearer ${controlled.token}`,
+        'Content-Type': 'application/json',
+      };
+      const paused = await fetch(`http://127.0.0.1:${controlled.port}/api/collection`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ action: 'pause', reason: 'manual' }),
+      });
+      expect(paused.status).toBe(200);
+      expect(await paused.json()).toMatchObject({ state: 'paused', pause: { reason: 'manual' } });
+      expect(existsSync(join(home, 'hooks-paused'))).toBe(true);
+      const hook = await fetch(`http://127.0.0.1:${controlled.port}/hooks/claude-code`, {
+        method: 'POST',
+        headers,
+        body: '{}',
+      });
+      expect(hook.status).toBe(204);
+      expect(hook.headers.get('x-salidium-accepted')).toBe('0');
+
+      const resumed = await fetch(`http://127.0.0.1:${controlled.port}/api/collection`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ action: 'resume' }),
+      });
+      expect(resumed.status).toBe(200);
+      expect(await resumed.json()).toMatchObject({
+        state: 'active',
+        pause: null,
+        gaps: { recovered: [{ reason: 'collection-paused', exactCount: null }] },
+      });
+      expect(existsSync(join(home, 'hooks-paused'))).toBe(false);
+    } finally {
+      await controlled.stop();
+    }
+  });
+
   it('does not create a retention sweep under the default Forever policy', async () => {
     const home = join(tmp, 'retention-forever');
     const seeded = new SqliteStore(join(home, 'salidium.db'));

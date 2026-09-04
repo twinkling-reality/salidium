@@ -10,6 +10,7 @@ function descriptor(id: ProviderAdapter['id'], displayName = 'Test provider'): P
   return {
     contractVersion: PROVIDER_ADAPTER_CONTRACT_VERSION,
     displayName,
+    hookEventBudget: { expectedPerTurn: { fixed: 0, perToolCall: 0 }, events: [] },
     adapter: {
       id,
       sessionRoots: () => [],
@@ -42,7 +43,38 @@ describe('ProviderRegistry', () => {
       /extension provider id/,
     );
     expect(() =>
-      registry.register({ ...descriptor('example/acme-agent'), contractVersion: 2 as 1 }),
+      registry.register({ ...descriptor('example/acme-agent'), contractVersion: 3 as 2 }),
     ).toThrow(/unsupported contract/);
+  });
+
+  it('rejects hook event budgets that are missing cost or classify an event twice', () => {
+    const base = descriptor('example/acme-agent');
+    expect(
+      () =>
+        new ProviderRegistry([
+          {
+            ...base,
+            hookEventBudget: {
+              expectedPerTurn: { fixed: 0, perToolCall: 0 },
+              events: [{ name: 'Stop', pressure: 'lifecycle' }],
+            },
+          },
+        ]),
+    ).toThrow(/without a traffic budget/);
+    expect(
+      () =>
+        new ProviderRegistry([
+          {
+            ...base,
+            hookEventBudget: {
+              expectedPerTurn: { fixed: 2, perToolCall: 2 },
+              events: [
+                { name: 'PreToolUse', pressure: 'shed-first' },
+                { name: 'PreToolUse', pressure: 'retain' },
+              ],
+            },
+          },
+        ]),
+    ).toThrow(/more than once/);
   });
 });

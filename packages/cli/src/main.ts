@@ -16,12 +16,17 @@ import { createInterface } from 'node:readline/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { basename as pathBasename } from '@salidium/core';
 import {
+  resumeCollection as clearCollectionPause,
   type DaemonJson,
   DEFAULT_PORT,
   daemonPaths,
   defaultUiDist,
   effectiveCadence,
   getExplainerStatus,
+  inspectBuiltInHooks,
+  inspectStoreLayout,
+  observeCollectionStatus,
+  optimizeStoreLayout,
   readDaemonJson,
   readSettings,
   rotateLogFile,
@@ -29,9 +34,12 @@ import {
   SqliteStore,
   startDaemon,
   validateSalidiumHistoryDays,
+  pauseCollection as writeCollectionPause,
   writeSettings,
 } from '@salidium/daemon';
 import {
+  type CollectionStatus,
+  CollectionStatusSchema,
   type DaemonInfo,
   type ExplainerCadence,
   type ExplainerSettings,
@@ -39,6 +47,7 @@ import {
   PROTOCOL_VERSION,
 } from '@salidium/protocol';
 import { auditClaims, renderAudit } from './auditClaims.ts';
+import { inspectCodexHookTrust } from './codexHookTrust.ts';
 import { explanationMode, parseExplanationMode } from './explanationMode.ts';
 import type { IntegrationContext, IntegrationValidation } from './integrations.ts';
 import { integrationById, providerIntegrations } from './integrations.ts';
@@ -60,8 +69,10 @@ Usage:
   salidium start                Start the daemon in the background
   salidium daemon               Run the daemon in the foreground
   salidium stop                 Stop the background daemon
+  salidium pause                Pause all new collection for up to 24 hours
+  salidium resume               Resume collection immediately
   salidium restart              Stop it, start it again, and open the UI (--no-open to skip)
-  salidium status               Show daemon status
+  salidium status               Show daemon, collection, queue, and storage status
   salidium explanations         Show whether written explanations can call a model
   salidium explanations off|when-done|each-reply
                                 Change model-call frequency without stopping local reports
@@ -70,7 +81,7 @@ Usage:
                                 --detail=summary|detail|source, --width=N
   salidium install-hooks [claude-code|codex|all]    Register Salidium hooks (default: all present)
   salidium uninstall-hooks [claude-code|codex|all]
-  salidium doctor               Check the local setup
+  salidium doctor               Check the local setup and collection health
   salidium --version            Print the installed version
   salidium reingest [session]   Re-read session files (--all, --status, --verbose)
   salidium retention            Show the current history policy and a cleanup preview
@@ -78,6 +89,8 @@ Usage:
                                 Set automatic session retention (default: forever)
   salidium retention apply      Apply one cleanup batch now (daemon must be stopped)
   salidium retention compact    Return reusable SQLite pages to the OS (daemon must be stopped)
+  salidium storage              Show the lossless storage layout and page size
+  salidium storage optimize     Copy, verify, and atomically install the compact layout offline
   salidium pin [session]        Exempt a session from automatic retention
   salidium unpin [session]      Remove the retention exemption
   salidium forget [session]     Immediately forget one whole session (--yes)
@@ -114,8 +127,14 @@ const salidiumHome = process.env.SALIDIUM_HOME ?? join(userHome, '.salidium');
 async function main(argv: string[]): Promise<number> {
   const assumeYes = argv.includes('--yes') || argv.includes('-y');
   const noOpen = argv.includes('--no-open');
-  const positional = argv.filter((value) => !['--yes', '-y', '--no-open'].includes(value));
+  const jsonOutput = argv.includes('--json');
+  const quiet = argv.includes('--quiet');
+  const positional = argv.filter(
+    (value) => !['--yes', '-y', '--no-open', '--json', '--quiet'].includes(value),
+  );
   const [cmd = 'up', arg] = positional;
+  if (!['pause', 'resume', 'stop'].includes(cmd) && !(cmd === 'storage' && arg === 'optimize'))
+    await implicitlyResumeCollection();
   switch (cmd) {
     case 'help':
     case '--help':
@@ -300,6 +319,7 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     case 'stop': {
+      const collection = await setCollectionState('pause', 'stop');
       const stopped = await stopDaemon();
       process.stdout.write(
         stopped === undefined
@@ -316,7 +336,29 @@ async function main(argv: string[]): Promise<number> {
           `Explanations remain set to ${explanationMode(storedMode).label} for the next start. Disable them with: salidium explanations off\n`,
         );
       }
+      process.stdout.write(
+        `Collection is paused until ${collection.pause?.expiresAt ?? 'the marker is cleared'}. Observed queue at pause: ${queueLabel(collection)}. New hook and transcript observations will not be collected while paused.\n`,
+      );
       return stopped === undefined || (stopped.signaled && stopped.exited) ? 0 : 1;
+    }
+    case 'pause': {
+      const status = await setCollectionState('pause', 'manual');
+      if (!quiet) {
+        if (jsonOutput) process.stdout.write(`${JSON.stringify(status)}\n`);
+        else
+          process.stdout.write(
+            `Collection paused until ${status.pause?.expiresAt ?? 'the pause is cleared'}. Observed queue now: ${queueLabel(status)}.\n`,
+          );
+      }
+      return 0;
+    }
+    case 'resume': {
+      const status = await setCollectionState('resume');
+      if (!quiet) {
+        if (jsonOutput) process.stdout.write(`${JSON.stringify(status)}\n`);
+        else process.stdout.write(`Collection active. ${queueLabel(status)} queued.\n`);
+      }
+      return 0;
     }
     /*
      * One command, because the two-command form is what everything here tells you to type — this
@@ -362,29 +404,81 @@ async function main(argv: string[]): Promise<number> {
     case 'status': {
       const d = readDaemonJson(salidiumHome);
       const presence = await presenceOf(d);
+      const explanations = await currentExplanationState(d, presence);
+      const context: IntegrationContext = { userHome, salidiumHome };
+      const providers = await Promise.all(
+        providerIntegrations.map(async (provider) => {
+          const detection = provider.detect(context);
+          const inspection =
+            detection.detected && provider.liveHooksSupported(context)
+              ? provider.inspect(context)
+              : undefined;
+          const trust =
+            provider.id === 'codex' && detection.detected && inspection?.status !== 'not-configured'
+              ? await inspectCodexHookTrust(process.cwd())
+              : undefined;
+          return {
+            id: provider.id,
+            name: provider.name,
+            detected: detection.detected,
+            liveHooksSupported: provider.liveHooksSupported(context),
+            hookStatus: inspection?.status ?? null,
+            missingEvents: inspection?.missingEvents ?? [],
+            hookTrust: trust?.trust ?? null,
+            hookTrustIssue: trust?.issue ?? null,
+          };
+        }),
+      );
+      const collection = await collectionStatus(
+        d,
+        presence,
+        providers.some((p) => p.hookStatus !== null && p.hookStatus !== 'not-configured'),
+      );
+      const exit = collection.health === 'runaway' ? 4 : presence === 'reachable' ? 0 : 1;
+      if (quiet) return exit;
+      if (jsonOutput) {
+        process.stdout.write(
+          `${JSON.stringify({
+            daemon:
+              d && presence !== 'absent' ? { ...d, token: undefined, presence } : { presence },
+            collection,
+            explanations,
+            providers,
+          })}\n`,
+        );
+        return exit;
+      }
       process.stdout.write(
         d && presence !== 'absent'
           ? `running: pid ${d.pid}, port ${d.port}, since ${d.startedAt}${presence === 'unresponsive' ? '; not answering' : ''}\n`
           : 'not running\n',
       );
-      const explanations = await currentExplanationState(d, presence);
+      process.stdout.write(`Collection: ${collectionStatusLabel(collection)}\n`);
+      process.stdout.write(
+        `Queue: ${queueLabel(collection)}${collection.queue.oldestAt ? `, oldest ${collection.queue.oldestAt}` : ''}\n`,
+      );
+      process.stdout.write(
+        `Store: ${collection.store.bytes === null ? 'Unavailable' : formatBytes(collection.store.bytes)}, retention ${retentionLabel(collection.store.retention)}, last ingest ${collection.store.lastIngestAt ?? 'Unavailable'}\n`,
+      );
+      process.stdout.write(`Health: ${healthLabel(collection.health)}\n`);
       process.stdout.write(`Explanations: ${explanationStateLabel(explanations)}\n`);
-      const context: IntegrationContext = { userHome, salidiumHome };
-      for (const provider of providerIntegrations) {
-        const detection = provider.detect(context);
-        const status = !detection.detected
-          ? 'not detected'
-          : provider.liveHooksSupported(context)
-            ? provider.inspect(context).status
-            : 'history-only (native Windows; live hooks unavailable)';
-        process.stdout.write(`${provider.name}: ${status}\n`);
+      for (const provider of providers) {
+        const label = !provider.detected
+          ? 'Not detected'
+          : !provider.liveHooksSupported
+            ? 'History only; live hooks unavailable on native Windows'
+            : hookStatusLabel(provider.hookStatus);
+        const trust =
+          provider.id === 'codex' && provider.hookStatus !== 'not-configured'
+            ? `; trust ${hookTrustLabel(provider.hookTrust)}`
+            : '';
+        process.stdout.write(`${provider.name}: ${label}${trust}\n`);
       }
-      /*
-       * Zero still means the daemon answered, not merely that it is there. The line above gained a
-       * third thing to say; a script asking whether it can talk to the daemon is asking the same
-       * question it always was, and a silent daemon is not an answer.
-       */
-      return presence === 'reachable' ? 0 : 1;
+      if (collection.gaps.active.length || collection.gaps.recovered.length)
+        process.stdout.write(
+          `Collection gaps: ${collection.gaps.active.length} active, ${collection.gaps.recovered.length} recovered, ${collection.gaps.omittedEpisodes} older episodes omitted; exact dropped event counts unavailable\n`,
+        );
+      return exit;
     }
     case 'explanations': {
       const d = readDaemonJson(salidiumHome);
@@ -691,7 +785,9 @@ async function main(argv: string[]): Promise<number> {
         process.stdout.write(`Store: ${formatBytes(storeBytes)}\n`);
         if (storeBytes >= 1024 * 1024 * 1024)
           process.stdout.write(
-            'Storage warning: history is over 1 GiB. Preview a 30, 90, or 365 day policy before opting in.\n',
+            inspectStoreLayout(db).optimized
+              ? 'Storage warning: history is over 1 GiB. Preview exactly what retention would delete before opting in.\n'
+              : 'Lossless storage optimization is available before deleting history. Run `salidium storage`, then use an offline `salidium storage optimize`.\n',
           );
         process.stdout.write(`Pinned: ${store.pinnedSessionIds().length}\n`);
         process.stdout.write(
@@ -702,6 +798,60 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       } finally {
         store.close();
+      }
+    }
+    case 'storage': {
+      const { db, pauseFile } = daemonPaths(salidiumHome);
+      if (!existsSync(db)) {
+        process.stderr.write(`no store at ${db}\n`);
+        return 1;
+      }
+      if (arg !== undefined && arg !== 'optimize') {
+        process.stderr.write('storage accepts only `optimize`\n');
+        return 2;
+      }
+      if (arg === undefined) {
+        const layout = inspectStoreLayout(db);
+        if (quiet) return layout.optimized ? 0 : 3;
+        if (jsonOutput) process.stdout.write(`${JSON.stringify(layout)}\n`);
+        else {
+          process.stdout.write(`Layout: ${layout.optimized ? 'Optimized' : 'Legacy'}\n`);
+          process.stdout.write(`Page size: ${formatBytes(layout.pageSize)}\n`);
+          process.stdout.write(
+            `Events: ${layout.eventsWithoutRowid ? 'WITHOUT ROWID' : 'rowid table'}, ${layout.eventJsonType ?? 'unknown'} payload\n`,
+          );
+          process.stdout.write(`Checkpoints: ${layout.checkpointType ?? 'unknown'} payload\n`);
+          if (!layout.optimized)
+            process.stdout.write(
+              'Lossless optimization is available. Stop Salidium, then run `salidium storage optimize`.\n',
+            );
+        }
+        return layout.optimized ? 0 : 3;
+      }
+      if (await liveStoreWriteBlocked('optimize storage')) return 2;
+      const alreadyPaused = existsSync(pauseFile);
+      const needsRewrite = !inspectStoreLayout(db).optimized;
+      if (needsRewrite && !alreadyPaused) writeCollectionPause(salidiumHome, 'manual');
+      try {
+        const result = optimizeStoreLayout(db, {
+          onProgress:
+            quiet || jsonOutput ? undefined : (stage) => process.stdout.write(`${stage}...\n`),
+        });
+        if (quiet) return 0;
+        if (jsonOutput) process.stdout.write(`${JSON.stringify(result)}\n`);
+        else if (result.alreadyOptimized) process.stdout.write('Storage is already optimized.\n');
+        else
+          process.stdout.write(
+            `Optimized ${result.eventRows.toLocaleString()} events and ${result.checkpointRows.toLocaleString()} checkpoints from ${formatBytes(result.beforeBytes)} to ${formatBytes(result.afterBytes)}. Row counts, logical SHA-256, and SQLite integrity all matched before the atomic swap.\n`,
+          );
+        return 0;
+      } catch (error) {
+        process.stderr.write(
+          `storage optimization stopped without replacing the store: ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        return 2;
+      } finally {
+        if (needsRewrite && !alreadyPaused) clearCollectionPause(salidiumHome);
       }
     }
     case 'pin':
@@ -754,7 +904,7 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     case 'doctor':
-      return doctor();
+      return doctor({ json: jsonOutput, quiet });
     default:
       process.stderr.write(`unknown command: ${cmd}\n\n${HELP}`);
       return 2;
@@ -766,6 +916,140 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
+}
+
+function queueLabel(status: CollectionStatus): string {
+  return `${status.queue.files.toLocaleString()} file${status.queue.files === 1 ? '' : 's'}, ${formatBytes(status.queue.bytes)}`;
+}
+
+function retentionLabel(retention: CollectionStatus['store']['retention']): string {
+  if (retention === null) return 'Unavailable';
+  return retention === 'forever' ? 'Forever' : `${retention} days`;
+}
+
+function collectionStatusLabel(status: CollectionStatus): string {
+  if (!status.pause) return status.state === 'paused' ? 'Paused; lease unreadable' : 'Active';
+  return `Paused until ${status.pause.expiresAt}`;
+}
+
+function healthLabel(health: CollectionStatus['health']): string {
+  if (health === 'runaway') return 'Runaway risk';
+  if (health === 'attention') return 'Needs attention';
+  return 'Healthy';
+}
+
+function hookStatusLabel(status: string | null): string {
+  if (status === 'configured') return 'Connected';
+  if (status === 'partial') return 'Incomplete';
+  if (status === 'invalid') return 'Configuration needs repair';
+  return 'Not connected';
+}
+
+function hookTrustLabel(trust: string | null): string {
+  if (trust === 'trusted') return 'Approved';
+  if (trust === 'managed') return 'Managed';
+  if (trust === 'untrusted') return 'Approval required';
+  if (trust === 'modified') return 'Changed since approval';
+  return 'Unavailable';
+}
+
+async function setCollectionState(
+  action: 'pause' | 'resume',
+  reason: 'manual' | 'stop' = 'manual',
+): Promise<CollectionStatus> {
+  const daemon = readDaemonJson(salidiumHome);
+  const presence = await presenceOf(daemon);
+  if (daemon && presence === 'reachable') {
+    try {
+      const response = await fetch(`http://127.0.0.1:${daemon.port}/api/collection`, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${daemon.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action, reason }),
+        signal: AbortSignal.timeout(2_000),
+      });
+      if (response.ok) return CollectionStatusSchema.parse(await response.json());
+    } catch {
+      /* The marker fallback still controls the relay if the daemon disappeared after presence. */
+    }
+  }
+  if (action === 'pause') writeCollectionPause(salidiumHome, reason);
+  else clearCollectionPause(salidiumHome);
+  return collectionStatus(daemon, presence, configuredHookPresent());
+}
+
+async function implicitlyResumeCollection(): Promise<void> {
+  if (!existsSync(daemonPaths(salidiumHome).pauseFile)) return;
+  const daemon = readDaemonJson(salidiumHome);
+  if (daemon && (await presenceOf(daemon)) === 'reachable') {
+    try {
+      const response = await fetch(`http://127.0.0.1:${daemon.port}/api/collection`, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${daemon.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'resume' }),
+        signal: AbortSignal.timeout(2_000),
+      });
+      if (response.ok) return;
+    } catch {
+      /* Fall through to the marker operation if the daemon disappeared during the request. */
+    }
+  }
+  clearCollectionPause(salidiumHome);
+}
+
+async function collectionStatus(
+  daemon: DaemonJson | undefined,
+  presence: Presence,
+  anyHooksConfigured: boolean,
+): Promise<CollectionStatus> {
+  let observedPresence = presence;
+  if (daemon && presence === 'reachable') {
+    try {
+      const response = await fetch(`http://127.0.0.1:${daemon.port}/api/collection`, {
+        headers: { Authorization: `Bearer ${daemon.token}` },
+        signal: AbortSignal.timeout(2_000),
+      });
+      if (response.ok) return CollectionStatusSchema.parse(await response.json());
+    } catch {
+      /* The direct observation below still reports the queue and store file. */
+    }
+    observedPresence = await presenceOf(daemon);
+  }
+  let retention: CollectionStatus['store']['retention'] = null;
+  let lastIngestAt: string | undefined;
+  const db = daemonPaths(salidiumHome).db;
+  if (observedPresence === 'absent' && existsSync(db)) {
+    try {
+      const store = new SqliteStore(db, { readOnly: true });
+      try {
+        retention = store.retentionPolicy();
+        const latest = store.listSessions(1)[0];
+        lastIngestAt = latest?.lastEventAt ?? latest?.startedAt;
+      } finally {
+        store.close();
+      }
+    } catch {
+      /* Unavailable is more accurate than a default policy or timestamp. */
+    }
+  }
+  return observeCollectionStatus({
+    home: salidiumHome,
+    retention,
+    lastIngestAt,
+    daemonReachable: observedPresence === 'reachable',
+    anyHooksConfigured,
+  });
+}
+
+function configuredHookPresent(): boolean {
+  return (['claude-code', 'codex'] as const).some(
+    (provider) => inspectBuiltInHooks(provider, userHome, salidiumHome).status !== 'not-configured',
+  );
 }
 
 function uiUrl(d: DaemonJson): string {
@@ -1200,10 +1484,11 @@ function validateDaemonEnvironment(): void {
   validateSalidiumHistoryDays(process.env.SALIDIUM_HISTORY_DAYS);
 }
 
-async function doctor(): Promise<number> {
+async function doctor(options: { json: boolean; quiet: boolean }): Promise<number> {
   const lines: string[] = [];
   let problems = 0;
-  for (const validation of essentialValidations()) {
+  const validations = essentialValidations();
+  for (const validation of validations) {
     lines.push(validation.message);
     if (validation.level === 'attention') problems++;
   }
@@ -1226,10 +1511,30 @@ async function doctor(): Promise<number> {
   }
   lines.push(`explanations ${explanationStateLabel(localExplanationState())}`);
   const context: IntegrationContext = { userHome, salidiumHome };
+  const providerResults: Array<{
+    id: string;
+    name: string;
+    detected: boolean;
+    validations: IntegrationValidation[];
+    historyFound: boolean;
+    hookStatus: string | null;
+    hookTrust: string | null;
+    hookTrustIssue: string | null;
+  }> = [];
   for (const provider of providerIntegrations) {
     const detection = provider.detect(context);
     if (!detection.detected) {
       lines.push(`${provider.name} not detected`);
+      providerResults.push({
+        id: provider.id,
+        name: provider.name,
+        detected: false,
+        validations: [],
+        historyFound: false,
+        hookStatus: null,
+        hookTrust: null,
+        hookTrustIssue: null,
+      });
       continue;
     }
     if (!provider.liveHooksSupported(context)) {
@@ -1239,18 +1544,84 @@ async function doctor(): Promise<number> {
       lines.push(
         `${provider.name} history ${provider.historyDirectories(context).some(existsSync) ? 'found' : 'not found yet'}`,
       );
+      providerResults.push({
+        id: provider.id,
+        name: provider.name,
+        detected: true,
+        validations: provider.validate(context),
+        historyFound: provider.historyDirectories(context).some(existsSync),
+        hookStatus: null,
+        hookTrust: null,
+        hookTrustIssue: null,
+      });
       continue;
     }
-    for (const validation of provider.validate(context)) {
+    const inspection = provider.inspect(context);
+    const providerValidations = provider.validate(context);
+    for (const validation of providerValidations) {
       lines.push(validation.message);
       if (validation.level === 'attention') problems++;
     }
-    lines.push(
-      `${provider.name} history ${provider.historyDirectories(context).some(existsSync) ? 'found' : 'not found yet'}`,
-    );
+    const historyFound = provider.historyDirectories(context).some(existsSync);
+    lines.push(`${provider.name} history ${historyFound ? 'found' : 'not found yet'}`);
+    providerResults.push({
+      id: provider.id,
+      name: provider.name,
+      detected: true,
+      validations: providerValidations,
+      historyFound,
+      hookStatus: inspection.status,
+      hookTrust: null,
+      hookTrustIssue: null,
+    });
   }
-  process.stdout.write(`${lines.join('\n')}\n`);
-  return problems ? 1 : 0;
+  const codexResult = providerResults.find((provider) => provider.id === 'codex');
+  if (codexResult?.detected && codexResult.hookStatus !== 'not-configured') {
+    const trust = await inspectCodexHookTrust(process.cwd());
+    codexResult.hookTrust = trust.trust;
+    codexResult.hookTrustIssue = trust.issue ?? null;
+    lines.push(`Codex hook trust ${hookTrustLabel(trust.trust).toLowerCase()}`);
+    if (trust.trust === 'untrusted' || trust.trust === 'modified') problems++;
+  }
+  const collection = await collectionStatus(d, presence, configuredHookPresent());
+  lines.push(`collection ${collectionStatusLabel(collection).toLowerCase()}`);
+  lines.push(`queue ${queueLabel(collection)}`);
+  lines.push(
+    `store ${collection.store.bytes === null ? 'unavailable' : formatBytes(collection.store.bytes)}, retention ${retentionLabel(collection.store.retention).toLowerCase()}, last ingest ${collection.store.lastIngestAt ?? 'unavailable'}`,
+  );
+  if (collection.gaps.active.length > 0)
+    lines.push(
+      `collection has ${collection.gaps.active.length} active loss marker${collection.gaps.active.length === 1 ? '' : 's'}; exact dropped event counts are unavailable`,
+    );
+  if (collection.gaps.recovered.length > 0 || collection.gaps.omittedEpisodes > 0)
+    lines.push(
+      `collection ledger has ${collection.gaps.recovered.length} recovered episode${collection.gaps.recovered.length === 1 ? '' : 's'} and ${collection.gaps.omittedEpisodes} older omitted`,
+    );
+  if (collection.state === 'paused' && !collection.pause)
+    lines.push('collection pause marker is unreadable; any later CLI command will clear it');
+  const exit =
+    collection.health === 'runaway'
+      ? 4
+      : problems
+        ? 1
+        : collection.health === 'attention' || (collection.state === 'paused' && !collection.pause)
+          ? 3
+          : 0;
+  if (options.quiet) return exit;
+  if (options.json) {
+    process.stdout.write(
+      `${JSON.stringify({
+        ok: exit === 0,
+        exitCode: exit,
+        daemon: d && presence !== 'absent' ? { ...d, token: undefined, presence } : { presence },
+        validations,
+        settingsProblem: settingsProblem ?? null,
+        providers: providerResults,
+        collection,
+      })}\n`,
+    );
+  } else process.stdout.write(`${lines.join('\n')}\n`);
+  return exit;
 }
 
 main(process.argv.slice(2)).then(

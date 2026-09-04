@@ -22,6 +22,7 @@ describe('daemon provider extensions', () => {
     const descriptor: ProviderDescriptor = {
       contractVersion: PROVIDER_ADAPTER_CONTRACT_VERSION,
       displayName: 'Example Agent',
+      hookEventBudget: { expectedPerTurn: { fixed: 0, perToolCall: 0 }, events: [] },
       adapter: {
         id: 'example/agent',
         sessionRoots: () => [],

@@ -23,12 +23,33 @@ export type {
   ExplainerStatus,
 } from './enrich/explainerBackends.ts';
 export { getExplainerStatus } from './enrich/explainerBackends.ts';
+export type { CollectionPause } from './ingest/collectionState.ts';
+export {
+  expireCollectionPause,
+  observeCollectionStatus,
+  pauseCollection,
+  readCollectionPause,
+  resumeCollection,
+} from './ingest/collectionState.ts';
+export type {
+  BuiltInHookProvider,
+  HookConfigurationInspection,
+  HookConfigurationStatus,
+} from './ingest/hookConfiguration.ts';
+export { inspectBuiltInHooks } from './ingest/hookConfiguration.ts';
+export { HOOK_PAUSE_FILE, HOOK_PAUSE_LEASE_MS } from './ingest/limits.ts';
 export {
   DEFAULT_LOG_FILES,
   DEFAULT_LOG_MAX_BYTES,
   rotateLogFile,
 } from './logging/logger.ts';
 export { effectiveCadence } from './sessions/sessionCoordinator.ts';
+export type {
+  StoreLayoutInspection,
+  StoreOptimizationOptions,
+  StoreOptimizationResult,
+} from './storage/optimizeStore.ts';
+export { inspectStoreLayout, optimizeStoreLayout } from './storage/optimizeStore.ts';
 export type {
   AuditMessageRow,
   CheckpointRow,
@@ -44,7 +65,11 @@ export type {
 } from './storage/salidiumStore.ts';
 export {
   createSqliteStore,
+  EVENT_COMPRESS_MIN_BYTES,
   INGEST_PARSER_REVISION,
+  MAX_RAW_FINGERPRINT_CONFLICTS,
+  OPTIMIZED_STORE_PAGE_SIZE,
   SCHEMA_VERSION,
   SqliteStore,
+  STORAGE_LAYOUT_VERSION,
 } from './storage/sqliteStore.ts';

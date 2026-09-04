@@ -118,3 +118,30 @@ describe('personalization store lifecycle', () => {
     expect(useAppStore.getState().personalized).toEqual({});
   });
 });
+
+describe('daemon connection lifecycle', () => {
+  it('reports a stream lost after the initial list loaded and clears it when the stream recovers', () => {
+    useAppStore.setState({
+      listConnection: 'open',
+      daemonError: undefined,
+    });
+
+    useAppStore.getState().setListConnection('reconnecting');
+
+    expect(useAppStore.getState().daemonError).toEqual({
+      message: 'connection to the daemon was lost',
+      unreachable: true,
+    });
+    expect(useAppStore.getState().listConnection).toBe('reconnecting');
+
+    useAppStore.getState().setListConnection('open');
+
+    expect(useAppStore.getState().daemonError).toBeUndefined();
+  });
+
+  it('does not call an initial connection attempt an outage', () => {
+    useAppStore.getState().setListConnection('connecting');
+
+    expect(useAppStore.getState().daemonError).toBeUndefined();
+  });
+});

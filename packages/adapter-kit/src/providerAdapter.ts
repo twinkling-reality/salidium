@@ -31,15 +31,6 @@ export interface HookParseContext {
   receivedAt: CanonicalTimestamp;
 }
 
-export interface HookInstallPlan {
-  /** Human-readable description of what will be written where. */
-  description: string;
-  /** Path of the settings file to modify. */
-  settingsPath: string;
-  /** Events the hooks subscribe to. */
-  events: string[];
-}
-
 export interface ProviderAdapter {
   readonly id: ProviderId;
   /** Directories to watch for session files (absolute; ~ expanded by the daemon). */

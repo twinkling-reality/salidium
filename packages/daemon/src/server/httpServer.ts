@@ -10,6 +10,8 @@ import {
   projectSession,
 } from '@salidium/core';
 import type {
+  CollectionControlRequest,
+  CollectionStatus,
   DaemonInfo,
   ExplainerSettings,
   ExplainerSettingsRequest,
@@ -21,6 +23,7 @@ import type {
 } from '@salidium/protocol';
 import {
   CanonicalTimestampSchema,
+  CollectionControlRequestSchema,
   ExplainerSettingsRequestSchema,
   PersonalizationSettingsRequestSchema,
 } from '@salidium/protocol';
@@ -37,6 +40,11 @@ export interface HttpServerDeps {
   port: () => number;
   uiDist?: string;
   info: () => DaemonInfo;
+  collection?: {
+    status: () => CollectionStatus;
+    set: (request: CollectionControlRequest) => CollectionStatus;
+    disconnect: (provider: string) => CollectionStatus | undefined;
+  };
   /**
    * The choices that survive a restart. Optional because the routes are the only thing that needs
    * them, and a test that stands the server up to exercise one other route should not have to
@@ -147,6 +155,27 @@ export function createHttpServer(deps: HttpServerDeps): Server {
     }
 
     if (req.method === 'GET' && url.pathname === '/api/info') return json(res, 200, deps.info());
+    if (url.pathname === '/api/collection' && deps.collection) {
+      if (req.method === 'GET') return json(res, 200, deps.collection.status());
+      if (req.method === 'PUT') {
+        const body = await readBody(req, MAX_SETTINGS_BODY_BYTES);
+        let payload: unknown;
+        try {
+          payload = JSON.parse(body);
+        } catch {
+          return json(res, 400, { error: 'invalid json' });
+        }
+        const parsed = CollectionControlRequestSchema.safeParse(payload);
+        if (!parsed.success) return json(res, 400, { error: 'invalid collection control' });
+        return json(res, 200, deps.collection.set(parsed.data));
+      }
+      return json(res, 405, { error: 'method not allowed' });
+    }
+    const disconnect = /^\/api\/collection\/hooks\/([^/]+)$/.exec(url.pathname);
+    if (req.method === 'DELETE' && disconnect?.[1] && deps.collection) {
+      const status = deps.collection.disconnect(decodeURIComponent(disconnect[1]));
+      return status ? json(res, 200, status) : json(res, 404, { error: 'unknown provider' });
+    }
     if (req.method === 'GET' && url.pathname === '/api/sessions')
       return json(res, 200, registry.listSessions());
     /*

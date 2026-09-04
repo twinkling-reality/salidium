@@ -1,4 +1,4 @@
-import { CLAUDE_CODE_HOOK_EVENTS } from './hookPayloads.ts';
+import { CLAUDE_CODE_HOOK_EVENT_BUDGET } from './hookPayloads.ts';
 
 /**
  * Builds the `hooks` entries Salidium adds to `~/.claude/settings.json`. Every hook is an
@@ -21,9 +21,14 @@ export const SALIDIUM_HOOK_MARKER = 'SALIDIUM_HOOK=1';
 const LEGACY_SALIDIUM_HOOK_MARKER = '/.salidium/hooks/';
 
 export function buildClaudeCodeHooks(relayCommand: string): Record<string, HookGroup[]> {
-  const spec: HookCommandSpec = { type: 'command', command: relayCommand, async: true, timeout: 5 };
   const out: Record<string, HookGroup[]> = {};
-  for (const event of CLAUDE_CODE_HOOK_EVENTS) {
+  for (const { name: event, pressure } of CLAUDE_CODE_HOOK_EVENT_BUDGET.events) {
+    const spec: HookCommandSpec = {
+      type: 'command',
+      command: `${relayCommand} ${event} ${pressure}`,
+      async: true,
+      timeout: 5,
+    };
     // SessionEnd hooks share a 1.5 s budget; keep the timeout small there.
     const hooks = event === 'SessionEnd' ? [{ ...spec, timeout: 1 }] : [spec];
     out[event] = [{ hooks }];

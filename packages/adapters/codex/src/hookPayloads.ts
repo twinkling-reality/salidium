@@ -24,6 +24,23 @@ export const CODEX_HOOK_EVENTS = [
   'SessionEnd',
 ] as const;
 
+export const CODEX_HOOK_EVENT_BUDGET = {
+  expectedPerTurn: { fixed: 2, perToolCall: 2 },
+  events: CODEX_HOOK_EVENTS.map((name) => ({
+    name,
+    pressure:
+      name === 'PreToolUse'
+        ? ('shed-first' as const)
+        : name === 'PostToolUse'
+          ? ('shed-second' as const)
+          : ['SessionEnd', 'Stop', 'SubagentStart', 'SubagentStop', 'PermissionRequest'].includes(
+                name,
+              )
+            ? ('lifecycle' as const)
+            : ('retain' as const),
+  })),
+} as const;
+
 /**
  * Codex hooks use the Claude Code wire shape (session_id, transcript_path, cwd, hook_event_name,
  * tool_name, tool_input, tool_response, tool_use_id, last_assistant_message) plus `model` and

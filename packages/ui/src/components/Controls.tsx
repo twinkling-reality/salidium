@@ -209,18 +209,21 @@ export function ConnectionBadge({ status }: { status: string }) {
   if (status === 'connecting')
     return (
       <span className="conn conn-warn" title="Opening the connection to the daemon">
+        <span className="conn-mark" aria-hidden="true" />
         connecting
       </span>
     );
   if (status === 'reconnecting')
     return (
       <span className="conn conn-warn" title="Lost contact with the daemon; retrying">
+        <span className="conn-mark" aria-hidden="true" />
         reconnecting…
       </span>
     );
   if (status === 'closed')
     return (
       <span className="conn conn-bad" title="Not receiving updates; the daemon may have stopped">
+        <span className="conn-mark" aria-hidden="true" />
         disconnected
       </span>
     );

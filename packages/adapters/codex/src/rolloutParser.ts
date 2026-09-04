@@ -99,18 +99,29 @@ export class CodexRolloutParser implements RecordParser {
     if (!trimmed) return [];
     const record = asObject(safeJson(trimmed));
     if (!record) return [this.warning(lineNo, 'record is not a JSON object', trimmed)];
+    const type = asString(record.type);
     const ts = normalizeProviderTimestamp(record.timestamp);
     if (!ts)
-      return [
-        this.warning(
-          lineNo,
-          typeof record.timestamp === 'string'
-            ? 'record has an invalid RFC 3339 timestamp'
-            : 'record has no timestamp',
-          trimmed,
-        ),
-      ];
-    const type = asString(record.type);
+      if (
+        type !== 'session_meta' &&
+        type !== 'turn_context' &&
+        type !== 'event_msg' &&
+        type !== 'response_item' &&
+        type !== 'compacted'
+      )
+        // Unknown bookkeeping records may legitimately omit an instant. Ignore those records rather
+        // than turning a supported forward-compatible shape into a durable malformed warning.
+        return [];
+      else
+        return [
+          this.warning(
+            lineNo,
+            typeof record.timestamp === 'string'
+              ? 'record has an invalid RFC 3339 timestamp'
+              : 'record has no timestamp',
+            trimmed,
+          ),
+        ];
     const payload = asObject(record.payload) ?? {};
     const source: EventSource = {
       provider: 'codex',

@@ -1,5 +1,7 @@
 import { applyEvent, type RunState } from '@salidium/core';
 import type {
+  CollectionStatus,
+  DaemonInfo,
   ExplainerSettings,
   ExplainerSettingsRequest,
   Facet,
@@ -71,6 +73,7 @@ const DETAIL_KEY = 'salidium.detail';
 const SIDEBAR_KEY = 'salidium.sidebar';
 const THEME_KEY = 'salidium.theme';
 const STATS_KEY = 'salidium.stats';
+const INGEST_KEY = 'salidium.ingest';
 const REWIND_KEY = 'salidium.rewind';
 const SIDE_FOLDS_KEY = 'salidium.sideFolds';
 
@@ -154,6 +157,8 @@ interface AppState {
   sidebarOpen: boolean;
   /** Models and measured usage, in the supporting inspector shared with History. */
   statsOpen: boolean;
+  /** Local collection cost and controls in the same supporting inspector slot. */
+  ingestOpen: boolean;
   /**
    * The time scrubber, at the foot of the session rather than inside a section of a panel.
    *
@@ -198,6 +203,10 @@ interface AppState {
    * and a copy kept here would be the one a second tab disagreed with.
    */
   explainer: ExplainerSettings | undefined;
+  collection: CollectionStatus | undefined;
+  collectionInfo: DaemonInfo | undefined;
+  collectionLoading: boolean;
+  collectionError: string | undefined;
   /** Daemon-owned and independently deletable; never copied into browser storage. */
   personalization: PersonalizationSettings | undefined;
   personalizationLoading: boolean;
@@ -218,6 +227,9 @@ interface AppState {
   unauthorized(): void;
   setDetail(detail: Detail): void;
   loadExplainer(): void;
+  loadCollection(): void;
+  setCollection(action: 'pause' | 'resume'): Promise<void>;
+  disconnectHooks(provider: string): Promise<void>;
   loadPersonalization(): void;
   setExplainerSettings(settings: ExplainerSettingsRequest): void;
   savePersonalization(settings: PersonalizationSettingsRequest): Promise<void>;
@@ -225,6 +237,7 @@ interface AppState {
   personalizeSession(sessionId: string): Promise<void>;
   toggleSidebar(): void;
   toggleStats(): void;
+  toggleIngest(): void;
   setSessionQuery(q: string): void;
   setSessionSearch(result: SessionList): void;
   toggleFold(group: string): void;
@@ -288,6 +301,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   panel: undefined,
   sidebarOpen: localStorage.getItem(SIDEBAR_KEY) !== '0',
   statsOpen: localStorage.getItem(STATS_KEY) === '1',
+  ingestOpen: localStorage.getItem(INGEST_KEY) === '1',
   rewindOpen: localStorage.getItem(REWIND_KEY) === '1',
   sessionQuery: '',
   sessionSearch: undefined,
@@ -304,6 +318,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   liveErrors: {},
   rawOpen: undefined,
   explainer: undefined,
+  collection: undefined,
+  collectionInfo: undefined,
+  collectionLoading: false,
+  collectionError: undefined,
   personalization: undefined,
   personalizationLoading: false,
   personalizationLoadError: undefined,
@@ -321,6 +339,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       authRejected: false,
       daemonError: undefined,
       personalization: undefined,
+      collection: undefined,
+      collectionInfo: undefined,
+      collectionLoading: false,
+      collectionError: undefined,
       personalizationLoading: false,
       personalizationLoadError: undefined,
       personalized: {},
@@ -337,6 +359,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       liveErrors: {},
       rawOpen: undefined,
       explainer: undefined,
+      collection: undefined,
+      collectionInfo: undefined,
+      collectionLoading: false,
+      collectionError: undefined,
       personalization: undefined,
       personalizationLoading: false,
       personalizationLoadError: undefined,
@@ -357,6 +383,61 @@ export const useAppStore = create<AppState>((set, get) => ({
       (explainer) => set({ explainer }),
       () => {},
     );
+  },
+  loadCollection: () => {
+    const api = get().api;
+    if (!api) return;
+    set({ collectionLoading: true, collectionError: undefined });
+    void Promise.all([api.collectionStatus(), api.info()]).then(
+      ([collection, collectionInfo]) => {
+        if (api !== get().api) return;
+        set({ collection, collectionInfo, collectionLoading: false });
+      },
+      (error) => {
+        if (api !== get().api) return;
+        set({
+          collectionLoading: false,
+          collectionError: error instanceof Error ? error.message : String(error),
+        });
+      },
+    );
+  },
+  setCollection: async (action) => {
+    const api = get().api;
+    if (!api) {
+      set({ collectionError: 'daemon is not connected' });
+      return;
+    }
+    set({ collectionLoading: true, collectionError: undefined });
+    try {
+      const collection = await api.setCollection(action);
+      if (api === get().api) set({ collection, collectionLoading: false });
+    } catch (error) {
+      if (api === get().api)
+        set({
+          collectionLoading: false,
+          collectionError: error instanceof Error ? error.message : String(error),
+        });
+    }
+  },
+  disconnectHooks: async (provider) => {
+    const api = get().api;
+    if (!api) {
+      set({ collectionError: 'daemon is not connected' });
+      return;
+    }
+    set({ collectionLoading: true, collectionError: undefined });
+    try {
+      const collection = await api.disconnectHooks(provider);
+      const collectionInfo = await api.info();
+      if (api === get().api) set({ collection, collectionInfo, collectionLoading: false });
+    } catch (error) {
+      if (api === get().api)
+        set({
+          collectionLoading: false,
+          collectionError: error instanceof Error ? error.message : String(error),
+        });
+    }
   },
   loadPersonalization: () => {
     const api = get().api;
@@ -470,7 +551,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => {
       const statsOpen = !s.statsOpen;
       localStorage.setItem(STATS_KEY, statsOpen ? '1' : '0');
-      return { statsOpen };
+      if (statsOpen) localStorage.setItem(INGEST_KEY, '0');
+      return { statsOpen, ...(statsOpen ? { ingestOpen: false } : {}) };
+    }),
+  toggleIngest: () =>
+    set((s) => {
+      const ingestOpen = !s.ingestOpen;
+      localStorage.setItem(INGEST_KEY, ingestOpen ? '1' : '0');
+      if (ingestOpen) localStorage.setItem(STATS_KEY, '0');
+      return { ingestOpen, ...(ingestOpen ? { statsOpen: false } : {}) };
     }),
   setSessionQuery: (sessionQuery) => set({ sessionQuery }),
   toggleFold: (group) =>
@@ -533,7 +622,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       listConnection,
       // A healthy list stream proves the daemon is reachable again.
-      daemonError: listConnection === 'open' ? undefined : s.daemonError,
+      daemonError:
+        listConnection === 'open'
+          ? undefined
+          : listConnection === 'reconnecting' || listConnection === 'closed'
+            ? {
+                message: 'connection to the daemon was lost',
+                unreachable: true,
+              }
+            : s.daemonError,
     })),
   setDaemonError: (daemonError) => set({ daemonError }),
   setLiveError: (id, e) =>

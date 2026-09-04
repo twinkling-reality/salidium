@@ -109,6 +109,39 @@
   text-overflow: ellipsis;
 }
 
+/*
+ * Healthy transport is silent. These appear only while the daemon stream is opening or absent,
+ * with a written state beside the mark so colour never carries the meaning by itself.
+ */
+.conn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 3px var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.conn-mark {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.conn-warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.conn-bad {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 /* Exceptional model-routing states; the ordinary surface needs no explanatory prose. */
 
 .explain-lock {
@@ -2993,6 +3026,203 @@
   margin: var(--space-4) 0;
   color: var(--text-tertiary);
   font-size: var(--text-sm);
+}
+
+/* ------------------------------------------------------ ingest and storage */
+
+/*
+ * A local cost tape rather than an admin dashboard. The exact current readings stay aligned at
+ * the top, controls occupy one quiet cluster, and every observed gap is punched into one vertical
+ * ledger. The shape belongs to collection accounting: it reads from now into retained history.
+ */
+.is-body {
+  min-width: 0;
+}
+
+.is-section {
+  padding: var(--space-3) 0 var(--space-2);
+}
+
+.is-section + .is-section {
+  margin-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.is-alert,
+.is-load-error {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--warn);
+  background: var(--warn-soft);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.is-load-error {
+  margin-top: var(--space-3);
+  border-left-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.is-readout {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+
+.is-readout > div {
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.is-readout > div:last-child {
+  border-bottom: 0;
+}
+
+.is-readout dt {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.is-readout dd {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-align: right;
+}
+
+.is-readout dd small {
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+}
+
+.is-control-row {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.is-control-row .btn {
+  justify-self: start;
+}
+
+.is-control-row small,
+.is-provider small,
+.is-provider span {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.is-providers {
+  margin-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.is-provider {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.is-provider > div {
+  display: grid;
+  min-width: 0;
+}
+
+.is-provider strong {
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.is-provider .btn {
+  height: 28px;
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+}
+
+.is-provider .btn.is-confirm {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+  color: var(--danger);
+}
+
+.is-empty,
+.is-omitted {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.is-ledger {
+  position: relative;
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0 0 0 18px;
+  list-style: none;
+}
+
+.is-ledger::before {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: 1px;
+  background: var(--border-strong);
+  content: "";
+}
+
+.is-ledger li {
+  position: relative;
+  min-width: 0;
+}
+
+.is-gap-mark {
+  position: absolute;
+  top: 6px;
+  left: -17px;
+  width: 7px;
+  height: 2px;
+  background: var(--text-tertiary);
+}
+
+.is-gap-mark.is-active {
+  top: 4px;
+  height: 7px;
+  background: var(--warn);
+}
+
+.is-ledger li > div {
+  display: grid;
+  gap: 1px;
+}
+
+.is-ledger strong {
+  color: var(--text);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.is-ledger span,
+.is-ledger small {
+  overflow-wrap: anywhere;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.is-omitted {
+  margin-top: var(--space-3);
+  padding-left: 18px;
 }
 /* ------------------------------------------------------------- explained */
 

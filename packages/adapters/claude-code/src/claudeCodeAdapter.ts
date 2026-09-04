@@ -8,7 +8,11 @@ import {
   type SessionFileMatch,
 } from '@salidium/adapter-kit';
 import { makeSessionId } from '@salidium/protocol';
-import { parseClaudeCodeHookPayload, transcriptPathFromClaudeCodeHook } from './hookPayloads.ts';
+import {
+  CLAUDE_CODE_HOOK_EVENT_BUDGET,
+  parseClaudeCodeHookPayload,
+  transcriptPathFromClaudeCodeHook,
+} from './hookPayloads.ts';
 import { ClaudeCodeTranscriptParser } from './transcriptParser.ts';
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -53,5 +57,6 @@ export const claudeCodeAdapter: ProviderAdapter = {
 export const claudeCodeProvider = {
   contractVersion: PROVIDER_ADAPTER_CONTRACT_VERSION,
   displayName: 'Claude Code',
+  hookEventBudget: CLAUDE_CODE_HOOK_EVENT_BUDGET,
   adapter: claudeCodeAdapter,
 } satisfies ProviderDescriptor;

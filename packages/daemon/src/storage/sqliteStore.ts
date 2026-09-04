@@ -88,9 +88,9 @@ CREATE TABLE IF NOT EXISTS events (
   kind TEXT NOT NULL,
   agent_id TEXT,
   turn_id TEXT,
-  json TEXT NOT NULL,
+  json BLOB NOT NULL,
   PRIMARY KEY (session_id, seq)
-) WITHOUT ROWID;
+);
 CREATE UNIQUE INDEX IF NOT EXISTS events_by_id ON events(session_id, event_id);
 CREATE INDEX IF NOT EXISTS events_by_kind ON events(session_id, kind);
 CREATE TABLE IF NOT EXISTS changes (
@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS checkpoints (
   session_id TEXT NOT NULL,
   seq INTEGER NOT NULL,
   reducer_version TEXT NOT NULL,
-  state_json TEXT NOT NULL,
+  state_json BLOB NOT NULL,
   created_at TEXT NOT NULL,
   PRIMARY KEY (session_id, seq)
 );
@@ -304,30 +304,31 @@ function canonicalizeTimestamp(value: unknown): string | undefined {
  * 4 guarantees these event JSON values satisfy the current protocol before this query runs.
  */
 function eventReferencedSources(db: DatabaseSync): SourceCursor[] {
-  const rows = db
-    .prepare(`SELECT json_extract(json, '$.source.ref.path') AS path,
-                     MIN(session_id) AS session_id,
-                     MIN(json_extract(json, '$.source.provider')) AS provider
-                FROM events
-               WHERE json_extract(json, '$.source.channel') IN ('transcript', 'rollout')
-                 AND json_type(json, '$.source.ref.path') = 'text'
-                 AND json_extract(json, '$.source.ref.path') <> ''
-               GROUP BY json_extract(json, '$.source.ref.path')
-              HAVING COUNT(DISTINCT session_id) = 1
-                 AND COUNT(DISTINCT json_extract(json, '$.source.provider')) = 1
-               ORDER BY path`)
-    .all() as Array<{
-    path: string;
-    session_id: string;
-    provider: string;
-  }>;
-  return rows.map((row) => ({
-    path: row.path,
-    sessionId: row.session_id,
-    provider: row.provider,
-    byteOffset: 0,
-    lineNo: 0,
-  }));
+  const paths = new Map<string, { sessionId: string; provider: string; ambiguous: boolean }>();
+  // Decode once per event. Repeating a JSON scalar function in GROUP BY, WHERE, SELECT, and HAVING
+  // multiplied gzip work across the whole store during explicit re-ingestion inventory.
+  for (const unknownRow of db.prepare('SELECT session_id, json FROM events').iterate()) {
+    const row = unknownRow as unknown as { session_id: string; json: EncodedJson };
+    const event = decodeEventJson(row.json);
+    if (event.source.channel !== 'transcript' && event.source.channel !== 'rollout') continue;
+    const path = event.source.ref?.path;
+    if (!path) continue;
+    const provider = event.source.provider;
+    const existing = paths.get(path);
+    if (!existing) paths.set(path, { sessionId: row.session_id, provider, ambiguous: false });
+    else if (existing.sessionId !== row.session_id || existing.provider !== provider)
+      existing.ambiguous = true;
+  }
+  return [...paths]
+    .filter(([, value]) => !value.ambiguous)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([path, value]) => ({
+      path,
+      sessionId: value.sessionId,
+      provider: value.provider,
+      byteOffset: 0,
+      lineNo: 0,
+    }));
 }
 
 function comparableEvent(event: CanonicalEvent | StoredEvent): unknown {
@@ -343,20 +344,92 @@ function comparableEvent(event: CanonicalEvent | StoredEvent): unknown {
 const CHECKPOINT_GZIP_PREFIX = 'gzip-base64:v1:';
 const CHECKPOINT_COMPRESS_MIN_BYTES = 4 * 1024;
 const CHECKPOINT_MAX_DECOMPRESSED_BYTES = 128 * 1024 * 1024;
+const CHECKPOINT_GZIP_MAGIC = Buffer.from('SCP1');
+const EVENT_GZIP_MAGIC = Buffer.from('SEV1');
+export const EVENT_COMPRESS_MIN_BYTES = 1024;
+const EVENT_MAX_DECOMPRESSED_BYTES = 64 * 1024 * 1024;
+export const OPTIMIZED_STORE_PAGE_SIZE = 16 * 1024;
+export const STORAGE_LAYOUT_VERSION = 1;
+export const MAX_RAW_FINGERPRINT_CONFLICTS = 10_000;
 
-function encodeCheckpoint(state: RunState): string {
-  const json = JSON.stringify(state);
-  if (Buffer.byteLength(json) < CHECKPOINT_COMPRESS_MIN_BYTES) return json;
-  // Level 1 is intentionally the fast setting: checkpoints are written on the ingest path. The
-  // measured store shrinks dramatically even at this level, while replay remains the fallback.
-  return `${CHECKPOINT_GZIP_PREFIX}${gzipSync(json, { level: 1 }).toString('base64')}`;
+type EncodedJson = string | Uint8Array;
+
+function hasMagic(buffer: Buffer, magic: Buffer): boolean {
+  return buffer.length >= magic.length && buffer.subarray(0, magic.length).equals(magic);
 }
 
-function decodeCheckpoint(encoded: string): RunState {
-  if (!encoded.startsWith(CHECKPOINT_GZIP_PREFIX)) return JSON.parse(encoded) as RunState;
-  const compressed = Buffer.from(encoded.slice(CHECKPOINT_GZIP_PREFIX.length), 'base64');
-  const json = gunzipSync(compressed, { maxOutputLength: CHECKPOINT_MAX_DECOMPRESSED_BYTES });
-  return JSON.parse(json.toString('utf8')) as RunState;
+function decodeBinaryJson(encoded: EncodedJson, magic: Buffer, maxOutputLength: number): string {
+  if (typeof encoded === 'string') return encoded;
+  const buffer = Buffer.from(encoded);
+  if (!hasMagic(buffer, magic)) return buffer.toString('utf8');
+  return gunzipSync(buffer.subarray(magic.length), { maxOutputLength }).toString('utf8');
+}
+
+export function encodeEventJson(value: string | StoredEvent): Buffer {
+  const json = typeof value === 'string' ? value : JSON.stringify(value);
+  const bytes = Buffer.from(json);
+  if (bytes.length < EVENT_COMPRESS_MIN_BYTES) return bytes;
+  return Buffer.concat([EVENT_GZIP_MAGIC, gzipSync(bytes, { level: 1 })]);
+}
+
+export function decodeEventJson(encoded: EncodedJson): StoredEvent {
+  return JSON.parse(decodeEventJsonValue(encoded)) as StoredEvent;
+}
+
+export function decodeEventJsonValue(encoded: EncodedJson): string {
+  return decodeBinaryJson(encoded, EVENT_GZIP_MAGIC, EVENT_MAX_DECOMPRESSED_BYTES);
+}
+
+export function decodeCheckpointValue(encoded: EncodedJson): string {
+  if (typeof encoded === 'string' && encoded.startsWith(CHECKPOINT_GZIP_PREFIX)) {
+    const compressed = Buffer.from(encoded.slice(CHECKPOINT_GZIP_PREFIX.length), 'base64');
+    return gunzipSync(compressed, {
+      maxOutputLength: CHECKPOINT_MAX_DECOMPRESSED_BYTES,
+    }).toString('utf8');
+  }
+  return decodeBinaryJson(encoded, CHECKPOINT_GZIP_MAGIC, CHECKPOINT_MAX_DECOMPRESSED_BYTES);
+}
+
+function registerEventDecoder(db: DatabaseSync): void {
+  db.function('salidium_event_json', { deterministic: true }, (value) => {
+    if (typeof value !== 'string' && !(value instanceof Uint8Array))
+      throw new Error('event JSON has an unsupported SQLite value type');
+    return decodeBinaryJson(value, EVENT_GZIP_MAGIC, EVENT_MAX_DECOMPRESSED_BYTES);
+  });
+}
+
+function hasOptimizedStorageLayout(db: DatabaseSync): boolean {
+  const row = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'events'")
+    .get() as { sql?: string } | undefined;
+  const page = db.prepare('PRAGMA page_size').get() as Record<string, number> | undefined;
+  const pageSize = page ? Object.values(page)[0] : undefined;
+  return Boolean(
+    row?.sql &&
+      !/WITHOUT\s+ROWID/i.test(row.sql) &&
+      /json\s+BLOB\s+NOT\s+NULL/i.test(row.sql) &&
+      pageSize === OPTIMIZED_STORE_PAGE_SIZE,
+  );
+}
+
+export function encodeCheckpointValue(encoded: EncodedJson): Buffer {
+  if (typeof encoded === 'string' && encoded.startsWith(CHECKPOINT_GZIP_PREFIX))
+    return Buffer.concat([
+      CHECKPOINT_GZIP_MAGIC,
+      Buffer.from(encoded.slice(CHECKPOINT_GZIP_PREFIX.length), 'base64'),
+    ]);
+  const json = decodeBinaryJson(encoded, CHECKPOINT_GZIP_MAGIC, CHECKPOINT_MAX_DECOMPRESSED_BYTES);
+  const bytes = Buffer.from(json);
+  if (bytes.length < CHECKPOINT_COMPRESS_MIN_BYTES) return bytes;
+  return Buffer.concat([CHECKPOINT_GZIP_MAGIC, gzipSync(bytes, { level: 1 })]);
+}
+
+function encodeCheckpoint(state: RunState): Buffer {
+  return encodeCheckpointValue(JSON.stringify(state));
+}
+
+function decodeCheckpoint(encoded: EncodedJson): RunState {
+  return JSON.parse(decodeCheckpointValue(encoded)) as RunState;
 }
 
 /**
@@ -791,11 +864,12 @@ export class SqliteStore implements SalidiumStore {
    * business creating tables in it, and a read-write handle alongside the live daemon contends for
    * locks on a database the app is actively writing.
    */
-  constructor(path: string, opts: { readOnly?: boolean } = {}) {
+  constructor(path: string, opts: { readOnly?: boolean; pageSize?: number } = {}) {
     if (opts.readOnly) {
       if (!existsSync(path)) throw new Error(`no store at ${path}`);
       this.db = new DatabaseSync(path, { readOnly: true });
       try {
+        registerEventDecoder(this.db);
         rejectNewerSchema(this.db);
         const version = existingSchemaVersion(this.db);
         if (version === undefined || version < SCHEMA_VERSION)
@@ -818,6 +892,7 @@ export class SqliteStore implements SalidiumStore {
     let priorVersion: number | undefined;
     let hadLegacyTables = false;
     try {
+      registerEventDecoder(this.db);
       rejectNewerSchema(this.db);
       priorVersion = existingSchemaVersion(this.db);
       hadLegacyTables = Boolean(
@@ -828,6 +903,19 @@ export class SqliteStore implements SalidiumStore {
     } catch (err) {
       this.db.close();
       throw err;
+    }
+    if (!hadLegacyTables) {
+      const pageSize = opts.pageSize ?? OPTIMIZED_STORE_PAGE_SIZE;
+      if (
+        !Number.isInteger(pageSize) ||
+        pageSize < 512 ||
+        pageSize > 65_536 ||
+        (pageSize & (pageSize - 1)) !== 0
+      ) {
+        this.db.close();
+        throw new Error(`invalid SQLite page size: ${pageSize}`);
+      }
+      this.db.exec(`PRAGMA page_size = ${pageSize}`);
     }
     this.db.exec(
       'PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA foreign_keys = ON;',
@@ -877,7 +965,14 @@ export class SqliteStore implements SalidiumStore {
         'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
       )
       .run('schema_version', String(SCHEMA_VERSION));
+    if (hasOptimizedStorageLayout(this.db))
+      this.db
+        .prepare(
+          'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+        )
+        .run('storage_layout_version', String(STORAGE_LAYOUT_VERSION));
     this.stmts = this.prepareAll();
+    this.stmts.pruneFingerprintConflicts.run(MAX_RAW_FINGERPRINT_CONFLICTS - 1);
   }
 
   private prepareAll() {
@@ -982,7 +1077,11 @@ export class SqliteStore implements SalidiumStore {
        * to a full scan.
        */
       usageForSession: this.db.prepare(
-        `SELECT COUNT(*) AS messages,
+        `WITH decoded AS MATERIALIZED (
+           SELECT seq, salidium_event_json(json) AS json
+             FROM events WHERE session_id = ? AND kind = 'agent.usage'
+         )
+         SELECT COUNT(*) AS messages,
                 COALESCE(SUM(inp), 0) AS inputTokens, COALESCE(SUM(outp), 0) AS outputTokens,
                 COALESCE(SUM(cr), 0) AS cacheReadTokens, COALESCE(SUM(cw), 0) AS cacheWriteTokens
            FROM (
@@ -994,7 +1093,7 @@ export class SqliteStore implements SalidiumStore {
                       PARTITION BY COALESCE(json_extract(json, '$.agentId'), 'main'),
                                    json_extract(json, '$.messageId')
                       ORDER BY seq DESC) AS rn
-               FROM events WHERE session_id = ? AND kind = 'agent.usage'
+               FROM decoded
            ) WHERE rn = 1`,
       ),
       usageRollup: this.db.prepare(
@@ -1030,6 +1129,13 @@ export class SqliteStore implements SalidiumStore {
       fingerprintConflict: this.db.prepare(`INSERT INTO raw_fingerprint_conflicts
           (path, line, candidate_hash, captured_at, session_id, event_id, reason)
           VALUES (?, ?, ?, ?, ?, ?, ?)`),
+      pruneFingerprintConflicts: this.db.prepare(
+        `DELETE FROM raw_fingerprint_conflicts
+          WHERE id < COALESCE(
+            (SELECT id FROM raw_fingerprint_conflicts ORDER BY id DESC LIMIT 1 OFFSET ?),
+            -1
+          )`,
+      ),
       enqueueReingest: this.db.prepare(`INSERT INTO reingest_jobs
           (path, session_id, provider, agent_id, parser_revision, status, attempts, requested_at, started_at, completed_at, error)
           VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, NULL, NULL, NULL)
@@ -1117,7 +1223,7 @@ export class SqliteStore implements SalidiumStore {
         e.kind,
         e.agentId ?? null,
         e.turnId ?? null,
-        JSON.stringify(e),
+        encodeEventJson(e),
       );
   }
 
@@ -1197,7 +1303,7 @@ export class SqliteStore implements SalidiumStore {
 
   latestCheckpoint(sessionId: string, reducerVersion: string): CheckpointRow | undefined {
     const row = this.stmts.latestCheckpoint.get(sessionId, reducerVersion) as
-      | { seq: number; reducer_version: string; state_json: string }
+      | { seq: number; reducer_version: string; state_json: EncodedJson }
       | undefined;
     if (!row) return undefined;
     try {
@@ -1224,7 +1330,7 @@ export class SqliteStore implements SalidiumStore {
     seq: number,
   ): CheckpointRow | undefined {
     const row = this.stmts.checkpointAtOrBefore.get(sessionId, reducerVersion, seq) as
-      | { seq: number; reducer_version: string; state_json: string }
+      | { seq: number; reducer_version: string; state_json: EncodedJson }
       | undefined;
     if (!row) return undefined;
     try {
@@ -1250,14 +1356,14 @@ export class SqliteStore implements SalidiumStore {
     limit = 100_000,
   ): StoredEvent[] {
     const rows = this.stmts.eventsAfter.all(sessionId, afterSeq, untilSeq, limit) as Array<{
-      json: string;
+      json: EncodedJson;
     }>;
-    return rows.map((r) => JSON.parse(r.json) as StoredEvent);
+    return rows.map((r) => decodeEventJson(r.json));
   }
 
   eventById(sessionId: string, eventId: string): StoredEvent | undefined {
-    const row = this.stmts.eventById.get(sessionId, eventId) as { json: string } | undefined;
-    return row ? (JSON.parse(row.json) as StoredEvent) : undefined;
+    const row = this.stmts.eventById.get(sessionId, eventId) as { json: EncodedJson } | undefined;
+    return row ? decodeEventJson(row.json) : undefined;
   }
 
   eventIds(sessionId: string): string[] {
@@ -1303,8 +1409,12 @@ export class SqliteStore implements SalidiumStore {
     // megabytes of prose, and a diagnostic that grows with the user's history is one that stops
     // working for exactly the people with the most to measure.
     for (const row of this.stmts.agentText.iterate()) {
-      const r = row as unknown as { session_id: string; kind: string; json: string };
-      const e = JSON.parse(r.json) as { text?: string; lastMessage?: string; phase?: string };
+      const r = row as unknown as { session_id: string; kind: string; json: EncodedJson };
+      const e = decodeEventJson(r.json) as StoredEvent & {
+        text?: string;
+        lastMessage?: string;
+        phase?: string;
+      };
       const text = r.kind === 'agent.message' ? e.text : e.lastMessage;
       if (!text?.trim()) continue;
       if (current && current.sessionId !== r.session_id) {
@@ -1424,6 +1534,7 @@ export class SqliteStore implements SalidiumStore {
         event.id,
         're-ingested provider record does not match the immutable stored event',
       );
+      this.stmts.pruneFingerprintConflicts.run(MAX_RAW_FINGERPRINT_CONFLICTS - 1);
       return false;
     }
     this.stmts.upsertFingerprint.run(

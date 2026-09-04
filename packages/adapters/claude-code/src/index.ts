@@ -2,6 +2,7 @@ export { claudeCodeAdapter, claudeCodeProvider } from './claudeCodeAdapter.ts';
 export type { HookCommandSpec, HookGroup } from './hookConfig.ts';
 export { buildClaudeCodeHooks, isSalidiumHook, SALIDIUM_HOOK_MARKER } from './hookConfig.ts';
 export {
+  CLAUDE_CODE_HOOK_EVENT_BUDGET,
   CLAUDE_CODE_HOOK_EVENTS,
   parseClaudeCodeHookPayload,
   transcriptPathFromClaudeCodeHook,
