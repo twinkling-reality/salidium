@@ -328,6 +328,57 @@ describe('the installed hook relay', () => {
     }
   });
 
+  it('does not reclaim a replacement lock after the observed owner exits', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'salidium-relay-replaced-lock-'));
+    let child: ReturnType<typeof spawn> | undefined;
+    try {
+      const home = join(root, 'state');
+      const pending = join(home, 'spool', 'pending');
+      mkdirSync(pending, { recursive: true });
+      const relay = writeRelayScript(join(home, 'hooks'), home, { PATH: '/bin:/usr/bin' });
+      const lock = join(pending, '.quota-lock');
+      const deadOwner = spawnSync('/bin/sh', ['-c', 'exit 0']).pid;
+      writeFileSync(lock, `${deadOwner}\n`);
+      const input = join(pending, 'claude-code-replacement.json');
+      writeFileSync(input, '{}');
+      // Pause after reading the owner, then resume only after a new live owner has
+      // replaced the lock. These barriers expose the race without relying on timing.
+      const generated = readFileSync(relay, 'utf8');
+      const barrier = 'if ! kill -0 "$LOCK_OWNER" 2>/dev/null; then';
+      expect(generated).toContain(barrier);
+      writeFileSync(
+        relay,
+        generated
+          .replace(
+            barrier,
+            `: > "$HOME_DIR/observed"\nwhile [ ! -e "$HOME_DIR/continue" ]; do sleep 0.01; done\n${barrier}`,
+          )
+          .replace(
+            '[ "$QUOTA_ATTEMPTS" -lt 5000 ]',
+            ': > "$HOME_DIR/examined"\n    [ "$QUOTA_ATTEMPTS" -lt 5000 ]',
+          ),
+      );
+      child = spawn('/bin/sh', [relay, '--send', 'claude-code', input], { env: {} });
+      const exited = new Promise((resolve) => child?.once('exit', resolve));
+      const waitFor = async (name: string) => {
+        for (let i = 0; i < 300 && !existsSync(join(home, name)); i++) await sleep(10);
+        expect(existsSync(join(home, name))).toBe(true);
+      };
+      await waitFor('observed');
+      writeFileSync(lock, `${process.pid}\n`);
+      writeFileSync(join(home, 'continue'), '');
+      await waitFor('examined');
+      expect(readFileSync(lock, 'utf8')).toBe(`${process.pid}\n`);
+      expect(existsSync(input.replace('.json', '.ready.json'))).toBe(false);
+      rmSync(lock);
+      expect(await exited).toBe(0);
+      expect(existsSync(input.replace('.json', '.ready.json'))).toBe(true);
+    } finally {
+      child?.kill('SIGTERM');
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   /**
    * The regression that matters most, and the cheapest one to state: an earlier relay measured the
    * offline spool by running `wc -c` on every file in it, which made one hook's cost proportional

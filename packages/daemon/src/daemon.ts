@@ -958,18 +958,27 @@ if [ "$1" = "--send" ]; then
     fi
     set +C
     QUOTA_ATTEMPTS=$((QUOTA_ATTEMPTS + 1))
-    if [ -r "$QUOTA_LOCK" ]; then
+    # Only one contender may reclaim a dead owner's lock. Without this guard, a late
+    # contender can unlink a replacement lock acquired after another reclaimed it.
+    if mkdir "$QUOTA_LOCK.reaping" 2>/dev/null; then
+      LOCK_OWNER=''
+      CURRENT_OWNER=''
+      if [ -r "$QUOTA_LOCK" ]; then
       IFS= read -r LOCK_OWNER < "$QUOTA_LOCK"
       case "$LOCK_OWNER" in
         ''|*[!0-9]*) ;;
         *)
           if ! kill -0 "$LOCK_OWNER" 2>/dev/null; then
-            rm -f "$QUOTA_LOCK" 2>/dev/null
+            # The old process may have removed its lock while exiting. Re-read after
+            # proving it dead so we never remove the next live owner's replacement.
+            [ ! -r "$QUOTA_LOCK" ] || IFS= read -r CURRENT_OWNER < "$QUOTA_LOCK"
+            if [ "$CURRENT_OWNER" = "$LOCK_OWNER" ]; then
+              rm -f "$QUOTA_LOCK" 2>/dev/null
+            fi
           fi;;
       esac
-      if [ -n "$(find "$QUOTA_LOCK" -mmin +0 -print 2>/dev/null)" ]; then
-        rm -f "$QUOTA_LOCK" 2>/dev/null
       fi
+      rmdir "$QUOTA_LOCK.reaping" 2>/dev/null
     fi
     [ "$QUOTA_ATTEMPTS" -lt 5000 ] || exit 0
     sleep 0.01
