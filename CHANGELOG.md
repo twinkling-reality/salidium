@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 - 2026-09-04
+## 0.4.0 - 2026-09-05
 
 - Add a versioned local-operations contract across the interface and CLI: effective policy with
   source precedence, exact-or-unavailable health measurements, durable maintenance state, alert
