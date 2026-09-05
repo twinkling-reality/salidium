@@ -1,4 +1,4 @@
-import { CODEX_HOOK_EVENTS } from './hookPayloads.ts';
+import { CODEX_HOOK_EVENT_BUDGET } from './hookPayloads.ts';
 
 /**
  * Builds the `~/.codex/hooks.json` entries. Codex runs only `command` handlers and requires the
@@ -18,13 +18,13 @@ export function buildCodexHooks(relayCommand: string): {
     string,
     Array<{ hooks: Array<{ type: 'command'; command: string; async: boolean; timeout: number }> }>
   > = {};
-  for (const event of CODEX_HOOK_EVENTS) {
+  for (const { name: event, pressure } of CODEX_HOOK_EVENT_BUDGET.events) {
     hooks[event] = [
       {
         hooks: [
           {
             type: 'command',
-            command: relayCommand,
+            command: `${relayCommand} ${event} ${pressure}`,
             async: event !== 'SessionEnd',
             timeout: event === 'SessionEnd' ? 1 : 5,
           },
@@ -36,11 +36,15 @@ export function buildCodexHooks(relayCommand: string): {
 }
 
 export function isSalidiumHook(spec: unknown): boolean {
-  return (
-    typeof spec === 'object' &&
-    spec !== null &&
-    typeof (spec as { command?: unknown }).command === 'string' &&
-    ((spec as { command: string }).command.includes(SALIDIUM_HOOK_MARKER) ||
-      (spec as { command: string }).command.includes(LEGACY_SALIDIUM_HOOK_MARKER))
-  );
+  if (
+    typeof spec !== 'object' ||
+    spec === null ||
+    typeof (spec as { command?: unknown }).command !== 'string'
+  )
+    return false;
+  const command = (spec as { command: string }).command.trim();
+  const current =
+    command.startsWith(`${SALIDIUM_HOOK_MARKER} '`) && /\/hooks\/relay\.sh'(?:\s|$)/.test(command);
+  const legacy = /^(?:\/bin\/sh\s+)?['"]?[^\s'"]*\/\.salidium\/hooks\//.test(command);
+  return current || (command.includes(LEGACY_SALIDIUM_HOOK_MARKER) && legacy);
 }

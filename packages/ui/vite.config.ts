@@ -40,7 +40,30 @@ const proxy = d
 export default defineConfig({
   plugins: [react()],
   resolve: { conditions: ['development'] },
-  build: { outDir: 'dist', emptyOutDir: true, sourcemap: false, target: 'es2022' },
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+    sourcemap: false,
+    target: 'es2022',
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: 'react-runtime',
+              test: /node_modules\/(?:react|react-dom|scheduler)\//,
+              includeDependenciesRecursively: true,
+            },
+            {
+              name: 'ui-runtime',
+              test: /node_modules\/(?:zustand|@tanstack)\//,
+              includeDependenciesRecursively: true,
+            },
+          ],
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     strictPort: true,

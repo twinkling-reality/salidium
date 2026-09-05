@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { activeExplanationCadence } from '../lib/explanationMode.ts';
 import { useAppStore } from '../store/appStore.ts';
 import { Icon } from './Icon.tsx';
+import { Loading } from './Loading.tsx';
 
 export function PersonalizationSettings({
   sessionId,
@@ -54,9 +55,10 @@ export function PersonalizationSettings({
       );
     }
     return (
-      <p className="mu-loading" role="status">
-        {loading ? 'Loading…' : 'Waiting for the daemon…'}
-      </p>
+      <Loading
+        label={loading ? 'Loading personalization settings' : 'Waiting for Salidium'}
+        block
+      />
     );
   }
 
@@ -152,20 +154,22 @@ export function PersonalizationSettings({
               : 'Saves this note on this machine'
           }
         >
-          <Icon
-            name={applied ? 'check' : canPersonalize || explainerLoading ? 'sliders' : 'save'}
-          />
-          {status === 'saving'
-            ? 'Saving…'
-            : status === 'generating'
-              ? 'Applying…'
-              : explainerLoading
-                ? 'Loading…'
-                : canPersonalize
-                  ? applied
-                    ? 'Applied'
-                    : 'Apply'
-                  : 'Save terms'}
+          {status === 'saving' || status === 'generating' || explainerLoading ? (
+            <Loading
+              label={
+                status === 'saving'
+                  ? 'Saving'
+                  : status === 'generating'
+                    ? 'Applying'
+                    : 'Loading model settings'
+              }
+            />
+          ) : (
+            <>
+              <Icon name={applied ? 'check' : canPersonalize ? 'sliders' : 'save'} />
+              {canPersonalize ? (applied ? 'Applied' : 'Apply') : 'Save terms'}
+            </>
+          )}
         </button>
       </div>
 
@@ -176,8 +180,14 @@ export function PersonalizationSettings({
         </p>
         {hasSavedTerms && (
           <button className="btn mu-clear" type="button" disabled={busy} onClick={deleteProfile}>
-            <Icon name="trash" />
-            Delete saved terms
+            {status === 'clearing' ? (
+              <Loading label="Deleting" />
+            ) : (
+              <>
+                <Icon name="trash" />
+                Delete saved terms
+              </>
+            )}
           </button>
         )}
       </div>

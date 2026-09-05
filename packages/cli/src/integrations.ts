@@ -163,7 +163,7 @@ const codex = createIntegration({
   name: 'Codex',
   command: 'codex',
   standingNote:
-    'Codex honours a hook only once it has been trusted there: open /hooks in Codex. Salidium cannot tell whether that has been done',
+    'Codex honours a hook only after approval. Status and doctor ask Codex for the current trust state',
   stateDirectory(context) {
     return environment(context).CODEX_HOME ?? join(context.userHome, '.codex');
   },

@@ -204,9 +204,7 @@ export function Showcase() {
           </button>
         </div>
 
-        <h1 id="hero-title">
-          Visualize your agent&apos;s work with diagrams and evidence you can check, not walls of text.
-        </h1>
+        <h1 id="hero-title">Agent output, turned into a visual report.</h1>
 
       </div>
 

@@ -20,6 +20,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..');
 const out = join(here, 'bundle');
 const uiDist = join(here, '..', 'ui', 'dist');
+const nativeSource = join(here, 'native');
 
 if (!existsSync(join(uiDist, 'index.html')))
   throw new Error(`UI is not built (${uiDist}); run \`pnpm build\` first`);
@@ -53,6 +54,7 @@ const js = readFileSync(bundlePath, 'utf8').replace(/^#!.*\n/gm, '');
 writeFileSync(bundlePath, `#!/usr/bin/env node\n${js}`, { mode: 0o755 });
 
 cpSync(uiDist, join(out, 'ui'), { recursive: true });
+cpSync(nativeSource, join(out, 'native'), { recursive: true });
 
 /*
  * npm picks up README and LICENSE from the package directory only, and both live at the repo root
@@ -60,6 +62,7 @@ cpSync(uiDist, join(out, 'ui'), { recursive: true });
  * control and the published tarball still carries the licence it claims in its metadata.
  */
 cpSync(join(repoRoot, 'LICENSE'), join(here, 'LICENSE'));
+cpSync(join(repoRoot, 'THIRD_PARTY_NOTICES'), join(here, 'THIRD_PARTY_NOTICES'));
 
 /*
  * The README's screenshots, made absolute on the way into the tarball.

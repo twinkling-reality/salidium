@@ -43,6 +43,7 @@ describe('trusted executable resolution', () => {
 
     const environment = {
       PATH: ['node_modules/.bin', projectBin, trustedBin].join(delimiter),
+      HOME: home,
     };
     const resolvedBin = realpathSync(trustedBin);
     expect(trustedPathEntries({ environment, cwd: home })).toEqual([resolvedBin]);
@@ -69,4 +70,44 @@ describe('trusted executable resolution', () => {
       resolveTrustedExecutable('codex', { environment: { PATH: trustedBin } }),
     ).toBeUndefined();
   });
+
+  it('rejects project-owned PATH directories and symlink targets outside node_modules', () => {
+    const root = temporaryDirectory();
+    const project = join(root, 'project');
+    const projectBin = join(project, 'bin');
+    const installedBin = join(root, 'installed', 'bin');
+    mkdirSync(projectBin, { recursive: true });
+    mkdirSync(installedBin, { recursive: true });
+    executable(join(projectBin, 'codex'));
+    symlinkSync(join(projectBin, 'codex'), join(installedBin, 'codex'));
+
+    const environment = { PATH: [projectBin, installedBin].join(delimiter) };
+    expect(trustedPathEntries({ environment, untrustedRoots: [project] })).toEqual([
+      realpathSync(installedBin),
+    ]);
+    expect(
+      resolveTrustedExecutable('codex', { environment, untrustedRoots: [project] }),
+    ).toBeUndefined();
+  });
+
+  // Only a POSIX host states access in the mode bits this rule reads. Windows reports 0o777 for
+  // any writable directory and keeps the real permission in an ACL, so asserting the rule there
+  // would test the fixture's attributes rather than the boundary.
+  it.skipIf(process.platform === 'win32')(
+    'rejects group- or world-writable executable directories',
+    () => {
+      const root = temporaryDirectory();
+      const writable = join(root, 'shared-bin');
+      mkdirSync(writable, { mode: 0o777 });
+      chmodSync(writable, 0o777);
+      executable(join(writable, 'git'));
+
+      expect(trustedPathEntries({ environment: { PATH: writable }, untrustedRoots: [] })).toEqual(
+        [],
+      );
+      expect(
+        resolveTrustedExecutable('git', { environment: { PATH: writable }, untrustedRoots: [] }),
+      ).toBeUndefined();
+    },
+  );
 });

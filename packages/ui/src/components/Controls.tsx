@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { type Theme, useAppStore } from '../store/appStore.ts';
 import { Icon, type IconName } from './Icon.tsx';
+import { Loading } from './Loading.tsx';
 
 /**
  * The toolbar controls. Every one of them is the same box — height, corner and hover come from
@@ -14,6 +15,7 @@ export function ToolButton({
   on,
   controls,
   expanded,
+  buttonRef,
   disabled,
   title,
   onClick,
@@ -39,12 +41,15 @@ export function ToolButton({
   controls?: string;
   /** Disclosure state, when the highlighted state also carries some other meaning. */
   expanded?: boolean;
+  /** Gives a revealed surface a stable place to return keyboard focus when it closes. */
+  buttonRef?: React.Ref<HTMLButtonElement>;
   disabled?: boolean;
   title: string;
   onClick: () => void;
 }) {
   return (
     <button
+      ref={buttonRef}
       type="button"
       className={`btn ${label ? '' : 'btn-icon'} ${on ? 'is-on' : ''}`}
       onClick={onClick}
@@ -209,19 +214,20 @@ export function ConnectionBadge({ status }: { status: string }) {
   if (status === 'connecting')
     return (
       <span className="conn conn-warn" title="Opening the connection to the daemon">
-        connecting
+        <Loading label="Connecting" />
       </span>
     );
   if (status === 'reconnecting')
     return (
       <span className="conn conn-warn" title="Lost contact with the daemon; retrying">
-        reconnecting…
+        <Loading label="Reconnecting" />
       </span>
     );
   if (status === 'closed')
     return (
       <span className="conn conn-bad" title="Not receiving updates; the daemon may have stopped">
-        disconnected
+        <span className="conn-mark" aria-hidden="true" />
+        Disconnected
       </span>
     );
   return null;

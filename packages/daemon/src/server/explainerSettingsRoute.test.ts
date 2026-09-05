@@ -105,11 +105,13 @@ describe('the explainer settings route', () => {
     const res = await call('PUT', { cadence: 'session' });
     expect(res.status).toBe(200);
     expect(ExplainerSettingsSchema.parse(await res.json()).cadence).toBe('session');
-    const path = join(dir, 'settings.json');
-    expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({
-      explainerCadence: 'session',
-      explainerBackend: 'auto',
-      explainerModel: null,
+    const path = join(dir, 'operations-config.json');
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({
+      version: 1,
+      revision: 1,
+      settings: {
+        explainer: { cadence: 'session', backend: 'auto', model: null },
+      },
     });
     // The file sits beside the token; it is written with the same permissions as everything else
     // under the home directory.
@@ -174,7 +176,7 @@ describe('the explainer settings route', () => {
       explainerModel: 'gpt-5.6-luna',
     });
 
-    writeFileSync(join(empty, 'settings.json'), '{not-json');
+    writeFileSync(join(empty, 'operations-config.json'), '{not-json');
     const warnings: string[] = [];
     expect(readSettings(empty, (reason) => warnings.push(reason)).explainerCadence).toBe('off');
     expect(warnings).toHaveLength(1);

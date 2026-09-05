@@ -233,7 +233,9 @@ export class SessionCoordinator {
       }
     }
     if (rewriting) store.replaceChanges(sessionId, rederived, REDUCER_VERSION);
-    const seen = new Set(store.eventIds(sessionId));
+    // Persistent dedupe is looked up against each bounded input chunk. Preloading every historical
+    // id here made reopening one large active session an archive-sized, main-thread query.
+    const seen = new Set<string>();
     const coord = new SessionCoordinator(sessionId, state, store, listener, seen, opts);
     // The constructor cannot infer whether `state` came from a durable checkpoint or a replay.
     // After a migration invalidates caches, a replayed state is current but still needs a new
@@ -261,16 +263,30 @@ export class SessionCoordinator {
     // `sessionEnded` is the only one the `session` stop fires on directly.
     let turnEnded = false;
     let sessionEnded = false;
-    for (const candidate of events as unknown[]) {
+    const routed = (events as unknown[]).filter((candidate) => {
       const envelope =
         candidate !== null && typeof candidate === 'object'
           ? (candidate as Record<string, unknown>)
           : undefined;
       // A valid foreign session id is a routing error, not a malformed record for this session.
-      if (typeof envelope?.sessionId === 'string' && envelope.sessionId !== this.sessionId)
-        continue;
+      return !(typeof envelope?.sessionId === 'string' && envelope.sessionId !== this.sessionId);
+    });
+    const prepared = routed.map((candidate) => {
+      const envelope =
+        candidate !== null && typeof candidate === 'object'
+          ? (candidate as Record<string, unknown>)
+          : undefined;
       const parsed = CanonicalEventSchema.safeParse(candidate);
       const eventId = parsed.success ? parsed.data.id : malformedEventId(this.sessionId, candidate);
+      return { envelope, parsed, eventId };
+    });
+    const persisted = new Set(
+      this.store.existingEventIds(
+        this.sessionId,
+        prepared.filter(({ eventId }) => !this.seen.has(eventId)).map(({ eventId }) => eventId),
+      ),
+    );
+    for (const { envelope, parsed, eventId } of prepared) {
       const red = parsed.success
         ? redactEvent(parsed.data, this.redactor, {
             commandForCall: (id) => this.commandForCall(id),
@@ -281,7 +297,7 @@ export class SessionCoordinator {
       // dedupes. Compare the same redacted shape that was stored; a changed raw record must never
       // authenticate older immutable event payload under a newly observed hash.
       if (red) this.store.recordRawFingerprint(red.event, fingerprintOrigin);
-      if (this.seen.has(eventId)) continue;
+      if (this.seen.has(eventId) || persisted.has(eventId)) continue;
       let stored: StoredEvent;
       let c: SemanticChange[];
       if (!parsed.success) {

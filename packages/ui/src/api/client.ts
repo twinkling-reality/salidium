@@ -1,10 +1,17 @@
 import type {
+  CollectionControlRequest,
+  CollectionStatus,
   DaemonInfo,
+  EffectiveOperationalConfig,
   ExplainerSettings,
   ExplainerSettingsRequest,
+  LocalAlertState,
+  OperationalConfigPatch,
+  OperationsOverview,
   PersonalizationSettings,
   PersonalizationSettingsRequest,
   PersonalizedExplanation,
+  QueueInspection,
   SemanticChange,
   SessionList,
   SessionSnapshot,
@@ -13,6 +20,10 @@ import type {
   StreamMessage,
 } from '@salidium/protocol';
 import {
+  CollectionStatusSchema,
+  EffectiveOperationalConfigSchema,
+  LocalAlertStateSchema,
+  OperationsOverviewSchema,
   PersonalizationSettingsSchema,
   PersonalizedExplanationSchema,
   StreamMessageSchema,
@@ -62,6 +73,93 @@ export class ApiClient {
 
   info(): Promise<DaemonInfo> {
     return this.get('/api/info');
+  }
+
+  collectionStatus(): Promise<CollectionStatus> {
+    return this.get('/api/collection').then((value) => CollectionStatusSchema.parse(value));
+  }
+
+  operations(): Promise<OperationsOverview> {
+    return this.get('/api/operations').then((value) => OperationsOverviewSchema.parse(value));
+  }
+
+  async setOperationalConfig(
+    patch: OperationalConfigPatch,
+    expectedRevision: number,
+  ): Promise<EffectiveOperationalConfig> {
+    const res = await fetch('/api/operations/config', {
+      method: 'PUT',
+      headers: {
+        ...this.headers(),
+        'Content-Type': 'application/json',
+        'If-Match': String(expectedRevision),
+      },
+      body: JSON.stringify(patch),
+    });
+    if (res.status === 401) this.onUnauthorized?.();
+    if (!res.ok) throw new ApiError(`request failed: ${res.status}`, res.status);
+    return EffectiveOperationalConfigSchema.parse(await res.json());
+  }
+
+  async resetOperationalConfig(
+    key: string | undefined,
+    expectedRevision: number,
+  ): Promise<EffectiveOperationalConfig> {
+    const query = key ? `?key=${encodeURIComponent(key)}` : '';
+    const res = await fetch(`/api/operations/config${query}`, {
+      method: 'DELETE',
+      headers: { ...this.headers(), 'If-Match': String(expectedRevision) },
+    });
+    if (res.status === 401) this.onUnauthorized?.();
+    if (!res.ok) throw new ApiError(`request failed: ${res.status}`, res.status);
+    return EffectiveOperationalConfigSchema.parse(await res.json());
+  }
+
+  async drainQueue(): Promise<{ before: QueueInspection; after: QueueInspection }> {
+    const res = await fetch('/api/operations/maintenance/drain', {
+      method: 'POST',
+      headers: this.headers(),
+    });
+    if (res.status === 401) this.onUnauthorized?.();
+    if (!res.ok) throw new ApiError(`request failed: ${res.status}`, res.status);
+    return (await res.json()) as { before: QueueInspection; after: QueueInspection };
+  }
+
+  async acknowledgeAlert(id: string): Promise<LocalAlertState> {
+    const res = await fetch(`/api/operations/alerts/${encodeURIComponent(id)}/acknowledge`, {
+      method: 'POST',
+      headers: this.headers(),
+    });
+    if (res.status === 401) this.onUnauthorized?.();
+    if (!res.ok) throw new ApiError(`request failed: ${res.status}`, res.status);
+    return LocalAlertStateSchema.parse(await res.json());
+  }
+
+  async setCollection(action: CollectionControlRequest['action']): Promise<CollectionStatus> {
+    const res = await fetch('/api/collection', {
+      method: 'PUT',
+      headers: { ...this.headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, reason: 'manual' }),
+    });
+    if (res.status === 401) {
+      this.onUnauthorized?.();
+      throw new ApiError('unauthorized', 401);
+    }
+    if (!res.ok) throw new ApiError(`request failed: ${res.status}`, res.status);
+    return CollectionStatusSchema.parse(await res.json());
+  }
+
+  async disconnectHooks(provider: string): Promise<CollectionStatus> {
+    const res = await fetch(`/api/collection/hooks/${encodeURIComponent(provider)}`, {
+      method: 'DELETE',
+      headers: this.headers(),
+    });
+    if (res.status === 401) {
+      this.onUnauthorized?.();
+      throw new ApiError('unauthorized', 401);
+    }
+    if (!res.ok) throw new ApiError(`request failed: ${res.status}`, res.status);
+    return CollectionStatusSchema.parse(await res.json());
   }
 
   /**

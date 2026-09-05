@@ -1,4 +1,5 @@
 import AxeBuilder from '@axe-core/playwright';
+import type { OperationsOverview } from '@salidium/protocol';
 import { expect, openSalidium, test } from './fixtures.ts';
 
 async function expectNoA11yViolations(page: import('@playwright/test').Page): Promise<void> {
@@ -547,6 +548,11 @@ test('models and usage keeps both ledgers and explanation controls in one rail',
   await expect(models.getByRole('heading', { name: 'Usage' })).toBeVisible();
   await expect(models).toContainText('all runs');
   await expect(page.getByRole('dialog', { name: 'Explanation' })).toHaveCount(0);
+  await models.getByRole('button', { name: 'Local only' }).click();
+  await expect(models.getByRole('button', { name: 'Local only' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
   await expectNoA11yViolations(page);
 });
 
@@ -575,11 +581,232 @@ test('the narrow layout uses the same models and usage rail', async ({
   await expectNoA11yViolations(page);
 });
 
+test('ingest and storage reports local cost and controls collection', async ({ page, daemon }) => {
+  await openSalidium(page, daemon);
+  const narrow = page.viewportSize()?.width === 390;
+  if (narrow) {
+    await page.getByRole('button', { name: 'Hide the session list' }).click();
+  }
+
+  const ingestTrigger = page.getByRole('button', { name: 'Ingest & Storage', exact: true });
+  await ingestTrigger.click();
+  const ingest = page.getByRole('complementary', { name: 'Ingest & Storage' });
+  await expect(ingest).toBeVisible();
+  await expect(ingestTrigger).toHaveAttribute('aria-expanded', 'true');
+  await expect(ingest).toHaveAttribute('id', 'ingest-storage-inspector');
+  await expect(ingest.getByTitle('Hide Ingest & Storage')).toBeFocused();
+  await expect(ingest.getByRole('heading', { name: 'Current readout' })).toBeVisible();
+  await expect(ingest).toContainText('Queue velocity');
+  await expect(ingest).toContainText('Drain rate');
+  await expect(ingest.getByRole('heading', { name: 'Local alerts' })).toBeVisible();
+  await expect(ingest.getByRole('button', { name: 'Local policy' })).toBeVisible();
+  await expect(ingest.getByText('Active', { exact: true })).toBeVisible();
+  await expect(ingest).toContainText('Queued now');
+  await expect(ingest).toContainText('Store now');
+  await expect(ingest).toContainText('retention');
+  await expect(ingest.getByRole('heading', { name: 'Where it runs' })).toBeVisible();
+  await expect(ingest).toContainText('Closing it does not stop collection');
+  await expect(ingest).toContainText('127.0.0.1:');
+  await expect(ingest.getByRole('heading', { name: 'Collection ledger' })).toBeVisible();
+  await expect(ingest).toContainText('No collection gaps observed');
+
+  await ingest.getByRole('button', { name: 'Local policy' }).click();
+  const queueAgePolicy = ingest
+    .locator('.operations-settings > label')
+    .filter({ hasText: 'Warn when queue age reaches' });
+  await queueAgePolicy.locator('select').selectOption('30');
+  await expect(queueAgePolicy.locator('.setting-source')).toHaveText('stored');
+  const nativeNotifications = ingest.getByRole('checkbox', {
+    name: /Native desktop notifications/,
+  });
+  await nativeNotifications.click();
+  await expect(nativeNotifications).toBeChecked();
+  await ingest.getByRole('button', { name: 'Restore shipped defaults' }).click();
+  await expect(ingest.getByRole('button', { name: 'Local policy' })).toHaveAttribute(
+    'aria-expanded',
+    'false',
+  );
+  await ingest.getByRole('button', { name: 'Local policy' }).click();
+  await expect(queueAgePolicy.locator('.setting-source')).toHaveText('default');
+  await expect(nativeNotifications).not.toBeChecked();
+
+  await ingest.getByRole('button', { name: 'Pause collection' }).click();
+  await expect(ingest.getByRole('button', { name: 'Resume collection' })).toBeVisible();
+  await expect(ingest.getByText(/^Paused/)).toBeVisible();
+  await ingest.getByRole('button', { name: 'Resume collection' }).click();
+  await expect(ingest.getByRole('button', { name: 'Pause collection' })).toBeVisible();
+  await expect(ingest).toContainText('Paused interval');
+  await expect(ingest).toContainText('Hook-only evidence may be absent · count unavailable');
+
+  const layout = await ingest.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      width: Math.round(rect.width),
+      right: Math.round(innerWidth - rect.right),
+      overflow: document.documentElement.scrollWidth - innerWidth,
+    };
+  });
+  expect(layout.width).toBeLessThanOrEqual(narrow ? 390 : 320);
+  expect(layout.right).toBe(0);
+  expect(layout.overflow).toBe(0);
+  await expectNoA11yViolations(page);
+
+  await ingest.getByTitle('Hide Ingest & Storage').click();
+  await expect(ingest).toBeHidden();
+  await expect(ingestTrigger).toHaveAttribute('aria-expanded', 'false');
+  await expect(ingestTrigger).toBeFocused();
+});
+
+test('rare operations failures remain legible and actionable', async ({
+  page,
+  daemon,
+}, testInfo) => {
+  await page.route('**/api/operations', async (route) => {
+    const response = await route.fetch();
+    const overview = (await response.json()) as OperationsOverview;
+    const at = overview.health.observedAt;
+    const alert = {
+      id: 'visual-maintenance-failure',
+      deduplicationKey: 'maintenance-failure:visual-audit',
+      kind: 'maintenance-failure' as const,
+      severity: 'critical' as const,
+      state: 'active' as const,
+      title: 'Maintenance needs recovery',
+      detail: 'The optimized copy did not match the source digest. The original store is intact.',
+      firstSeenAt: at,
+      lastSeenAt: at,
+      lastTransitionAt: at,
+      acknowledgedAt: null,
+      recoveredAt: null,
+      notificationEligible: true,
+    };
+    const recovered = {
+      ...alert,
+      id: 'visual-recovered-gap',
+      deduplicationKey: 'collection-gap:visual-recovered',
+      kind: 'collection-gap' as const,
+      severity: 'notice' as const,
+      state: 'recovered' as const,
+      title: 'Collection gap recovered',
+      detail: 'Collection resumed and new observations are durable.',
+      acknowledgedAt: null,
+      recoveredAt: at,
+    };
+    overview.health.overall = 'critical';
+    overview.health.maintenance = {
+      version: 1,
+      operationId: 'visual-audit',
+      kind: 'storage-optimize',
+      phase: 'failure',
+      startedAt: at,
+      updatedAt: at,
+      progress: 0.65,
+      message: 'Verification stopped before replacement.',
+      failure: 'Logical digest mismatch; source store preserved.',
+    };
+    overview.alerts = {
+      contractVersion: 1,
+      observedAt: at,
+      active: [alert],
+      recent: [alert, recovered],
+    };
+    await route.fulfill({ response, json: overview });
+  });
+
+  await openSalidium(page, daemon);
+  const narrow = testInfo.project.name.includes('narrow');
+  if (narrow) await page.getByRole('button', { name: 'Hide the session list' }).click();
+  await page.getByRole('button', { name: 'Ingest & Storage', exact: true }).click();
+  const ingest = page.getByRole('complementary', { name: 'Ingest & Storage' });
+
+  await expect(ingest.getByText('critical', { exact: true })).toBeVisible();
+  await expect(ingest.getByText('Maintenance needs recovery')).toBeVisible();
+  await expect(ingest.getByText('The original store is intact.')).toBeVisible();
+  await expect(ingest.getByText('Verification stopped before replacement.')).toBeVisible();
+  await expect(ingest.getByText('failure · 65%', { exact: true })).toBeVisible();
+  await expect(ingest.getByRole('progressbar', { name: 'Maintenance progress' })).toHaveAttribute(
+    'value',
+    '0.65',
+  );
+  await expect(ingest.getByText('Recently recovered')).toBeVisible();
+  await expect(ingest.getByText('Collection gap recovered')).toBeVisible();
+  await expect(ingest.getByText('notice · recovered', { exact: true })).toBeVisible();
+  await expect(ingest.getByRole('button', { name: 'Acknowledge' })).toBeVisible();
+  await ingest.getByText('Maintenance needs recovery').scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: testInfo.outputPath('operations-critical-alert.png'),
+    fullPage: true,
+    animations: 'disabled',
+    caret: 'hide',
+  });
+  await ingest.getByText('Verification stopped before replacement.').scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: testInfo.outputPath('operations-maintenance-failure.png'),
+    fullPage: true,
+    animations: 'disabled',
+    caret: 'hide',
+  });
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth - innerWidth))
+    .toBe(0);
+  await expectNoA11yViolations(page);
+});
+
+test('operations mutations expose pending and failed action states without an unhandled error', async ({
+  page,
+  daemon,
+}) => {
+  let finishReset = () => undefined;
+  const resetReleased = new Promise<void>((resolve) => {
+    finishReset = resolve;
+  });
+  await page.route('**/api/operations/config*', async (route) => {
+    if (route.request().method() !== 'DELETE') {
+      await route.continue();
+      return;
+    }
+    await resetReleased;
+    await route.fulfill({ status: 500, body: 'reset failed' });
+  });
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+
+  await openSalidium(page, daemon);
+  if (page.viewportSize()?.width === 390) {
+    await page.getByRole('button', { name: 'Hide the session list' }).click();
+  }
+  await page.getByRole('button', { name: 'Ingest & Storage', exact: true }).click();
+  const ingest = page.getByRole('complementary', { name: 'Ingest & Storage' });
+  const policy = ingest.getByRole('button', { name: 'Local policy' });
+  if ((await policy.getAttribute('aria-expanded')) !== 'true') await policy.click();
+  const reset = ingest.getByRole('button', { name: 'Restore shipped defaults' });
+  await expect(reset).toBeEnabled();
+  await reset.click();
+
+  await expect(ingest.getByText('Restoring shipped defaults')).toBeVisible();
+  await expect(reset).toBeDisabled();
+  finishReset();
+  await expect(ingest.getByRole('alert')).toContainText(
+    'Action not completed. request failed: 500',
+  );
+  await expect(reset).toBeEnabled();
+  expect(pageErrors).toEqual([]);
+});
+
 test('a compact desktop keeps Personalize visible and its editor inside the report', async ({
   page,
   daemon,
 }, testInfo) => {
   test.skip(testInfo.project.name.includes('narrow'), 'compact desktop breakpoint');
+  const reset = await fetch(`${daemon.url}/api/settings/explainer`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${daemon.token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ cadence: 'off' }),
+  });
+  expect(reset.ok).toBe(true);
   await page.setViewportSize({ width: 886, height: 942 });
   await openSalidium(page, daemon);
 

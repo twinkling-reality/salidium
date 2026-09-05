@@ -11,6 +11,7 @@ import {
   type ExplainerBackendRequest,
   effectiveExplainerMode,
   effectiveExplainerModel,
+  MAX_EXPLAINER_PROCESSES,
   resolveExplainerBackend,
 } from './explainerBackends.ts';
 
@@ -109,6 +110,61 @@ describe('built-in backend invocations', () => {
       setTimeout(() => controller.abort(), 20);
       await expect(pending).rejects.toThrow('explainer canceled');
       expect(Date.now() - startedAt).toBeLessThan(2_000);
+    } finally {
+      if (previousHome === undefined) delete process.env.SALIDIUM_HOME;
+      else process.env.SALIDIUM_HOME = previousHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('never starts more than two explainer processes globally', async () => {
+    expect(MAX_EXPLAINER_PROCESSES).toBe(2);
+    const root = mkdtempSync(join(tmpdir(), 'salidium-explainer-cap-'));
+    const command = join(root, 'claude');
+    const previousHome = process.env.SALIDIUM_HOME;
+    try {
+      writeFileSync(command, '#!/bin/sh\nexec /bin/sleep 30\n');
+      chmodSync(command, 0o700);
+      process.env.SALIDIUM_HOME = join(root, 'state');
+      const backend = resolveExplainerBackend('claude-code', {
+        PATH: root,
+        SALIDIUM_EXPLAINER: 'claude',
+      });
+      expect(backend).toBeDefined();
+      const controllers = [new AbortController(), new AbortController()];
+      const running = controllers.map((controller) =>
+        backend?.generate({ ...request, signal: controller.signal }),
+      );
+      await expect(backend?.generate(request)).rejects.toThrow('explainer process limit reached');
+      for (const controller of controllers) controller.abort();
+      await Promise.allSettled(running);
+    } finally {
+      if (previousHome === undefined) delete process.env.SALIDIUM_HOME;
+      else process.env.SALIDIUM_HOME = previousHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('releases process capacity when local helper setup fails before spawn', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'salidium-explainer-setup-'));
+    const command = join(root, 'claude');
+    const blockedHome = join(root, 'blocked-home');
+    const previousHome = process.env.SALIDIUM_HOME;
+    try {
+      writeFileSync(command, '#!/bin/sh\ncat >/dev/null\nprintf ok\n');
+      chmodSync(command, 0o700);
+      writeFileSync(blockedHome, 'not a directory');
+      process.env.SALIDIUM_HOME = blockedHome;
+      const backend = resolveExplainerBackend('claude-code', {
+        PATH: root,
+        SALIDIUM_EXPLAINER: 'claude',
+      });
+      expect(backend).toBeDefined();
+      await expect(backend?.generate(request)).rejects.toThrow();
+      await expect(backend?.generate(request)).rejects.toThrow();
+
+      process.env.SALIDIUM_HOME = join(root, 'state');
+      await expect(backend?.generate(request)).resolves.toMatchObject({ output: 'ok' });
     } finally {
       if (previousHome === undefined) delete process.env.SALIDIUM_HOME;
       else process.env.SALIDIUM_HOME = previousHome;

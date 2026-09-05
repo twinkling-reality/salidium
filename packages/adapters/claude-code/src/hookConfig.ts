@@ -1,4 +1,4 @@
-import { CLAUDE_CODE_HOOK_EVENTS } from './hookPayloads.ts';
+import { CLAUDE_CODE_HOOK_EVENT_BUDGET } from './hookPayloads.ts';
 
 /**
  * Builds the `hooks` entries Salidium adds to `~/.claude/settings.json`. Every hook is an
@@ -21,9 +21,14 @@ export const SALIDIUM_HOOK_MARKER = 'SALIDIUM_HOOK=1';
 const LEGACY_SALIDIUM_HOOK_MARKER = '/.salidium/hooks/';
 
 export function buildClaudeCodeHooks(relayCommand: string): Record<string, HookGroup[]> {
-  const spec: HookCommandSpec = { type: 'command', command: relayCommand, async: true, timeout: 5 };
   const out: Record<string, HookGroup[]> = {};
-  for (const event of CLAUDE_CODE_HOOK_EVENTS) {
+  for (const { name: event, pressure } of CLAUDE_CODE_HOOK_EVENT_BUDGET.events) {
+    const spec: HookCommandSpec = {
+      type: 'command',
+      command: `${relayCommand} ${event} ${pressure}`,
+      async: true,
+      timeout: 5,
+    };
     // SessionEnd hooks share a 1.5 s budget; keep the timeout small there.
     const hooks = event === 'SessionEnd' ? [{ ...spec, timeout: 1 }] : [spec];
     out[event] = [{ hooks }];
@@ -32,11 +37,15 @@ export function buildClaudeCodeHooks(relayCommand: string): Record<string, HookG
 }
 
 export function isSalidiumHook(spec: unknown): boolean {
-  return (
-    typeof spec === 'object' &&
-    spec !== null &&
-    typeof (spec as { command?: unknown }).command === 'string' &&
-    ((spec as { command: string }).command.includes(SALIDIUM_HOOK_MARKER) ||
-      (spec as { command: string }).command.includes(LEGACY_SALIDIUM_HOOK_MARKER))
-  );
+  if (
+    typeof spec !== 'object' ||
+    spec === null ||
+    typeof (spec as { command?: unknown }).command !== 'string'
+  )
+    return false;
+  const command = (spec as { command: string }).command.trim();
+  const current =
+    command.startsWith(`${SALIDIUM_HOOK_MARKER} '`) && /\/hooks\/relay\.sh'(?:\s|$)/.test(command);
+  const legacy = /^(?:\/bin\/sh\s+)?['"]?[^\s'"]*\/\.salidium\/hooks\//.test(command);
+  return current || (command.includes(LEGACY_SALIDIUM_HOOK_MARKER) && legacy);
 }

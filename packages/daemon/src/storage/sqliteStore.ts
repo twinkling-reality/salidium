@@ -14,6 +14,7 @@ import { ProviderIdSchema, SessionSummarySchema, StoredEventWireSchema } from '@
 import type {
   AuditMessageRow,
   CheckpointRow,
+  HealthHistorySample,
   RawRecordFingerprint,
   ReingestJob,
   RetentionDays,
@@ -22,6 +23,7 @@ import type {
   SalidiumStoreFactory,
   SessionSearchResult,
   SourceCursor,
+  UsageBackfillProgress,
   UsageTotals,
 } from './salidiumStore.ts';
 
@@ -32,7 +34,7 @@ import type {
  *
  * All rows carry session_id so cross-session queries (project, provider, time) are cheap later.
  */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 8;
 
 /** Parser contract written into durable re-ingestion jobs. Bump when record interpretation changes. */
 export const INGEST_PARSER_REVISION = '2026-08-19.1';
@@ -76,7 +78,9 @@ CREATE TABLE IF NOT EXISTS sessions (
   ended_at TEXT,
   latest_seq INTEGER NOT NULL DEFAULT -1,
   summary_json TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  internal INTEGER NOT NULL DEFAULT 0 CHECK (internal IN (0, 1)),
+  activity_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS sessions_last_event ON sessions(last_event_at);
 CREATE INDEX IF NOT EXISTS sessions_cwd ON sessions(cwd);
@@ -88,9 +92,9 @@ CREATE TABLE IF NOT EXISTS events (
   kind TEXT NOT NULL,
   agent_id TEXT,
   turn_id TEXT,
-  json TEXT NOT NULL,
+  json BLOB NOT NULL,
   PRIMARY KEY (session_id, seq)
-) WITHOUT ROWID;
+);
 CREATE UNIQUE INDEX IF NOT EXISTS events_by_id ON events(session_id, event_id);
 CREATE INDEX IF NOT EXISTS events_by_kind ON events(session_id, kind);
 CREATE TABLE IF NOT EXISTS changes (
@@ -111,7 +115,7 @@ CREATE TABLE IF NOT EXISTS checkpoints (
   session_id TEXT NOT NULL,
   seq INTEGER NOT NULL,
   reducer_version TEXT NOT NULL,
-  state_json TEXT NOT NULL,
+  state_json BLOB NOT NULL,
   created_at TEXT NOT NULL,
   PRIMARY KEY (session_id, seq)
 );
@@ -292,6 +296,62 @@ CREATE TABLE IF NOT EXISTS sync_deletion_receipts (
 );
 `;
 
+/**
+ * Small, privacy-minimized local operations history. It contains aggregate counts and states only:
+ * no session ids, provider paths, event bodies, prompts, or command output.
+ */
+const SCHEMA_7_DDL = `
+CREATE TABLE IF NOT EXISTS operations_health_samples (
+  observed_at TEXT PRIMARY KEY,
+  queue_files INTEGER,
+  queue_bytes INTEGER,
+  store_bytes INTEGER,
+  active_gaps INTEGER NOT NULL,
+  total_gaps INTEGER NOT NULL,
+  daemon_state TEXT NOT NULL CHECK (daemon_state IN ('running', 'unresponsive', 'stopped')),
+  collection_state TEXT NOT NULL CHECK (collection_state IN ('active', 'paused')),
+  maintenance_phase TEXT
+) WITHOUT ROWID;
+`;
+
+/**
+ * Request-time reads must remain bounded as the archive grows. The usage ledger stores the newest
+ * observation for each provider response, while `session_usage` is the small materialized total
+ * read by settings. Explicit session columns keep the default list off JSON extraction and give
+ * SQLite an index matching its filter and order.
+ */
+const SCHEMA_8_DDL = `
+CREATE INDEX IF NOT EXISTS sessions_internal_activity
+  ON sessions(internal, activity_at DESC, id DESC);
+CREATE TABLE IF NOT EXISTS usage_messages (
+  session_id TEXT NOT NULL,
+  lane TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  input_tokens INTEGER NOT NULL,
+  output_tokens INTEGER NOT NULL,
+  cache_read_tokens INTEGER NOT NULL,
+  cache_write_tokens INTEGER NOT NULL,
+  PRIMARY KEY (session_id, lane, message_id)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS session_usage (
+  session_id TEXT PRIMARY KEY,
+  messages INTEGER NOT NULL,
+  input_tokens INTEGER NOT NULL,
+  output_tokens INTEGER NOT NULL,
+  cache_read_tokens INTEGER NOT NULL,
+  cache_write_tokens INTEGER NOT NULL
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS usage_backfill_state (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  rowid_cursor INTEGER NOT NULL DEFAULT 0,
+  session_cursor TEXT NOT NULL DEFAULT '',
+  seq_cursor INTEGER NOT NULL DEFAULT -1,
+  scanned_events INTEGER NOT NULL DEFAULT 0,
+  complete INTEGER NOT NULL DEFAULT 0 CHECK (complete IN (0, 1))
+);
+`;
+
 function canonicalizeTimestamp(value: unknown): string | undefined {
   if (typeof value !== 'string' || value.length === 0) return undefined;
   const millis = Date.parse(value);
@@ -304,30 +364,31 @@ function canonicalizeTimestamp(value: unknown): string | undefined {
  * 4 guarantees these event JSON values satisfy the current protocol before this query runs.
  */
 function eventReferencedSources(db: DatabaseSync): SourceCursor[] {
-  const rows = db
-    .prepare(`SELECT json_extract(json, '$.source.ref.path') AS path,
-                     MIN(session_id) AS session_id,
-                     MIN(json_extract(json, '$.source.provider')) AS provider
-                FROM events
-               WHERE json_extract(json, '$.source.channel') IN ('transcript', 'rollout')
-                 AND json_type(json, '$.source.ref.path') = 'text'
-                 AND json_extract(json, '$.source.ref.path') <> ''
-               GROUP BY json_extract(json, '$.source.ref.path')
-              HAVING COUNT(DISTINCT session_id) = 1
-                 AND COUNT(DISTINCT json_extract(json, '$.source.provider')) = 1
-               ORDER BY path`)
-    .all() as Array<{
-    path: string;
-    session_id: string;
-    provider: string;
-  }>;
-  return rows.map((row) => ({
-    path: row.path,
-    sessionId: row.session_id,
-    provider: row.provider,
-    byteOffset: 0,
-    lineNo: 0,
-  }));
+  const paths = new Map<string, { sessionId: string; provider: string; ambiguous: boolean }>();
+  // Decode once per event. Repeating a JSON scalar function in GROUP BY, WHERE, SELECT, and HAVING
+  // multiplied gzip work across the whole store during explicit re-ingestion inventory.
+  for (const unknownRow of db.prepare('SELECT session_id, json FROM events').iterate()) {
+    const row = unknownRow as unknown as { session_id: string; json: EncodedJson };
+    const event = decodeEventJson(row.json);
+    if (event.source.channel !== 'transcript' && event.source.channel !== 'rollout') continue;
+    const path = event.source.ref?.path;
+    if (!path) continue;
+    const provider = event.source.provider;
+    const existing = paths.get(path);
+    if (!existing) paths.set(path, { sessionId: row.session_id, provider, ambiguous: false });
+    else if (existing.sessionId !== row.session_id || existing.provider !== provider)
+      existing.ambiguous = true;
+  }
+  return [...paths]
+    .filter(([, value]) => !value.ambiguous)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([path, value]) => ({
+      path,
+      sessionId: value.sessionId,
+      provider: value.provider,
+      byteOffset: 0,
+      lineNo: 0,
+    }));
 }
 
 function comparableEvent(event: CanonicalEvent | StoredEvent): unknown {
@@ -343,20 +404,99 @@ function comparableEvent(event: CanonicalEvent | StoredEvent): unknown {
 const CHECKPOINT_GZIP_PREFIX = 'gzip-base64:v1:';
 const CHECKPOINT_COMPRESS_MIN_BYTES = 4 * 1024;
 const CHECKPOINT_MAX_DECOMPRESSED_BYTES = 128 * 1024 * 1024;
+const CHECKPOINT_GZIP_MAGIC = Buffer.from('SCP1');
+const EVENT_GZIP_MAGIC = Buffer.from('SEV1');
+export const EVENT_COMPRESS_MIN_BYTES = 1024;
+const EVENT_MAX_DECOMPRESSED_BYTES = 64 * 1024 * 1024;
+export const OPTIMIZED_STORE_PAGE_SIZE = 16 * 1024;
+export const STORAGE_LAYOUT_VERSION = 1;
+export const MAX_RAW_FINGERPRINT_CONFLICTS = 10_000;
 
-function encodeCheckpoint(state: RunState): string {
-  const json = JSON.stringify(state);
-  if (Buffer.byteLength(json) < CHECKPOINT_COMPRESS_MIN_BYTES) return json;
-  // Level 1 is intentionally the fast setting: checkpoints are written on the ingest path. The
-  // measured store shrinks dramatically even at this level, while replay remains the fallback.
-  return `${CHECKPOINT_GZIP_PREFIX}${gzipSync(json, { level: 1 }).toString('base64')}`;
+type EncodedJson = string | Uint8Array;
+
+function hasMagic(buffer: Buffer, magic: Buffer): boolean {
+  return buffer.length >= magic.length && buffer.subarray(0, magic.length).equals(magic);
 }
 
-function decodeCheckpoint(encoded: string): RunState {
-  if (!encoded.startsWith(CHECKPOINT_GZIP_PREFIX)) return JSON.parse(encoded) as RunState;
-  const compressed = Buffer.from(encoded.slice(CHECKPOINT_GZIP_PREFIX.length), 'base64');
-  const json = gunzipSync(compressed, { maxOutputLength: CHECKPOINT_MAX_DECOMPRESSED_BYTES });
-  return JSON.parse(json.toString('utf8')) as RunState;
+function decodeBinaryJson(encoded: EncodedJson, magic: Buffer, maxOutputLength: number): string {
+  if (typeof encoded === 'string') return encoded;
+  const buffer = Buffer.from(encoded);
+  if (!hasMagic(buffer, magic)) return buffer.toString('utf8');
+  return gunzipSync(buffer.subarray(magic.length), { maxOutputLength }).toString('utf8');
+}
+
+export function encodeEventJson(value: string | StoredEvent): Buffer {
+  const json = typeof value === 'string' ? value : JSON.stringify(value);
+  const bytes = Buffer.from(json);
+  if (bytes.length < EVENT_COMPRESS_MIN_BYTES) return bytes;
+  return Buffer.concat([EVENT_GZIP_MAGIC, gzipSync(bytes, { level: 1 })]);
+}
+
+export function decodeEventJson(encoded: EncodedJson): StoredEvent {
+  return JSON.parse(decodeEventJsonValue(encoded)) as StoredEvent;
+}
+
+export function decodeEventJsonValue(encoded: EncodedJson): string {
+  return decodeBinaryJson(encoded, EVENT_GZIP_MAGIC, EVENT_MAX_DECOMPRESSED_BYTES);
+}
+
+export function decodeCheckpointValue(encoded: EncodedJson): string {
+  if (typeof encoded === 'string' && encoded.startsWith(CHECKPOINT_GZIP_PREFIX)) {
+    const compressed = Buffer.from(encoded.slice(CHECKPOINT_GZIP_PREFIX.length), 'base64');
+    return gunzipSync(compressed, {
+      maxOutputLength: CHECKPOINT_MAX_DECOMPRESSED_BYTES,
+    }).toString('utf8');
+  }
+  return decodeBinaryJson(encoded, CHECKPOINT_GZIP_MAGIC, CHECKPOINT_MAX_DECOMPRESSED_BYTES);
+}
+
+function registerEventDecoder(db: DatabaseSync): void {
+  db.function('salidium_event_json', { deterministic: true }, (value) => {
+    if (typeof value !== 'string' && !(value instanceof Uint8Array))
+      throw new Error('event JSON has an unsupported SQLite value type');
+    return decodeBinaryJson(value, EVENT_GZIP_MAGIC, EVENT_MAX_DECOMPRESSED_BYTES);
+  });
+}
+
+function hasOptimizedStorageLayout(db: DatabaseSync): boolean {
+  const row = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'events'")
+    .get() as { sql?: string } | undefined;
+  const page = db.prepare('PRAGMA page_size').get() as Record<string, number> | undefined;
+  const pageSize = page ? Object.values(page)[0] : undefined;
+  return Boolean(
+    row?.sql &&
+      !/WITHOUT\s+ROWID/i.test(row.sql) &&
+      /json\s+BLOB\s+NOT\s+NULL/i.test(row.sql) &&
+      pageSize === OPTIMIZED_STORE_PAGE_SIZE,
+  );
+}
+
+function eventsTableHasRowid(db: DatabaseSync): boolean {
+  const row = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'events'")
+    .get() as { sql?: string } | undefined;
+  return !/WITHOUT\s+ROWID/i.test(row?.sql ?? '');
+}
+
+export function encodeCheckpointValue(encoded: EncodedJson): Buffer {
+  if (typeof encoded === 'string' && encoded.startsWith(CHECKPOINT_GZIP_PREFIX))
+    return Buffer.concat([
+      CHECKPOINT_GZIP_MAGIC,
+      Buffer.from(encoded.slice(CHECKPOINT_GZIP_PREFIX.length), 'base64'),
+    ]);
+  const json = decodeBinaryJson(encoded, CHECKPOINT_GZIP_MAGIC, CHECKPOINT_MAX_DECOMPRESSED_BYTES);
+  const bytes = Buffer.from(json);
+  if (bytes.length < CHECKPOINT_COMPRESS_MIN_BYTES) return bytes;
+  return Buffer.concat([CHECKPOINT_GZIP_MAGIC, gzipSync(bytes, { level: 1 })]);
+}
+
+function encodeCheckpoint(state: RunState): Buffer {
+  return encodeCheckpointValue(JSON.stringify(state));
+}
+
+function decodeCheckpoint(encoded: EncodedJson): RunState {
+  return JSON.parse(decodeCheckpointValue(encoded)) as RunState;
 }
 
 /**
@@ -741,6 +881,55 @@ function migrateToSchema6(db: DatabaseSync, migratedAt = new Date().toISOString(
   );
 }
 
+function migrateToSchema7(db: DatabaseSync, migratedAt = new Date().toISOString()): void {
+  db.exec(SCHEMA_7_DDL);
+  db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(
+    'schema_7_migrated_at',
+    migratedAt,
+  );
+}
+
+/** Installs bounded read models without putting historical reconstruction on the startup path. */
+function migrateToSchema8(db: DatabaseSync, migratedAt = new Date().toISOString()): void {
+  const columns = new Set(
+    (
+      db.prepare("PRAGMA table_info('sessions')").all() as Array<{
+        name: string;
+      }>
+    ).map((column) => column.name),
+  );
+  if (!columns.has('internal'))
+    db.exec(
+      'ALTER TABLE sessions ADD COLUMN internal INTEGER NOT NULL DEFAULT 0 CHECK (internal IN (0, 1))',
+    );
+  if (!columns.has('activity_at'))
+    db.exec("ALTER TABLE sessions ADD COLUMN activity_at TEXT NOT NULL DEFAULT ''");
+
+  db.exec(SCHEMA_8_DDL);
+  db.exec(`UPDATE sessions
+              SET internal = CASE
+                    WHEN COALESCE(json_extract(summary_json, '$.internal'), 0) = 1
+                      OR instr(COALESCE(title, ''), '[salidium-explainer]') > 0 THEN 1
+                    ELSE 0
+                  END,
+                  activity_at = COALESCE(last_event_at, started_at, '')`);
+
+  // A 5 GB archive can take minutes to traverse even on an SSD. Mark it for the daemon's
+  // resumable post-listen worker instead of making health and stop wait behind an offline scan.
+  // Rebuilding is idempotent for a retry or a deliberately downgraded test store.
+  db.exec(
+    'DELETE FROM usage_messages; DELETE FROM session_usage; DELETE FROM usage_backfill_state;',
+  );
+  const hasEvents = Boolean(db.prepare('SELECT 1 AS yes FROM events LIMIT 1').get());
+  db.prepare(`INSERT INTO usage_backfill_state
+      (singleton, rowid_cursor, session_cursor, seq_cursor, scanned_events, complete)
+      VALUES (1, 0, '', -1, 0, ?)`).run(hasEvents ? 0 : 1);
+  db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(
+    'schema_8_migrated_at',
+    migratedAt,
+  );
+}
+
 /** How many rows the session list asks for when nobody says otherwise. */
 export const SESSION_PAGE = 500;
 
@@ -753,15 +942,13 @@ export const SESSION_PAGE = 500;
  * One predicate for "a session a person might want to read", shared by the search and its count so
  * the rows and the number can never be answers to different questions.
  *
- * The title marker is here as well as the `internal` flag because older explainer sessions can be
- * persisted before their first turn sets the flag. Counting on the flag alone can therefore print
- * a total containing rows the panel will never show.
+ * Schema 8 materializes this classification. `upsertSession` treats the title marker as internal
+ * as well as the explicit flag, so even a summary persisted before its first turn is excluded.
  *
  * `instr`, not `LIKE`, everywhere: LIKE reads `_` and `%` as wildcards and these fields are full of
  * paths. `instr` matches the literal-substring behavior the UI defines.
  */
-const REAL_SESSION = `COALESCE(json_extract(summary_json, '$.internal'), 0) = 0
-       AND instr(COALESCE(title, ''), '[salidium-explainer]') = 0`;
+const REAL_SESSION = `internal = 0`;
 
 /*
  * Every typed word has to appear somewhere in the row's name, repo, path or provider session id —
@@ -782,6 +969,7 @@ const MATCHES_TERMS = `NOT EXISTS (
 
 export class SqliteStore implements SalidiumStore {
   private readonly db: DatabaseSync;
+  private readonly eventsHaveRowid: boolean;
   private readonly stmts;
 
   /**
@@ -791,11 +979,38 @@ export class SqliteStore implements SalidiumStore {
    * business creating tables in it, and a read-write handle alongside the live daemon contends for
    * locks on a database the app is actively writing.
    */
-  constructor(path: string, opts: { readOnly?: boolean } = {}) {
+  constructor(
+    path: string,
+    opts: { readOnly?: boolean; pageSize?: number; concurrentWriter?: boolean } = {},
+  ) {
+    if (opts.concurrentWriter) {
+      if (!existsSync(path)) throw new Error(`no store at ${path}`);
+      this.db = new DatabaseSync(path);
+      try {
+        // The owning daemon already installed the schema and WAL. A helper must not re-run DDL or
+        // journal negotiation against that live connection; it only verifies compatibility and
+        // waits for short writer transactions.
+        this.db.exec('PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;');
+        registerEventDecoder(this.db);
+        rejectNewerSchema(this.db);
+        const version = existingSchemaVersion(this.db);
+        if (version !== SCHEMA_VERSION)
+          throw new Error(
+            `concurrent usage worker requires store schema ${SCHEMA_VERSION}, found ${version ?? 'unknown'}`,
+          );
+      } catch (error) {
+        this.db.close();
+        throw error;
+      }
+      this.eventsHaveRowid = eventsTableHasRowid(this.db);
+      this.stmts = this.prepareAll();
+      return;
+    }
     if (opts.readOnly) {
       if (!existsSync(path)) throw new Error(`no store at ${path}`);
       this.db = new DatabaseSync(path, { readOnly: true });
       try {
+        registerEventDecoder(this.db);
         rejectNewerSchema(this.db);
         const version = existingSchemaVersion(this.db);
         if (version === undefined || version < SCHEMA_VERSION)
@@ -806,6 +1021,7 @@ export class SqliteStore implements SalidiumStore {
         this.db.close();
         throw err;
       }
+      this.eventsHaveRowid = eventsTableHasRowid(this.db);
       this.stmts = this.prepareAll();
       return;
     }
@@ -818,6 +1034,7 @@ export class SqliteStore implements SalidiumStore {
     let priorVersion: number | undefined;
     let hadLegacyTables = false;
     try {
+      registerEventDecoder(this.db);
       rejectNewerSchema(this.db);
       priorVersion = existingSchemaVersion(this.db);
       hadLegacyTables = Boolean(
@@ -829,11 +1046,32 @@ export class SqliteStore implements SalidiumStore {
       this.db.close();
       throw err;
     }
+    if (!hadLegacyTables) {
+      const pageSize = opts.pageSize ?? OPTIMIZED_STORE_PAGE_SIZE;
+      if (
+        !Number.isInteger(pageSize) ||
+        pageSize < 512 ||
+        pageSize > 65_536 ||
+        (pageSize & (pageSize - 1)) !== 0
+      ) {
+        this.db.close();
+        throw new Error(`invalid SQLite page size: ${pageSize}`);
+      }
+      this.db.exec(`PRAGMA page_size = ${pageSize}`);
+    }
+    // The live daemon and its historical-usage worker are two intentional writers. Wait briefly
+    // for the other small transaction instead of dropping an ingest/backfill batch on SQLITE_BUSY;
+    // the bound also prevents lock contention from turning into an unresponsive process.
+    this.db.exec('PRAGMA busy_timeout = 1000;');
     this.db.exec(
       'PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA foreign_keys = ON;',
     );
     this.db.exec(DDL);
-    if (priorVersion === undefined && !hadLegacyTables) this.db.exec(SCHEMA_6_DDL);
+    if (priorVersion === undefined && !hadLegacyTables) {
+      this.db.exec(SCHEMA_6_DDL);
+      this.db.exec(SCHEMA_7_DDL);
+      migrateToSchema8(this.db);
+    }
     /*
      * The change log is derived, exactly as the state is, so it carries the version of the reducer
      * that wrote it. Without this a version bump invalidated checkpoints — state re-derived — and
@@ -857,6 +1095,8 @@ export class SqliteStore implements SalidiumStore {
         if ((priorVersion ?? 0) < 4) migrateToSchema4(this.db);
         if ((priorVersion ?? 0) < 5) migrateToSchema5(this.db);
         if ((priorVersion ?? 0) < 6) migrateToSchema6(this.db);
+        if ((priorVersion ?? 0) < 7) migrateToSchema7(this.db);
+        if ((priorVersion ?? 0) < 8) migrateToSchema8(this.db);
         this.db.exec('COMMIT');
       } catch (error) {
         try {
@@ -877,7 +1117,15 @@ export class SqliteStore implements SalidiumStore {
         'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
       )
       .run('schema_version', String(SCHEMA_VERSION));
+    if (hasOptimizedStorageLayout(this.db))
+      this.db
+        .prepare(
+          'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+        )
+        .run('storage_layout_version', String(STORAGE_LAYOUT_VERSION));
+    this.eventsHaveRowid = eventsTableHasRowid(this.db);
     this.stmts = this.prepareAll();
+    this.stmts.pruneFingerprintConflicts.run(MAX_RAW_FINGERPRINT_CONFLICTS - 1);
   }
 
   private prepareAll() {
@@ -888,10 +1136,17 @@ export class SqliteStore implements SalidiumStore {
       insertChange: this.db.prepare(
         'INSERT OR IGNORE INTO changes (session_id, seq, ordinal, ts, facet, summary, epistemic, json, reducer_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       ),
-      upsertSession:
-        this.db.prepare(`INSERT INTO sessions (id, provider, provider_session_id, cwd, repo_root, title, status, started_at, last_event_at, ended_at, latest_seq, summary_json, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET cwd=excluded.cwd, repo_root=excluded.repo_root, title=excluded.title, status=excluded.status, started_at=excluded.started_at, last_event_at=excluded.last_event_at, ended_at=excluded.ended_at, latest_seq=excluded.latest_seq, summary_json=excluded.summary_json, updated_at=excluded.updated_at`),
+      upsertSession: this.db.prepare(`INSERT INTO sessions
+          (id, provider, provider_session_id, cwd, repo_root, title, status, started_at,
+           last_event_at, ended_at, latest_seq, summary_json, updated_at, internal, activity_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          cwd=excluded.cwd, repo_root=excluded.repo_root, title=excluded.title,
+          status=excluded.status, started_at=excluded.started_at,
+          last_event_at=excluded.last_event_at, ended_at=excluded.ended_at,
+          latest_seq=excluded.latest_seq, summary_json=excluded.summary_json,
+          updated_at=excluded.updated_at, internal=excluded.internal,
+          activity_at=excluded.activity_at`),
       insertCheckpoint: this.db.prepare(
         'INSERT OR REPLACE INTO checkpoints (session_id, seq, reducer_version, state_json, created_at) VALUES (?, ?, ?, ?, ?)',
       ),
@@ -911,6 +1166,9 @@ export class SqliteStore implements SalidiumStore {
         'SELECT json FROM events WHERE session_id = ? AND seq > ? AND seq <= ? ORDER BY seq ASC LIMIT ?',
       ),
       eventById: this.db.prepare('SELECT json FROM events WHERE session_id = ? AND event_id = ?'),
+      existingEventIds: this.db.prepare(`SELECT event_id FROM events
+          WHERE session_id = ?
+            AND event_id IN (SELECT value FROM json_each(?))`),
       eventIds: this.db.prepare('SELECT event_id FROM events WHERE session_id = ?'),
       latestSeq: this.db.prepare('SELECT MAX(seq) AS s FROM events WHERE session_id = ?'),
       changesBefore: this.db.prepare(
@@ -931,22 +1189,31 @@ export class SqliteStore implements SalidiumStore {
        * `, id DESC` because SQLite's order among equal timestamps is unspecified: without a
        * tiebreak two fetches of the same query can differ at the LIMIT boundary.
        *
-       * The query currently scans sessions and uses a temporary order because the available index
-       * is on `last_event_at`, not its COALESCE expression. Paging and indexing need reevaluation as
-       * stores grow.
+       * Typed search still inspects text, but ordering uses the materialized activity column. The
+       * empty/default list has its own statement below and is fully served by the matching index.
        */
       searchSessions: this.db.prepare(
         `SELECT summary_json FROM sessions
            WHERE ${REAL_SESSION}
              AND ${MATCHES_TERMS}
-           ORDER BY COALESCE(last_event_at, started_at) DESC, id DESC
+           ORDER BY activity_at DESC, id DESC
            LIMIT ?`,
       ),
-      /** The same predicate, counted rather than windowed: what the list is a window of. */
-      countSessions: this.db.prepare(
+      listSessions: this.db.prepare(
+        `SELECT summary_json FROM sessions
+          WHERE ${REAL_SESSION}
+          ORDER BY activity_at DESC, id DESC
+          LIMIT ?`,
+      ),
+      /** The same search predicate, counted rather than windowed: what the list is a window of. */
+      countSearchSessions: this.db.prepare(
         `SELECT COUNT(*) AS n FROM sessions WHERE ${REAL_SESSION} AND ${MATCHES_TERMS}`,
       ),
+      countUserSessions: this.db.prepare(
+        `SELECT COUNT(*) AS n FROM sessions WHERE ${REAL_SESSION}`,
+      ),
       session: this.db.prepare('SELECT summary_json FROM sessions WHERE id = ?'),
+      sessionExists: this.db.prepare('SELECT 1 AS yes FROM sessions WHERE id = ?'),
       upsertSource:
         this.db.prepare(`INSERT INTO sources (path, session_id, provider, agent_id, inode, byte_offset, line_no, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(path) DO UPDATE SET session_id=excluded.session_id, provider=excluded.provider, agent_id=excluded.agent_id, inode=excluded.inode, byte_offset=excluded.byte_offset, line_no=excluded.line_no, updated_at=excluded.updated_at`),
@@ -966,37 +1233,58 @@ export class SqliteStore implements SalidiumStore {
         'SELECT path, session_id, provider, agent_id, inode, byte_offset, line_no FROM sources',
       ),
       countEvents: this.db.prepare('SELECT COUNT(*) AS n FROM events WHERE session_id = ?'),
-      sessionIdsByInternal: this.db.prepare(
-        `SELECT id FROM sessions WHERE COALESCE(json_extract(summary_json, '$.internal'), 0) = ?`,
+      upsertUsageMessage: this.db.prepare(`INSERT INTO usage_messages
+          (session_id, lane, message_id, seq, input_tokens, output_tokens,
+           cache_read_tokens, cache_write_tokens)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(session_id, lane, message_id) DO UPDATE SET
+            seq=excluded.seq,
+            input_tokens=excluded.input_tokens,
+            output_tokens=excluded.output_tokens,
+            cache_read_tokens=excluded.cache_read_tokens,
+            cache_write_tokens=excluded.cache_write_tokens
+          WHERE excluded.seq > usage_messages.seq`),
+      recomputeSessionUsage: this.db.prepare(`INSERT INTO session_usage
+          (session_id, messages, input_tokens, output_tokens,
+           cache_read_tokens, cache_write_tokens)
+          SELECT session_id, COUNT(*), SUM(input_tokens), SUM(output_tokens),
+                 SUM(cache_read_tokens), SUM(cache_write_tokens)
+            FROM usage_messages WHERE session_id = ? GROUP BY session_id
+          ON CONFLICT(session_id) DO UPDATE SET
+            messages=excluded.messages,
+            input_tokens=excluded.input_tokens,
+            output_tokens=excluded.output_tokens,
+            cache_read_tokens=excluded.cache_read_tokens,
+            cache_write_tokens=excluded.cache_write_tokens`),
+      sessionUsage: this.db.prepare(
+        'SELECT messages, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens FROM session_usage WHERE session_id = ?',
       ),
-      /*
-       * One session's token totals, folded the way the reducer folds them.
-       *
-       * `agent.usage` is emitted per transcript record, and one API response is stamped onto every
-       * record it was split across, so a plain SUM counts a response once per content block. The
-       * window takes the LAST row per (session, lane, response), which is the
-       * complete one: figures only ever grow across a response's records, so last is also max.
-       *
-       * Driven one session at a time rather than as a single join over `events`, because
-       * `events_by_kind` is (session_id, kind): the join has no session to anchor on and degrades
-       * to a full scan.
-       */
-      usageForSession: this.db.prepare(
-        `SELECT COUNT(*) AS messages,
-                COALESCE(SUM(inp), 0) AS inputTokens, COALESCE(SUM(outp), 0) AS outputTokens,
-                COALESCE(SUM(cr), 0) AS cacheReadTokens, COALESCE(SUM(cw), 0) AS cacheWriteTokens
-           FROM (
-             SELECT json_extract(json, '$.inputTokens') AS inp,
-                    json_extract(json, '$.outputTokens') AS outp,
-                    json_extract(json, '$.cacheReadTokens') AS cr,
-                    json_extract(json, '$.cacheWriteTokens') AS cw,
-                    ROW_NUMBER() OVER (
-                      PARTITION BY COALESCE(json_extract(json, '$.agentId'), 'main'),
-                                   json_extract(json, '$.messageId')
-                      ORDER BY seq DESC) AS rn
-               FROM events WHERE session_id = ? AND kind = 'agent.usage'
-           ) WHERE rn = 1`,
+      currentUsageTotals: this.db.prepare(`SELECT
+          COALESCE(SUM(u.messages), 0) AS messages,
+          COALESCE(SUM(u.input_tokens), 0) AS input_tokens,
+          COALESCE(SUM(u.output_tokens), 0) AS output_tokens,
+          COALESCE(SUM(u.cache_read_tokens), 0) AS cache_read_tokens,
+          COALESCE(SUM(u.cache_write_tokens), 0) AS cache_write_tokens
+        FROM session_usage u JOIN sessions s ON s.id = u.session_id
+        WHERE s.internal = ?`),
+      usageBackfillState: this.db.prepare(`SELECT rowid_cursor, session_cursor, seq_cursor,
+          scanned_events, complete FROM usage_backfill_state WHERE singleton = 1`),
+      usageBackfillNextSession: this.db.prepare(
+        'SELECT id FROM sessions WHERE id > ? ORDER BY id LIMIT 1',
       ),
+      usageBackfillPage: this.eventsHaveRowid
+        ? this.db.prepare(`SELECT rowid AS rowid_cursor, session_id, seq, json
+            FROM events INDEXED BY events_by_kind
+            WHERE session_id = ? AND kind = 'agent.usage' AND rowid > ?
+            ORDER BY rowid LIMIT ?`)
+        : this.db.prepare(`SELECT 0 AS rowid_cursor, session_id, seq, json
+            FROM events INDEXED BY events_by_kind
+            WHERE session_id = ? AND kind = 'agent.usage' AND seq > ?
+            ORDER BY seq LIMIT ?`),
+      updateUsageBackfill: this.db.prepare(`UPDATE usage_backfill_state
+          SET rowid_cursor = ?, session_cursor = ?, seq_cursor = ?,
+              scanned_events = ?, complete = ?
+          WHERE singleton = 1`),
       usageRollup: this.db.prepare(
         'SELECT messages, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens FROM usage_rollups WHERE internal = ?',
       ),
@@ -1012,6 +1300,20 @@ export class SqliteStore implements SalidiumStore {
       agentText: this.db.prepare(
         "SELECT session_id, kind, json FROM events WHERE kind IN ('agent.message','turn.ended') ORDER BY session_id, seq",
       ),
+      insertHealthSample: this.db.prepare(`INSERT OR REPLACE INTO operations_health_samples
+          (observed_at, queue_files, queue_bytes, store_bytes, active_gaps, total_gaps,
+           daemon_state, collection_state, maintenance_phase)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+      deleteOldHealthSamples: this.db.prepare(
+        'DELETE FROM operations_health_samples WHERE observed_at < ?',
+      ),
+      pruneHealthSamples: this.db.prepare(`DELETE FROM operations_health_samples
+          WHERE observed_at NOT IN (
+            SELECT observed_at FROM operations_health_samples ORDER BY observed_at DESC LIMIT ?
+          )`),
+      healthSamples: this.db.prepare(`SELECT observed_at, queue_files, queue_bytes, store_bytes,
+          active_gaps, total_gaps, daemon_state, collection_state, maintenance_phase
+          FROM operations_health_samples WHERE observed_at >= ? ORDER BY observed_at ASC LIMIT ?`),
       staleChangeCount: this.db.prepare(
         'SELECT COUNT(*) AS n FROM changes WHERE session_id = ? AND (reducer_version IS NULL OR reducer_version <> ?)',
       ),
@@ -1030,6 +1332,13 @@ export class SqliteStore implements SalidiumStore {
       fingerprintConflict: this.db.prepare(`INSERT INTO raw_fingerprint_conflicts
           (path, line, candidate_hash, captured_at, session_id, event_id, reason)
           VALUES (?, ?, ?, ?, ?, ?, ?)`),
+      pruneFingerprintConflicts: this.db.prepare(
+        `DELETE FROM raw_fingerprint_conflicts
+          WHERE id < COALESCE(
+            (SELECT id FROM raw_fingerprint_conflicts ORDER BY id DESC LIMIT 1 OFFSET ?),
+            -1
+          )`,
+      ),
       enqueueReingest: this.db.prepare(`INSERT INTO reingest_jobs
           (path, session_id, provider, agent_id, parser_revision, status, attempts, requested_at, started_at, completed_at, error)
           VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, NULL, NULL, NULL)
@@ -1091,6 +1400,8 @@ export class SqliteStore implements SalidiumStore {
       deleteFingerprintConflictsRetained: this.db.prepare(
         'DELETE FROM raw_fingerprint_conflicts WHERE session_id = ?',
       ),
+      deleteUsageMessages: this.db.prepare('DELETE FROM usage_messages WHERE session_id = ?'),
+      deleteSessionUsage: this.db.prepare('DELETE FROM session_usage WHERE session_id = ?'),
       deleteSessionRetained: this.db.prepare('DELETE FROM sessions WHERE id = ?'),
     };
   }
@@ -1107,9 +1418,22 @@ export class SqliteStore implements SalidiumStore {
     }
   }
 
+  private immediateTransaction<T>(fn: () => T): T {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const out = fn();
+      this.db.exec('COMMIT');
+      return out;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
   insertEvents(events: StoredEvent[]): void {
-    for (const e of events)
-      this.stmts.insertEvent.run(
+    const usageSessions = new Set<string>();
+    for (const e of events) {
+      const inserted = this.stmts.insertEvent.run(
         e.sessionId,
         e.seq,
         e.id,
@@ -1117,8 +1441,24 @@ export class SqliteStore implements SalidiumStore {
         e.kind,
         e.agentId ?? null,
         e.turnId ?? null,
-        JSON.stringify(e),
+        encodeEventJson(e),
       );
+      // The append-only event won the uniqueness check, so its read model may advance. Ignored
+      // duplicates must not be allowed to mutate accounting with a conflicting payload.
+      if (e.kind !== 'agent.usage' || Number(inserted.changes) === 0) continue;
+      this.stmts.upsertUsageMessage.run(
+        e.sessionId,
+        e.agentId ?? 'main',
+        e.messageId,
+        e.seq,
+        e.inputTokens,
+        e.outputTokens,
+        e.cacheReadTokens,
+        e.cacheWriteTokens,
+      );
+      usageSessions.add(e.sessionId);
+    }
+    for (const sessionId of usageSessions) this.stmts.recomputeSessionUsage.run(sessionId);
   }
 
   insertChanges(changes: SemanticChange[], reducerVersion: string): void {
@@ -1134,6 +1474,53 @@ export class SqliteStore implements SalidiumStore {
         JSON.stringify(c),
         reducerVersion,
       );
+  }
+
+  appendHealthSample(sample: HealthHistorySample, retainAfter: string, maxSamples: number): void {
+    if (!Number.isSafeInteger(maxSamples) || maxSamples < 2 || maxSamples > 17_280)
+      throw new Error('health history sample limit must be from 2 to 17280');
+    this.transaction(() => {
+      this.stmts.insertHealthSample.run(
+        sample.observedAt,
+        sample.queueFiles,
+        sample.queueBytes,
+        sample.storeBytes,
+        sample.activeGaps,
+        sample.totalGaps,
+        sample.daemonState,
+        sample.collectionState,
+        sample.maintenancePhase,
+      );
+      this.stmts.deleteOldHealthSamples.run(retainAfter);
+      this.stmts.pruneHealthSamples.run(maxSamples);
+    });
+  }
+
+  healthSamples(since: string, limit: number): HealthHistorySample[] {
+    const bounded = Math.min(Math.max(Math.trunc(limit), 2), 17_280);
+    return (
+      this.stmts.healthSamples.all(since, bounded) as Array<{
+        observed_at: string;
+        queue_files: number | null;
+        queue_bytes: number | null;
+        store_bytes: number | null;
+        active_gaps: number;
+        total_gaps: number;
+        daemon_state: HealthHistorySample['daemonState'];
+        collection_state: HealthHistorySample['collectionState'];
+        maintenance_phase: string | null;
+      }>
+    ).map((row) => ({
+      observedAt: row.observed_at,
+      queueFiles: row.queue_files,
+      queueBytes: row.queue_bytes,
+      storeBytes: row.store_bytes,
+      activeGaps: row.active_gaps,
+      totalGaps: row.total_gaps,
+      daemonState: row.daemon_state,
+      collectionState: row.collection_state,
+      maintenancePhase: row.maintenance_phase,
+    }));
   }
 
   /**
@@ -1161,6 +1548,8 @@ export class SqliteStore implements SalidiumStore {
   }
 
   upsertSession(summary: SessionSummary): void {
+    const updatedAt = new Date().toISOString();
+    const internal = summary.internal || summary.title?.includes('[salidium-explainer]') ? 1 : 0;
     this.stmts.upsertSession.run(
       summary.id,
       summary.provider,
@@ -1174,7 +1563,9 @@ export class SqliteStore implements SalidiumStore {
       summary.endedAt ?? null,
       summary.latestSeq,
       JSON.stringify(summary),
-      new Date().toISOString(),
+      updatedAt,
+      internal,
+      summary.lastEventAt ?? summary.startedAt ?? '',
     );
   }
 
@@ -1197,7 +1588,7 @@ export class SqliteStore implements SalidiumStore {
 
   latestCheckpoint(sessionId: string, reducerVersion: string): CheckpointRow | undefined {
     const row = this.stmts.latestCheckpoint.get(sessionId, reducerVersion) as
-      | { seq: number; reducer_version: string; state_json: string }
+      | { seq: number; reducer_version: string; state_json: EncodedJson }
       | undefined;
     if (!row) return undefined;
     try {
@@ -1224,7 +1615,7 @@ export class SqliteStore implements SalidiumStore {
     seq: number,
   ): CheckpointRow | undefined {
     const row = this.stmts.checkpointAtOrBefore.get(sessionId, reducerVersion, seq) as
-      | { seq: number; reducer_version: string; state_json: string }
+      | { seq: number; reducer_version: string; state_json: EncodedJson }
       | undefined;
     if (!row) return undefined;
     try {
@@ -1250,14 +1641,23 @@ export class SqliteStore implements SalidiumStore {
     limit = 100_000,
   ): StoredEvent[] {
     const rows = this.stmts.eventsAfter.all(sessionId, afterSeq, untilSeq, limit) as Array<{
-      json: string;
+      json: EncodedJson;
     }>;
-    return rows.map((r) => JSON.parse(r.json) as StoredEvent);
+    return rows.map((r) => decodeEventJson(r.json));
   }
 
   eventById(sessionId: string, eventId: string): StoredEvent | undefined {
-    const row = this.stmts.eventById.get(sessionId, eventId) as { json: string } | undefined;
-    return row ? (JSON.parse(row.json) as StoredEvent) : undefined;
+    const row = this.stmts.eventById.get(sessionId, eventId) as { json: EncodedJson } | undefined;
+    return row ? decodeEventJson(row.json) : undefined;
+  }
+
+  existingEventIds(sessionId: string, eventIds: readonly string[]): string[] {
+    if (eventIds.length === 0) return [];
+    return (
+      this.stmts.existingEventIds.all(sessionId, JSON.stringify(eventIds)) as Array<{
+        event_id: string;
+      }>
+    ).map((row) => row.event_id);
   }
 
   eventIds(sessionId: string): string[] {
@@ -1303,8 +1703,12 @@ export class SqliteStore implements SalidiumStore {
     // megabytes of prose, and a diagnostic that grows with the user's history is one that stops
     // working for exactly the people with the most to measure.
     for (const row of this.stmts.agentText.iterate()) {
-      const r = row as unknown as { session_id: string; kind: string; json: string };
-      const e = JSON.parse(r.json) as { text?: string; lastMessage?: string; phase?: string };
+      const r = row as unknown as { session_id: string; kind: string; json: EncodedJson };
+      const e = decodeEventJson(r.json) as StoredEvent & {
+        text?: string;
+        lastMessage?: string;
+        phase?: string;
+      };
       const text = r.kind === 'agent.message' ? e.text : e.lastMessage;
       if (!text?.trim()) continue;
       if (current && current.sessionId !== r.session_id) {
@@ -1331,24 +1735,143 @@ export class SqliteStore implements SalidiumStore {
    * writer, one synchronous connection, so they see one state of the store.
    */
   searchSessions(terms: string[], limit = SESSION_PAGE): SessionSearchResult {
+    const noSearch = terms.length === 0;
     const bound = JSON.stringify(terms);
-    const sessions =
-      limit > 0
-        ? (this.stmts.searchSessions.all(bound, limit) as Array<{ summary_json: string }>).map(
-            (r) => JSON.parse(r.summary_json) as SessionSummary,
-          )
-        : [];
-    const matched = (this.stmts.countSessions.get(bound) as { n: number }).n;
-    // With no terms the two questions are the same question, so ask it once.
-    const total =
-      terms.length === 0 ? matched : (this.stmts.countSessions.get('[]') as { n: number }).n;
+    const rows =
+      limit <= 0
+        ? []
+        : noSearch
+          ? (this.stmts.listSessions.all(limit) as Array<{ summary_json: string }>)
+          : (this.stmts.searchSessions.all(bound, limit) as Array<{ summary_json: string }>);
+    const sessions = rows.map((r) => JSON.parse(r.summary_json) as SessionSummary);
+    const total = (this.stmts.countUserSessions.get() as { n: number }).n;
+    const matched = noSearch
+      ? total
+      : (this.stmts.countSearchSessions.get(bound) as { n: number }).n;
     return { sessions, matched, total };
   }
 
   listSessions(limit = SESSION_PAGE): SessionSummary[] {
-    return (this.stmts.searchSessions.all('[]', limit) as Array<{ summary_json: string }>).map(
+    return (this.stmts.listSessions.all(limit) as Array<{ summary_json: string }>).map(
       (r) => JSON.parse(r.summary_json) as SessionSummary,
     );
+  }
+
+  usageBackfillProgress(): UsageBackfillProgress {
+    const row = this.stmts.usageBackfillState.get() as
+      | { scanned_events: number; complete: number }
+      | undefined;
+    return { complete: row?.complete === 1, scannedEvents: row?.scanned_events ?? 0 };
+  }
+
+  /**
+   * Advances historical accounting by a small evidence page and commits its cursor with its rows.
+   * Each call is deliberately bounded; the daemon yields between calls so health, stop, hooks and
+   * browser requests always get an opportunity to run.
+   */
+  advanceUsageBackfill(batchSize = 200): UsageBackfillProgress {
+    if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 2_000)
+      throw new Error('usage backfill batch size must be from 1 to 2000');
+    type BackfillState = {
+      rowid_cursor: number;
+      session_cursor: string;
+      seq_cursor: number;
+      scanned_events: number;
+      complete: number;
+    };
+    type BackfillRow = {
+      rowid_cursor: number;
+      session_id: string;
+      seq: number;
+      json: EncodedJson;
+    };
+    const state = this.stmts.usageBackfillState.get() as BackfillState;
+    if (state.complete === 1) return { complete: true, scannedEvents: state.scanned_events };
+
+    let sessionId = state.session_cursor;
+    let afterRowid = state.rowid_cursor;
+    let afterSeq = state.seq_cursor;
+    if (!sessionId || !this.stmts.sessionExists.get(sessionId)) {
+      const next = this.stmts.usageBackfillNextSession.get(sessionId) as { id: string } | undefined;
+      if (next) {
+        sessionId = next.id;
+        afterRowid = 0;
+        afterSeq = -1;
+      }
+    }
+
+    // Read one session through the existing (session, kind) index. A global kind scan looks
+    // compact but can cross gigabytes of non-usage BLOB pages before finding its next match; this
+    // point range is bounded even when the archive ends with one enormous transcript.
+    const rows = sessionId
+      ? (this.stmts.usageBackfillPage.all(
+          sessionId,
+          this.eventsHaveRowid ? afterRowid : afterSeq,
+          batchSize,
+        ) as BackfillRow[])
+      : [];
+    // The page itself contains only usage evidence and returns its compressed payload in one
+    // streaming query. The old form walked every event and then issued one extra lookup for each
+    // usage row; on a multi-gigabyte archive that was safe but needlessly turned a one-time
+    // accounting migration into hours of random reads.
+    const usageRows = rows.flatMap((row) => {
+      const event = decodeEventJson(row.json);
+      return event.kind === 'agent.usage' ? [{ row, event }] : [];
+    });
+
+    return this.immediateTransaction(() => {
+      const latest = this.stmts.usageBackfillState.get() as BackfillState;
+      const cursorChanged =
+        latest.rowid_cursor !== state.rowid_cursor ||
+        latest.session_cursor !== state.session_cursor ||
+        latest.seq_cursor !== state.seq_cursor;
+      // Only one daemon worker normally exists, but an operator can run a diagnostic helper. Its
+      // committed page wins; this caller simply reads from the new cursor on its next iteration.
+      if (cursorChanged || latest.complete === 1)
+        return { complete: latest.complete === 1, scannedEvents: latest.scanned_events };
+
+      const touched = new Set<string>();
+      const sessionExists = new Map<string, boolean>();
+      for (const { row, event } of usageRows) {
+        let exists = sessionExists.get(row.session_id);
+        if (exists === undefined) {
+          exists = Boolean(this.stmts.sessionExists.get(row.session_id));
+          sessionExists.set(row.session_id, exists);
+        }
+        // Explicit Forget may have removed this session after the page was read. Advancing past its
+        // now-deleted evidence is correct; recreating an orphan accounting row is not.
+        if (!exists) continue;
+        this.stmts.upsertUsageMessage.run(
+          row.session_id,
+          event.agentId ?? 'main',
+          event.messageId,
+          row.seq,
+          event.inputTokens,
+          event.outputTokens,
+          event.cacheReadTokens,
+          event.cacheWriteTokens,
+        );
+        touched.add(row.session_id);
+      }
+      for (const sessionId of touched) this.stmts.recomputeSessionUsage.run(sessionId);
+
+      const last = rows.at(-1);
+      let nextSessionId: string | undefined;
+      if (sessionId && rows.length < batchSize)
+        nextSessionId = (
+          this.stmts.usageBackfillNextSession.get(sessionId) as { id: string } | undefined
+        )?.id;
+      const complete = !sessionId || (rows.length < batchSize && !nextSessionId);
+      const scannedEvents = state.scanned_events + rows.length;
+      this.stmts.updateUsageBackfill.run(
+        nextSessionId ? 0 : (last?.rowid_cursor ?? afterRowid),
+        nextSessionId ?? sessionId,
+        nextSessionId ? -1 : (last?.seq ?? afterSeq),
+        scannedEvents,
+        complete ? 1 : 0,
+      );
+      return { complete, scannedEvents };
+    });
   }
 
   /**
@@ -1364,32 +1887,23 @@ export class SqliteStore implements SalidiumStore {
    * to whatever renders it, not here.
    */
   usageTotals(internal: boolean): UsageTotals | undefined {
-    const ids = this.stmts.sessionIdsByInternal.all(internal ? 1 : 0) as Array<{ id: string }>;
-    const rolled = this.stmts.usageRollup.get(internal ? 1 : 0) as
-      | {
-          messages: number;
-          input_tokens: number;
-          output_tokens: number;
-          cache_read_tokens: number;
-          cache_write_tokens: number;
-        }
-      | undefined;
-    const total: UsageTotals = {
-      messages: rolled?.messages ?? 0,
-      inputTokens: rolled?.input_tokens ?? 0,
-      outputTokens: rolled?.output_tokens ?? 0,
-      cacheReadTokens: rolled?.cache_read_tokens ?? 0,
-      cacheWriteTokens: rolled?.cache_write_tokens ?? 0,
+    if (!this.usageBackfillProgress().complete) return undefined;
+    type StoredUsage = {
+      messages: number;
+      input_tokens: number;
+      output_tokens: number;
+      cache_read_tokens: number;
+      cache_write_tokens: number;
     };
-    for (const { id } of ids) {
-      const row = this.stmts.usageForSession.get(id) as unknown as UsageTotals | undefined;
-      if (!row) continue;
-      total.messages += row.messages;
-      total.inputTokens += row.inputTokens;
-      total.outputTokens += row.outputTokens;
-      total.cacheReadTokens += row.cacheReadTokens;
-      total.cacheWriteTokens += row.cacheWriteTokens;
-    }
+    const rolled = this.stmts.usageRollup.get(internal ? 1 : 0) as StoredUsage | undefined;
+    const current = this.stmts.currentUsageTotals.get(internal ? 1 : 0) as StoredUsage;
+    const total: UsageTotals = {
+      messages: (rolled?.messages ?? 0) + current.messages,
+      inputTokens: (rolled?.input_tokens ?? 0) + current.input_tokens,
+      outputTokens: (rolled?.output_tokens ?? 0) + current.output_tokens,
+      cacheReadTokens: (rolled?.cache_read_tokens ?? 0) + current.cache_read_tokens,
+      cacheWriteTokens: (rolled?.cache_write_tokens ?? 0) + current.cache_write_tokens,
+    };
     return total.messages > 0 ? total : undefined;
   }
 
@@ -1424,6 +1938,7 @@ export class SqliteStore implements SalidiumStore {
         event.id,
         're-ingested provider record does not match the immutable stored event',
       );
+      this.stmts.pruneFingerprintConflicts.run(MAX_RAW_FINGERPRINT_CONFLICTS - 1);
       return false;
     }
     this.stmts.upsertFingerprint.run(
@@ -1616,19 +2131,29 @@ export class SqliteStore implements SalidiumStore {
   ): RetentionPreview {
     const preview = this.retentionPreview(policy, now, batchSize, excludeSessionIds);
     if (policy === 'forever' || !preview.cutoff) return preview;
+    if (!this.usageBackfillProgress().complete)
+      throw new Error('historical usage preparation must finish before retention can delete data');
     const cutoff = preview.cutoff;
     this.transaction(() => {
       for (const row of preview.sessions) {
         const session = this.getSession(row.id);
-        const usage = this.stmts.usageForSession.get(row.id) as unknown as UsageTotals | undefined;
+        const usage = this.stmts.sessionUsage.get(row.id) as
+          | {
+              messages: number;
+              input_tokens: number;
+              output_tokens: number;
+              cache_read_tokens: number;
+              cache_write_tokens: number;
+            }
+          | undefined;
         if (usage && usage.messages > 0)
           this.stmts.addUsageRollup.run(
             session?.internal || session?.title?.includes('[salidium-explainer]') ? 1 : 0,
             usage.messages,
-            usage.inputTokens,
-            usage.outputTokens,
-            usage.cacheReadTokens,
-            usage.cacheWriteTokens,
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cache_read_tokens,
+            usage.cache_write_tokens,
           );
         this.stmts.insertTombstone.run(row.id, now.toISOString(), cutoff, `retention:${policy}`);
         this.stmts.deleteEventsRetained.run(row.id);
@@ -1636,6 +2161,8 @@ export class SqliteStore implements SalidiumStore {
         this.stmts.deleteCheckpointsRetained.run(row.id);
         this.stmts.deleteFingerprintsRetained.run(row.id);
         this.stmts.deleteFingerprintConflictsRetained.run(row.id);
+        this.stmts.deleteUsageMessages.run(row.id);
+        this.stmts.deleteSessionUsage.run(row.id);
         this.stmts.deleteSessionRetained.run(row.id);
       }
     });
@@ -1652,6 +2179,8 @@ export class SqliteStore implements SalidiumStore {
       this.stmts.deleteCheckpointsRetained.run(sessionId);
       this.stmts.deleteFingerprintsRetained.run(sessionId);
       this.stmts.deleteFingerprintConflictsRetained.run(sessionId);
+      this.stmts.deleteUsageMessages.run(sessionId);
+      this.stmts.deleteSessionUsage.run(sessionId);
       this.stmts.deleteSessionRetained.run(sessionId);
       this.stmts.unpinSession.run(sessionId);
     });
@@ -1660,6 +2189,8 @@ export class SqliteStore implements SalidiumStore {
 
   /** Offline space reclamation after bounded cleanup batches. */
   compact(): void {
+    if (!this.usageBackfillProgress().complete)
+      throw new Error('historical usage preparation must finish before compacting the store');
     const integrity = () => {
       const row = this.db.prepare('PRAGMA integrity_check').get() as
         | Record<string, string>

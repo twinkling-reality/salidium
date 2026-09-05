@@ -62,14 +62,14 @@ describe('first-run onboarding', () => {
     expect(result.changed.map((change) => change.provider)).toEqual(['claude-code', 'codex']);
     /*
      * Nothing needs attention. Not "every validation is ok": Codex also carries a standing `info`
-     * caveat, because a hook it has not been shown is configured on disk and inert in the agent,
-     * and that is a fact about a healthy install rather than a problem with one.
+     * caveat explaining that configured-on-disk and trusted-by-Codex are separate facts.
      */
     expect(result.validations.some((validation) => validation.level === 'attention')).toBe(false);
     expect(
       result.validations.some(
         (validation) =>
-          validation.level === 'info' && /open \/hooks in Codex/.test(validation.message),
+          validation.level === 'info' &&
+          /Status and doctor ask Codex for the current trust state/.test(validation.message),
       ),
     ).toBe(true);
     expect(first.output()).toMatch(/SALIDIUM\s+FIRST-RUN SETUP/);

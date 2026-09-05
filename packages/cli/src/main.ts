@@ -10,38 +10,78 @@ import {
   statSync,
 } from 'node:fs';
 import { createRequire } from 'node:module';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { arch, homedir, platform, release } from 'node:os';
+import { join, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { basename as pathBasename } from '@salidium/core';
 import {
+  acknowledgeLocalAlert,
+  resumeCollection as clearCollectionPause,
+  collectionStatusFromHealth,
+  createDiagnosticBundle,
+  createHealthSnapshot,
   type DaemonJson,
   DEFAULT_PORT,
   daemonPaths,
   defaultUiDist,
+  diagnosticManifest,
   effectiveCadence,
+  evaluateLocalAlerts,
   getExplainerStatus,
+  inspectBuiltInHooks,
+  inspectCodexHookTrust,
+  inspectQueue,
+  inspectStoreLayout,
+  isOperationalConfigKey,
+  OPERATIONAL_CONFIG_KEYS,
+  observeCollectionStatus,
   readDaemonJson,
+  readMaintenanceState,
   readSettings,
+  resetOperationalConfig,
+  resolveOperationalConfig,
   rotateLogFile,
+  runRetentionCompactionMaintenance,
+  runStorageOptimizationMaintenance,
   SCHEMA_VERSION,
   SqliteStore,
+  setOperationalConfigValue,
   startDaemon,
+  storageOptimizationPreflight,
   validateSalidiumHistoryDays,
+  pauseCollection as writeCollectionPause,
   writeSettings,
 } from '@salidium/daemon';
 import {
+  type CollectionStatus,
+  CollectionStatusSchema,
   type DaemonInfo,
+  type EffectiveOperationalConfig,
+  EffectiveOperationalConfigSchema,
   type ExplainerCadence,
   type ExplainerSettings,
   ExplainerSettingsSchema,
+  type LocalAlertState,
+  type OperationsHealthSnapshot,
+  type OperationsOverview,
+  OperationsOverviewSchema,
   PROTOCOL_VERSION,
+  type QueueInspection,
 } from '@salidium/protocol';
 import { auditClaims, renderAudit } from './auditClaims.ts';
 import { explanationMode, parseExplanationMode } from './explanationMode.ts';
 import type { IntegrationContext, IntegrationValidation } from './integrations.ts';
 import { integrationById, providerIntegrations } from './integrations.ts';
+import {
+  activateMacOSService,
+  describeMacOSService,
+  disableMacOSService,
+  inspectMacOSService,
+  kickstartManagedDaemon,
+  prepareMacOSService,
+  uninstallMacOSService,
+} from './macosService.ts';
 import { runFirstRunOnboarding } from './onboarding.ts';
 import { renderReport } from './render.ts';
 import { resolveBrowserLaunch, validateSalidiumPort } from './runtime.ts';
@@ -60,8 +100,26 @@ Usage:
   salidium start                Start the daemon in the background
   salidium daemon               Run the daemon in the foreground
   salidium stop                 Stop the background daemon
+  salidium pause                Pause all new collection for up to 24 hours
+  salidium resume               Resume collection immediately
   salidium restart              Stop it, start it again, and open the UI (--no-open to skip)
-  salidium status               Show daemon status
+  salidium status               Show one operational snapshot; exact values may be unavailable
+  salidium status --watch       Refresh health and clearly label derived rates
+  salidium service install      Start at login with a native macOS menu-bar control
+  salidium service status       Show whether the login service and menu bar are loaded
+  salidium service enable       Re-enable a previously installed always-on service
+  salidium service disable      Stop and turn off always-on mode without deleting data
+  salidium service uninstall    Remove the login service and menu bar; keep all data
+  salidium config show          Show effective settings and whether each came from defaults,
+                                the stored configuration, or the environment
+  salidium config set KEY VALUE Set one supported policy value
+  salidium config reset [KEY]   Reset one setting, or every stored setting, to inheritance
+  salidium maintenance queue    Inspect queued file metadata without reading payloads
+  salidium maintenance drain    Drain toward empty through bounded daemon passes (default 30 s)
+  salidium maintenance optimize Preview or run coordinated verified storage optimization
+  salidium maintenance status   Show durable maintenance completion, failure, or recovery state
+  salidium maintenance acknowledge ALERT_ID
+                                Acknowledge one local alert episode until it recovers
   salidium explanations         Show whether written explanations can call a model
   salidium explanations off|when-done|each-reply
                                 Change model-call frequency without stopping local reports
@@ -70,7 +128,9 @@ Usage:
                                 --detail=summary|detail|source, --width=N
   salidium install-hooks [claude-code|codex|all]    Register Salidium hooks (default: all present)
   salidium uninstall-hooks [claude-code|codex|all]
-  salidium doctor               Check the local setup
+  salidium doctor               Check the local setup and collection health
+  salidium doctor --bundle      Preview and write a redacted local diagnostic bundle
+                                --dry-run previews only; --output=PATH selects the destination
   salidium --version            Print the installed version
   salidium reingest [session]   Re-read session files (--all, --status, --verbose)
   salidium retention            Show the current history policy and a cleanup preview
@@ -78,6 +138,8 @@ Usage:
                                 Set automatic session retention (default: forever)
   salidium retention apply      Apply one cleanup batch now (daemon must be stopped)
   salidium retention compact    Return reusable SQLite pages to the OS (daemon must be stopped)
+  salidium storage              Show the lossless storage layout and page size
+  salidium storage optimize     Coordinate, copy, verify, and install the compact layout
   salidium pin [session]        Exempt a session from automatic retention
   salidium unpin [session]      Remove the retention exemption
   salidium forget [session]     Immediately forget one whole session (--yes)
@@ -97,15 +159,20 @@ Environment:
   SALIDIUM_EXPLAIN_MODEL Optional model override for the selected explainer
 
 Native Windows imports transcript history but does not install the POSIX live-hook relay.
+Ordinary commands resume an expired or manual pause. pause, stop, service commands, and coordinated
+storage optimize do not; resume changes collection state explicitly.
 `;
 
 const require = createRequire(import.meta.url);
 const VERSION: string = (() => {
-  try {
-    return (require('../package.json') as { version: string }).version;
-  } catch {
-    return '0.0.0';
+  for (const path of ['../package.json', './package.json']) {
+    try {
+      return (require(path) as { version: string }).version;
+    } catch {
+      // The published package keeps metadata above bundle/; always-on mode copies it beside us.
+    }
   }
+  return '0.0.0';
 })();
 
 const userHome = homedir();
@@ -114,8 +181,17 @@ const salidiumHome = process.env.SALIDIUM_HOME ?? join(userHome, '.salidium');
 async function main(argv: string[]): Promise<number> {
   const assumeYes = argv.includes('--yes') || argv.includes('-y');
   const noOpen = argv.includes('--no-open');
-  const positional = argv.filter((value) => !['--yes', '-y', '--no-open'].includes(value));
-  const [cmd = 'up', arg] = positional;
+  const jsonOutput = argv.includes('--json');
+  const quiet = argv.includes('--quiet');
+  const positional = argv.filter(
+    (value) => !['--yes', '-y', '--no-open', '--json', '--quiet'].includes(value),
+  );
+  const [cmd = 'up', arg, ...args] = positional;
+  if (
+    !['pause', 'resume', 'stop', 'service', '__usage-backfill'].includes(cmd) &&
+    !(cmd === 'storage' && arg === 'optimize')
+  )
+    await implicitlyResumeCollection();
   switch (cmd) {
     case 'help':
     case '--help':
@@ -138,6 +214,22 @@ async function main(argv: string[]): Promise<number> {
       );
       await new Promise(() => {});
       return 0;
+    }
+    // Private worker entrypoint. The daemon runs this same reviewed bundle on a separate event
+    // loop so archive reconstruction can never occupy the loop serving health and control.
+    case '__usage-backfill': {
+      if (!arg || !resolve(arg).startsWith(`${resolve(salidiumHome)}${sep}`))
+        throw new Error('usage backfill store must be inside the Salidium state directory');
+      const store = new SqliteStore(resolve(arg), { concurrentWriter: true });
+      try {
+        for (;;) {
+          const progress = store.advanceUsageBackfill(100);
+          if (progress.complete) return 0;
+          await sleep(10);
+        }
+      } finally {
+        store.close();
+      }
     }
     case 'start': {
       const running = await ensureDaemon();
@@ -300,6 +392,7 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     case 'stop': {
+      const collection = await setCollectionState('pause', 'stop');
       const stopped = await stopDaemon();
       process.stdout.write(
         stopped === undefined
@@ -316,7 +409,29 @@ async function main(argv: string[]): Promise<number> {
           `Explanations remain set to ${explanationMode(storedMode).label} for the next start. Disable them with: salidium explanations off\n`,
         );
       }
+      process.stdout.write(
+        `Collection is paused until ${collection.pause?.expiresAt ?? 'the marker is cleared'}. Observed queue at pause: ${queueLabel(collection)}. New hook and transcript observations will not be collected while paused.\n`,
+      );
       return stopped === undefined || (stopped.signaled && stopped.exited) ? 0 : 1;
+    }
+    case 'pause': {
+      const status = await setCollectionState('pause', 'manual');
+      if (!quiet) {
+        if (jsonOutput) process.stdout.write(`${JSON.stringify(status)}\n`);
+        else
+          process.stdout.write(
+            `Collection paused until ${status.pause?.expiresAt ?? 'the pause is cleared'}. Observed queue now: ${queueLabel(status)}.\n`,
+          );
+      }
+      return 0;
+    }
+    case 'resume': {
+      const status = await setCollectionState('resume');
+      if (!quiet) {
+        if (jsonOutput) process.stdout.write(`${JSON.stringify(status)}\n`);
+        else process.stdout.write(`Collection active. ${queueLabel(status)} queued.\n`);
+      }
+      return 0;
     }
     /*
      * One command, because the two-command form is what everything here tells you to type — this
@@ -359,32 +474,111 @@ async function main(argv: string[]): Promise<number> {
       );
       return 0;
     }
-    case 'status': {
+    case 'config': {
+      const action = arg ?? 'show';
       const d = readDaemonJson(salidiumHome);
       const presence = await presenceOf(d);
-      process.stdout.write(
-        d && presence !== 'absent'
-          ? `running: pid ${d.pid}, port ${d.port}, since ${d.startedAt}${presence === 'unresponsive' ? '; not answering' : ''}\n`
-          : 'not running\n',
-      );
-      const explanations = await currentExplanationState(d, presence);
-      process.stdout.write(`Explanations: ${explanationStateLabel(explanations)}\n`);
-      const context: IntegrationContext = { userHome, salidiumHome };
-      for (const provider of providerIntegrations) {
-        const detection = provider.detect(context);
-        const status = !detection.detected
-          ? 'not detected'
-          : provider.liveHooksSupported(context)
-            ? provider.inspect(context).status
-            : 'history-only (native Windows; live hooks unavailable)';
-        process.stdout.write(`${provider.name}: ${status}\n`);
+      if (action === 'show') {
+        const effective = await readEffectiveOperationalConfig(d, presence);
+        if (!quiet) {
+          if (jsonOutput) process.stdout.write(`${JSON.stringify(effective)}\n`);
+          else renderEffectiveConfig(effective);
+        }
+        return 0;
       }
-      /*
-       * Zero still means the daemon answered, not merely that it is there. The line above gained a
-       * third thing to say; a script asking whether it can talk to the daemon is asking the same
-       * question it always was, and a silent daemon is not an answer.
-       */
-      return presence === 'reachable' ? 0 : 1;
+      if (action !== 'set' && action !== 'reset') {
+        process.stderr.write('config accepts show, set, or reset\n');
+        return 2;
+      }
+      if (presence === 'unresponsive') {
+        process.stderr.write(
+          'the daemon is running but not answering; configuration was not changed\n',
+        );
+        return 1;
+      }
+      const key = args[0];
+      if (action === 'set' && (!key || !isOperationalConfigKey(key) || args[1] === undefined)) {
+        process.stderr.write(
+          `usage: salidium config set KEY VALUE\nSupported keys: ${OPERATIONAL_CONFIG_KEYS.join(', ')}\n`,
+        );
+        return 2;
+      }
+      if (action === 'reset' && key && !isOperationalConfigKey(key)) {
+        process.stderr.write(`unknown configuration key: ${key}\n`);
+        return 2;
+      }
+      const configKey = key && isOperationalConfigKey(key) ? key : undefined;
+      let effective: EffectiveOperationalConfig;
+      try {
+        const current =
+          d && presence === 'reachable'
+            ? await readEffectiveOperationalConfig(d, presence)
+            : undefined;
+        if (action === 'set') {
+          const rawValue = args[1];
+          if (!configKey || rawValue === undefined)
+            throw new Error('configuration set request did not contain a supported key and value');
+          const parsedValue = parseConfigValue(configKey, rawValue);
+          if (d && presence === 'reachable' && current) {
+            const response = await fetch(`http://127.0.0.1:${d.port}/api/operations/config`, {
+              method: 'PUT',
+              headers: {
+                Authorization: `Bearer ${d.token}`,
+                'Content-Type': 'application/json',
+                'If-Match': String(current.revision),
+              },
+              body: JSON.stringify(configPatch(configKey, parsedValue)),
+              signal: AbortSignal.timeout(2_000),
+            });
+            if (!response.ok) throw new Error(`daemon refused configuration (${response.status})`);
+            effective = (await response.json()) as EffectiveOperationalConfig;
+          } else {
+            setOperationalConfigValue(salidiumHome, configKey, parsedValue);
+            synchronizeOfflineRetention();
+            effective = await readEffectiveOperationalConfig(d, presence);
+          }
+        } else if (d && presence === 'reachable' && current) {
+          const query = key ? `?key=${encodeURIComponent(key)}` : '';
+          const response = await fetch(`http://127.0.0.1:${d.port}/api/operations/config${query}`, {
+            method: 'DELETE',
+            headers: {
+              Authorization: `Bearer ${d.token}`,
+              'If-Match': String(current.revision),
+            },
+            signal: AbortSignal.timeout(2_000),
+          });
+          if (!response.ok) throw new Error(`daemon refused configuration (${response.status})`);
+          effective = (await response.json()) as EffectiveOperationalConfig;
+        } else {
+          resetOperationalConfig(salidiumHome, configKey);
+          synchronizeOfflineRetention();
+          effective = await readEffectiveOperationalConfig(d, presence);
+        }
+      } catch (error) {
+        process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+        return 2;
+      }
+      if (!quiet) {
+        if (jsonOutput) process.stdout.write(`${JSON.stringify(effective)}\n`);
+        else {
+          process.stdout.write('Configuration saved.\n');
+          renderEffectiveConfig(effective);
+        }
+      }
+      return effective.restartRequired.length > 0 ? 3 : 0;
+    }
+    case 'maintenance':
+      return maintenanceCommand(arg, args, { json: jsonOutput, quiet });
+    case 'service':
+      return serviceCommand(arg, { json: jsonOutput, quiet });
+    case 'status': {
+      const interval = argv.find((value) => value.startsWith('--interval='))?.slice(11);
+      return statusCommand({
+        json: jsonOutput,
+        quiet,
+        watch: argv.includes('--watch'),
+        intervalSeconds: interval === undefined ? 2 : Number(interval),
+      });
     }
     case 'explanations': {
       const d = readDaemonJson(salidiumHome);
@@ -661,7 +855,7 @@ async function main(argv: string[]): Promise<number> {
             );
             return 2;
           }
-          store.compact();
+          runRetentionCompactionMaintenance(salidiumHome, () => store.compact());
           const compactedBytes = statSync(db).size;
           process.stdout.write(
             `Compacted the offline store from ${formatBytes(dbBytes + walBytes)} to ${formatBytes(compactedBytes)}.\n`,
@@ -691,7 +885,9 @@ async function main(argv: string[]): Promise<number> {
         process.stdout.write(`Store: ${formatBytes(storeBytes)}\n`);
         if (storeBytes >= 1024 * 1024 * 1024)
           process.stdout.write(
-            'Storage warning: history is over 1 GiB. Preview a 30, 90, or 365 day policy before opting in.\n',
+            inspectStoreLayout(db).optimized
+              ? 'Storage warning: history is over 1 GiB. Preview exactly what retention would delete before opting in.\n'
+              : 'Lossless storage optimization is available before deleting history. Run `salidium storage`, then `salidium storage optimize`; it coordinates queue drain and daemon stop.\n',
           );
         process.stdout.write(`Pinned: ${store.pinnedSessionIds().length}\n`);
         process.stdout.write(
@@ -703,6 +899,36 @@ async function main(argv: string[]): Promise<number> {
       } finally {
         store.close();
       }
+    }
+    case 'storage': {
+      const { db } = daemonPaths(salidiumHome);
+      if (!existsSync(db)) {
+        process.stderr.write(`no store at ${db}\n`);
+        return 1;
+      }
+      if (arg !== undefined && arg !== 'optimize') {
+        process.stderr.write('storage accepts only `optimize`\n');
+        return 2;
+      }
+      if (arg === undefined) {
+        const layout = inspectStoreLayout(db);
+        if (quiet) return layout.optimized ? 0 : 3;
+        if (jsonOutput) process.stdout.write(`${JSON.stringify(layout)}\n`);
+        else {
+          process.stdout.write(`Layout: ${layout.optimized ? 'Optimized' : 'Legacy'}\n`);
+          process.stdout.write(`Page size: ${formatBytes(layout.pageSize)}\n`);
+          process.stdout.write(
+            `Events: ${layout.eventsWithoutRowid ? 'WITHOUT ROWID' : 'rowid table'}, ${layout.eventJsonType ?? 'unknown'} payload\n`,
+          );
+          process.stdout.write(`Checkpoints: ${layout.checkpointType ?? 'unknown'} payload\n`);
+          if (!layout.optimized)
+            process.stdout.write(
+              'Lossless optimization is available. Run `salidium storage optimize`; it coordinates queue drain and daemon stop.\n',
+            );
+        }
+        return layout.optimized ? 0 : 3;
+      }
+      return maintenanceCommand('optimize', args, { json: jsonOutput, quiet });
     }
     case 'pin':
     case 'unpin': {
@@ -754,11 +980,756 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     case 'doctor':
-      return doctor();
+      return doctor({
+        json: jsonOutput,
+        quiet,
+        bundle: argv.includes('--bundle'),
+        dryRun: argv.includes('--dry-run'),
+        output: argv.find((value) => value.startsWith('--output='))?.slice(9),
+      });
     default:
       process.stderr.write(`unknown command: ${cmd}\n\n${HELP}`);
       return 2;
   }
+}
+
+interface ProviderObservation {
+  id: 'claude-code' | 'codex';
+  name: string;
+  detected: boolean;
+  liveHooksSupported: boolean;
+  hookStatus: 'configured' | 'not-configured' | 'partial' | 'invalid' | null;
+  missingEvents: string[];
+  hookTrust: 'trusted' | 'untrusted' | 'modified' | 'managed' | 'unknown' | null;
+  hookTrustIssue: string | null;
+}
+
+async function observeProviders(): Promise<ProviderObservation[]> {
+  const context: IntegrationContext = { userHome, salidiumHome };
+  return Promise.all(
+    providerIntegrations.map(async (provider) => {
+      const detection = provider.detect(context);
+      const inspection =
+        detection.detected && provider.liveHooksSupported(context)
+          ? provider.inspect(context)
+          : undefined;
+      const trust =
+        provider.id === 'codex' && detection.detected && inspection?.status !== 'not-configured'
+          ? await inspectCodexHookTrust(process.cwd(), process.env, 3_000, undefined, VERSION)
+          : undefined;
+      return {
+        id: provider.id,
+        name: provider.name,
+        detected: detection.detected,
+        liveHooksSupported: provider.liveHooksSupported(context),
+        hookStatus: inspection?.status ?? null,
+        missingEvents: [...(inspection?.missingEvents ?? [])],
+        hookTrust: trust?.trust ?? null,
+        hookTrustIssue: trust?.issue ?? null,
+      };
+    }),
+  );
+}
+
+function localRetention(): CollectionStatus['store']['retention'] {
+  const db = daemonPaths(salidiumHome).db;
+  if (!existsSync(db)) return null;
+  try {
+    const store = new SqliteStore(db, { readOnly: true });
+    try {
+      return store.retentionPolicy();
+    } finally {
+      store.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+async function readEffectiveOperationalConfig(
+  daemon: DaemonJson | undefined,
+  presence: Presence,
+): Promise<EffectiveOperationalConfig> {
+  if (daemon && presence === 'reachable') {
+    const response = await fetch(`http://127.0.0.1:${daemon.port}/api/operations/config`, {
+      headers: { Authorization: `Bearer ${daemon.token}` },
+      signal: AbortSignal.timeout(2_000),
+    });
+    if (response.ok) return EffectiveOperationalConfigSchema.parse(await response.json());
+  }
+  return resolveOperationalConfig(salidiumHome, {
+    migrate: true,
+    retentionFallback: localRetention() ?? undefined,
+  });
+}
+
+function synchronizeOfflineRetention(): void {
+  const db = daemonPaths(salidiumHome).db;
+  if (!existsSync(db)) return;
+  const effective = resolveOperationalConfig(salidiumHome, {
+    migrate: true,
+    retentionFallback: localRetention() ?? undefined,
+  });
+  const store = new SqliteStore(db);
+  try {
+    if (store.retentionPolicy() !== effective.values.retention.days.value)
+      store.setRetentionPolicy(effective.values.retention.days.value);
+  } finally {
+    store.close();
+  }
+}
+
+function configPatch(key: string, value: unknown): Record<string, Record<string, unknown>> {
+  const [group, field] = key.split('.');
+  if (!group || !field) throw new Error(`invalid configuration key: ${key}`);
+  return { [group]: { [field]: value } };
+}
+
+function parseConfigValue(key: string, raw: string): unknown {
+  if (key === 'providers.enabled') {
+    if (raw.trim() === 'none') return [];
+    if (raw.trim().startsWith('[')) return JSON.parse(raw) as unknown;
+    return raw
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
+  }
+  if (key === 'git.enabled' || key === 'alerts.nativeNotifications') {
+    if (raw !== 'true' && raw !== 'false') throw new Error(`${key} must be true or false`);
+    return raw === 'true';
+  }
+  if (key === 'explainer.model') return raw === 'null' || raw === 'default' ? null : raw;
+  if (
+    key.endsWith('Minutes') ||
+    key.endsWith('Seconds') ||
+    key.endsWith('Bytes') ||
+    key.endsWith('Files') ||
+    key === 'history.days'
+  ) {
+    if (!/^\d+$/.test(raw)) throw new Error(`${key} must be a nonnegative whole number`);
+    return Number(raw);
+  }
+  if (key === 'retention.days') return raw === 'forever' ? raw : Number(raw);
+  return raw;
+}
+
+function effectiveRows(config: EffectiveOperationalConfig) {
+  return [
+    ['history.days', config.values.history.days],
+    ['retention.days', config.values.retention.days],
+    ['git.enabled', config.values.git.enabled],
+    ['providers.enabled', config.values.providers.enabled],
+    ['explainer.cadence', config.values.explainer.cadence],
+    ['explainer.backend', config.values.explainer.backend],
+    ['explainer.model', config.values.explainer.model],
+    ['health.sampleIntervalSeconds', config.values.health.sampleIntervalSeconds],
+    ['health.historyMinutes', config.values.health.historyMinutes],
+    ['alerts.queueAgeMinutes', config.values.alerts.queueAgeMinutes],
+    ['alerts.queueGrowthFiles', config.values.alerts.queueGrowthFiles],
+    ['alerts.databaseSizeBytes', config.values.alerts.databaseSizeBytes],
+    ['alerts.cooldownMinutes', config.values.alerts.cooldownMinutes],
+    ['alerts.nativeNotifications', config.values.alerts.nativeNotifications],
+    ['ui.operationsDetail', config.values.ui.operationsDetail],
+  ] as const;
+}
+
+function renderEffectiveConfig(config: EffectiveOperationalConfig): void {
+  process.stdout.write(
+    `Configuration schema ${config.schemaVersion}, revision ${config.revision}\n`,
+  );
+  for (const [key, entry] of effectiveRows(config)) {
+    const rendered = Array.isArray(entry.value)
+      ? entry.value.join(',') || 'none'
+      : entry.value === null
+        ? 'default'
+        : String(entry.value);
+    const source =
+      entry.source === 'environment' ? `environment (${entry.environment})` : entry.source;
+    const restart = config.restartRequired.includes(key) ? '; restart required' : '';
+    process.stdout.write(`${key.padEnd(30)} ${rendered}  [${source}${restart}]\n`);
+  }
+}
+
+async function readOperationsOverview(
+  daemon: DaemonJson | undefined,
+  presence: Presence,
+  providers: ProviderObservation[],
+): Promise<OperationsOverview> {
+  if (daemon && presence === 'reachable') {
+    try {
+      const response = await fetch(`http://127.0.0.1:${daemon.port}/api/operations`, {
+        headers: { Authorization: `Bearer ${daemon.token}` },
+        signal: AbortSignal.timeout(2_000),
+      });
+      if (response.ok) {
+        const overview = OperationsOverviewSchema.parse(await response.json());
+        overview.health.hooks = providers.map((provider) => ({
+          id: provider.id,
+          name: provider.name,
+          detected: provider.detected,
+          configuration:
+            provider.hookStatus ?? (provider.detected ? 'unavailable' : 'not-configured'),
+          trust: provider.id === 'codex' ? (provider.hookTrust ?? 'unknown') : 'not-applicable',
+        }));
+        return overview;
+      }
+    } catch {
+      // The direct local observation below remains useful if the daemon disappeared mid-read.
+    }
+  }
+  const config = await readEffectiveOperationalConfig(daemon, presence);
+  const queue = inspectQueue(salidiumHome, { entryLimit: 1 });
+  const collection = await collectionStatus(
+    daemon,
+    presence,
+    providers.some(
+      (provider) => provider.hookStatus !== null && provider.hookStatus !== 'not-configured',
+    ),
+    {
+      files: queue.totalFiles ?? 0,
+      bytes: queue.totalBytes ?? 0,
+      oldestAt: queue.entries[0]?.queuedAt ?? null,
+    },
+  );
+  const db = daemonPaths(salidiumHome).db;
+  let schemaVersion: number | null = null;
+  let layoutVersion: number | null = null;
+  let history: Parameters<typeof createHealthSnapshot>[0]['history'] = [];
+  if (existsSync(db)) {
+    try {
+      const layout = inspectStoreLayout(db);
+      schemaVersion = layout.schemaVersion;
+      layoutVersion = layout.layoutVersion;
+      const store = new SqliteStore(db, { readOnly: true });
+      try {
+        const cutoff = new Date(
+          Date.now() - config.values.health.historyMinutes.value * 60_000,
+        ).toISOString();
+        history = store.healthSamples(cutoff, 17_280);
+      } finally {
+        store.close();
+      }
+    } catch {
+      /* Older or damaged stores are represented as unavailable, not opened for migration here. */
+    }
+  }
+  const health = createHealthSnapshot({
+    home: salidiumHome,
+    queue,
+    collection,
+    daemon: {
+      state:
+        presence === 'reachable'
+          ? 'running'
+          : presence === 'unresponsive'
+            ? 'unresponsive'
+            : 'stopped',
+      pid: daemon && presence !== 'absent' ? daemon.pid : null,
+      startedAt: daemon && presence !== 'absent' ? daemon.startedAt : null,
+      version: daemon && presence !== 'absent' ? daemon.version : null,
+    },
+    hooks: providers.map((provider) => ({
+      id: provider.id,
+      name: provider.name,
+      detected: provider.detected,
+      configuration: provider.hookStatus ?? (provider.detected ? 'unavailable' : 'not-configured'),
+      trust: provider.id === 'codex' ? (provider.hookTrust ?? 'unknown') : 'not-applicable',
+    })),
+    maintenance: readMaintenanceState(salidiumHome),
+    config,
+    history,
+    schemaVersion,
+    layoutVersion,
+  });
+  return {
+    contractVersion: 1,
+    config,
+    health,
+    alerts: await evaluateLocalAlerts(salidiumHome, health, config),
+  };
+}
+
+function estimateLabel(estimate: OperationsHealthSnapshot['estimates']['queueVelocity']): string {
+  if (!estimate) return 'Unavailable (needs at least two exact samples)';
+  const value =
+    estimate.unit === 'bytes/minute'
+      ? `${formatBytes(Math.abs(estimate.value))}/minute`
+      : Math.abs(estimate.value).toFixed(1);
+  const sign = estimate.value < 0 ? '−' : estimate.value > 0 ? '+' : '';
+  const unit = estimate.unit === 'bytes/minute' ? '' : ` ${estimate.unit}`;
+  return `${sign}${value}${unit} · derived from ${estimate.samples} samples over ${Math.round(estimate.sampleWindowSeconds)}s`;
+}
+
+async function serviceCommand(
+  action: string | undefined,
+  options: { json: boolean; quiet: boolean },
+): Promise<number> {
+  const command = action ?? 'status';
+  if (!['install', 'status', 'enable', 'disable', 'uninstall'].includes(command)) {
+    process.stderr.write('service accepts install, status, enable, disable, or uninstall\n');
+    return 2;
+  }
+  const serviceOptions = {
+    home: salidiumHome,
+    userHome,
+    currentScript: process.argv[1] ?? '',
+    version: VERSION,
+  };
+  if (command === 'status') {
+    const state = inspectMacOSService(serviceOptions);
+    if (!options.quiet) {
+      if (options.json) process.stdout.write(`${JSON.stringify(state)}\n`);
+      else process.stdout.write(`${describeMacOSService(state).join('\n')}\n`);
+    }
+    return state.installed && state.enabled && state.daemonLoaded && state.menuLoaded ? 0 : 1;
+  }
+  if (platform() !== 'darwin') {
+    process.stderr.write('always-on mode is currently available on macOS only\n');
+    return 2;
+  }
+
+  if (command === 'install') {
+    validateDaemonEnvironment();
+    prepareMacOSService(serviceOptions);
+    const stopped = await stopDaemon();
+    if (stopped && (!stopped.signaled || !stopped.exited)) {
+      process.stderr.write(
+        `the existing daemon (pid ${stopped.pid}) could not be stopped safely; the login service was prepared but not activated\n`,
+      );
+      return 1;
+    }
+    await implicitlyResumeCollection();
+    const paths = activateMacOSService(serviceOptions);
+    const running = await ensureDaemon();
+    if (!options.quiet) {
+      if (options.json)
+        process.stdout.write(
+          `${JSON.stringify({ installed: true, enabled: true, pid: running.pid, paths })}\n`,
+        );
+      else
+        process.stdout.write(
+          `Always-on mode installed. Salidium is running (pid ${running.pid}) and its menu-bar control will start at login.\nData remains in ${salidiumHome}.\nDisable: salidium service disable\nRemove service files: salidium service uninstall\n`,
+        );
+    }
+    return 0;
+  }
+
+  if (command === 'enable') {
+    validateDaemonEnvironment();
+    const before = inspectMacOSService(serviceOptions);
+    if (!before.installed) {
+      process.stderr.write('always-on mode is not installed; run `salidium service install`\n');
+      return 1;
+    }
+    const stopped = await stopDaemon();
+    if (stopped && (!stopped.signaled || !stopped.exited)) {
+      process.stderr.write(
+        `the existing daemon (pid ${stopped.pid}) could not be stopped safely; always-on mode was not enabled\n`,
+      );
+      return 1;
+    }
+    await implicitlyResumeCollection();
+    activateMacOSService(serviceOptions);
+    const running = await ensureDaemon();
+    if (!options.quiet)
+      process.stdout.write(
+        options.json
+          ? `${JSON.stringify({ installed: true, enabled: true, pid: running.pid })}\n`
+          : `Always-on mode enabled. Salidium is running (pid ${running.pid}).\n`,
+      );
+    return 0;
+  }
+
+  const before = inspectMacOSService(serviceOptions);
+  if (!before.installed) {
+    if (!options.quiet)
+      process.stdout.write(
+        options.json
+          ? `${JSON.stringify({ installed: false, enabled: false, removed: false })}\n`
+          : 'Always-on mode is not installed.\n',
+      );
+    return 0;
+  }
+  await setCollectionState('pause', 'stop');
+  const stopped = await stopDaemon();
+  if (command === 'disable') {
+    disableMacOSService(serviceOptions);
+    if (!options.quiet)
+      process.stdout.write(
+        options.json
+          ? `${JSON.stringify({ installed: true, enabled: false, daemonStopped: stopped?.exited ?? true })}\n`
+          : `Always-on mode disabled. Salidium and its menu bar are stopped; reports and settings remain in ${salidiumHome}.\nEnable again: salidium service enable\n`,
+      );
+    return stopped && (!stopped.signaled || !stopped.exited) ? 1 : 0;
+  }
+
+  const paths = uninstallMacOSService(serviceOptions);
+  if (!options.quiet)
+    process.stdout.write(
+      options.json
+        ? `${JSON.stringify({ installed: false, removed: true, dataHome: salidiumHome })}\n`
+        : `Always-on service files removed from ${paths.root}. Reports and settings were kept in ${salidiumHome}.\n`,
+    );
+  return stopped && (!stopped.signaled || !stopped.exited) ? 1 : 0;
+}
+
+async function statusCommand(options: {
+  json: boolean;
+  quiet: boolean;
+  watch: boolean;
+  intervalSeconds: number;
+}): Promise<number> {
+  if (
+    !Number.isFinite(options.intervalSeconds) ||
+    options.intervalSeconds < 0.5 ||
+    options.intervalSeconds > 60
+  ) {
+    process.stderr.write('--interval must be from 0.5 to 60 seconds\n');
+    return 2;
+  }
+  let interrupted = false;
+  let wakeWatch: (() => void) | undefined;
+  const interrupt = () => {
+    interrupted = true;
+    wakeWatch?.();
+  };
+  if (options.watch) process.once('SIGINT', interrupt);
+  let lastExit = 0;
+  let providers: ProviderObservation[] = [];
+  let nextProviderInspectionAt = 0;
+  const service = inspectMacOSService({ home: salidiumHome, userHome });
+  try {
+    do {
+      const daemon = readDaemonJson(salidiumHome);
+      const presence = await presenceOf(daemon);
+      const explanations = await currentExplanationState(daemon, presence);
+      if (Date.now() >= nextProviderInspectionAt) {
+        providers = await observeProviders();
+        nextProviderInspectionAt = Date.now() + 5 * 60_000;
+      }
+      const operations = await readOperationsOverview(daemon, presence, providers);
+      const collection = collectionStatusFromHealth(operations.health);
+      lastExit =
+        presence === 'unresponsive'
+          ? 1
+          : operations.health.overall === 'critical'
+            ? 4
+            : presence === 'reachable'
+              ? 0
+              : 1;
+      if (options.quiet) return lastExit;
+      if (options.watch && process.stdout.isTTY && !options.json)
+        process.stdout.write('\u001b[2J\u001b[H');
+      if (options.json) {
+        process.stdout.write(
+          `${JSON.stringify({
+            contractVersion: 1,
+            daemon:
+              daemon && presence !== 'absent'
+                ? { ...daemon, token: undefined, presence }
+                : { presence },
+            collection,
+            explanations,
+            service,
+            providers,
+            operations,
+          })}\n`,
+        );
+      } else {
+        const health = operations.health;
+        if (health.daemon.state === 'stopped') process.stdout.write('not running\n');
+        process.stdout.write(
+          health.daemon.state === 'running'
+            ? `Daemon: Running · pid ${health.daemon.pid} · since ${health.daemon.startedAt}\n`
+            : health.daemon.state === 'unresponsive'
+              ? `Daemon running: pid ${health.daemon.pid} · not answering\n`
+              : 'Daemon: Stopped\n',
+        );
+        process.stdout.write(
+          daemon && presence !== 'absent'
+            ? `Local endpoint: http://127.0.0.1:${daemon.port} · state ${salidiumHome}\n`
+            : `State directory: ${salidiumHome}\n`,
+        );
+        if (service.supported)
+          process.stdout.write(
+            service.installed
+              ? `Always-on: ${service.enabled ? 'Enabled' : 'Disabled'} · daemon ${service.daemonLoaded ? 'loaded' : 'not loaded'} · menu bar ${service.menuLoaded ? 'loaded' : 'not loaded'}\n`
+              : 'Always-on: Not installed · enable with salidium service install\n',
+          );
+        process.stdout.write(
+          `Collection: ${health.collection.state === 'active' ? 'Active' : `Paused${health.collection.pauseExpiresAt ? ` until ${health.collection.pauseExpiresAt}` : ''}`}\n`,
+        );
+        process.stdout.write(
+          health.queue.availability === 'exact'
+            ? `Queue (exact): ${(health.queue.files ?? 0).toLocaleString()} files, ${formatBytes(health.queue.bytes ?? 0)}${health.queue.oldestAt ? `, oldest ${health.queue.oldestAt}` : ''}\n`
+            : `Queue: Unavailable · ${health.queue.reason ?? 'exact scan could not complete'}\n`,
+        );
+        process.stdout.write(
+          `Store (exact): ${health.store.totalBytes === null ? 'Unavailable' : formatBytes(health.store.totalBytes)}, retention ${retentionLabel(health.store.retention)}, last ingest ${health.store.lastIngestAt ?? 'Unavailable'}\n`,
+        );
+        process.stdout.write(
+          `Queue velocity (estimate): ${estimateLabel(health.estimates.queueVelocity)}\n`,
+        );
+        process.stdout.write(
+          `Drain rate (estimate): ${estimateLabel(health.estimates.drainRate)}\n`,
+        );
+        process.stdout.write(
+          `Storage growth (estimate): ${estimateLabel(health.estimates.storageGrowth)}\n`,
+        );
+        process.stdout.write(
+          `Time to empty (estimate): ${health.estimates.timeToEmpty ? `${Math.round(health.estimates.timeToEmpty.value)} seconds · derived` : 'Unavailable'}\n`,
+        );
+        process.stdout.write(
+          `Health: ${health.overall === 'critical' ? 'Critical' : health.overall === 'attention' ? 'Needs attention' : 'Healthy'}\n`,
+        );
+        process.stdout.write(`Explanations: ${explanationStateLabel(explanations)}\n`);
+        process.stdout.write(
+          `Maintenance: ${health.maintenance ? `${health.maintenance.phase} · ${health.maintenance.message}` : 'Idle'}\n`,
+        );
+        process.stdout.write(
+          `Alerts: ${operations.alerts.active.length} active${operations.alerts.active.some((alert) => alert.state === 'acknowledged') ? ' (some acknowledged)' : ''}\n`,
+        );
+        process.stdout.write(
+          `Desktop notifications: ${operations.config.values.alerts.nativeNotifications.value ? 'On' : 'Off'}\n`,
+        );
+        for (const provider of providers) {
+          const label = !provider.detected
+            ? 'Not detected'
+            : !provider.liveHooksSupported
+              ? 'History only; live hooks unavailable on native Windows'
+              : hookStatusLabel(provider.hookStatus);
+          const trust =
+            provider.id === 'codex' && provider.hookStatus !== 'not-configured'
+              ? `; trust ${hookTrustLabel(provider.hookTrust)}`
+              : '';
+          process.stdout.write(`${provider.name}: ${label}${trust}\n`);
+        }
+        if (health.gaps.active || health.gaps.recovered)
+          process.stdout.write(
+            `Collection gaps: ${health.gaps.active} active, ${health.gaps.recovered} recovered, ${health.gaps.omitted} older episodes omitted; exact dropped event counts unavailable\n`,
+          );
+        if (operations.config.restartRequired.length)
+          process.stdout.write(
+            `Restart required for: ${operations.config.restartRequired.join(', ')}\n`,
+          );
+        if (!options.watch)
+          process.stdout.write(
+            'Control: salidium open · salidium status --watch · salidium pause|resume|stop\n',
+          );
+      }
+      if (!options.watch || interrupted) break;
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, options.intervalSeconds * 1000);
+        wakeWatch = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+      });
+      wakeWatch = undefined;
+    } while (!interrupted);
+  } finally {
+    if (options.watch) process.off('SIGINT', interrupt);
+  }
+  return lastExit;
+}
+
+async function maintenanceCommand(
+  action: string | undefined,
+  args: string[],
+  options: { json: boolean; quiet: boolean },
+): Promise<number> {
+  const command = action ?? 'status';
+  const daemon = readDaemonJson(salidiumHome);
+  const presence = await presenceOf(daemon);
+  if (command === 'status') {
+    const state = readMaintenanceState(salidiumHome);
+    if (!options.quiet)
+      process.stdout.write(
+        options.json
+          ? `${JSON.stringify(state)}\n`
+          : state
+            ? `${state.phase}: ${state.message}\n`
+            : 'Maintenance: idle\n',
+      );
+    return state?.phase === 'failure' || state?.phase === 'recovery' ? 3 : 0;
+  }
+  if (command === 'queue') {
+    const asked = args.find((value) => value.startsWith('--limit='))?.slice(8);
+    const limit = asked === undefined ? 25 : Number(asked);
+    if (!Number.isFinite(limit) || limit < 0 || limit > 200) {
+      process.stderr.write('--limit must be from 0 to 200\n');
+      return 2;
+    }
+    let queue: QueueInspection;
+    if (daemon && presence === 'reachable') {
+      const response = await fetch(
+        `http://127.0.0.1:${daemon.port}/api/operations/queue?limit=${Math.trunc(limit)}`,
+        {
+          headers: { Authorization: `Bearer ${daemon.token}` },
+          signal: AbortSignal.timeout(2_000),
+        },
+      );
+      if (!response.ok) throw new Error(`daemon refused queue inspection (${response.status})`);
+      queue = (await response.json()) as QueueInspection;
+    } else queue = inspectQueue(salidiumHome, { entryLimit: Math.trunc(limit) });
+    if (!options.quiet) {
+      if (options.json) process.stdout.write(`${JSON.stringify(queue)}\n`);
+      else {
+        process.stdout.write(
+          queue.exactTotals
+            ? `Queue: ${queue.totalFiles} files, ${formatBytes(queue.totalBytes ?? 0)} (exact)\n`
+            : 'Queue totals unavailable; the scan safety ceiling was reached.\n',
+        );
+        for (const entry of queue.entries)
+          process.stdout.write(
+            `${entry.queuedAt}  ${String(entry.provider ?? 'unknown').padEnd(12)} ${entry.state.padEnd(10)} ${formatBytes(entry.bytes)}  ${entry.id}\n`,
+          );
+        if (queue.entriesTruncated)
+          process.stdout.write('Older queue metadata omitted from this view.\n');
+      }
+    }
+    return queue.exactTotals ? 0 : 3;
+  }
+  if (command === 'drain') {
+    if (!daemon || presence !== 'reachable') {
+      process.stderr.write(
+        'start Salidium before draining; only the daemon can make queued input durable\n',
+      );
+      return 1;
+    }
+    const waitRaw = args.find((value) => value.startsWith('--wait='))?.slice(7);
+    const waitSeconds = waitRaw === undefined ? 30 : Number(waitRaw);
+    if (!Number.isFinite(waitSeconds) || waitSeconds < 0 || waitSeconds > 300) {
+      process.stderr.write('--wait must be from 0 to 300 seconds\n');
+      return 2;
+    }
+    const deadline = Date.now() + waitSeconds * 1000;
+    let result:
+      | {
+          state: unknown;
+          before: { totalFiles: number | null };
+          after: { totalFiles: number | null };
+        }
+      | undefined;
+    for (;;) {
+      const response = await fetch(
+        `http://127.0.0.1:${daemon.port}/api/operations/maintenance/drain`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${daemon.token}` },
+          signal: AbortSignal.timeout(5_000),
+        },
+      );
+      if (!response.ok) throw new Error(`daemon refused queue drain (${response.status})`);
+      const next = (await response.json()) as NonNullable<typeof result>;
+      result = next;
+      if (next.after.totalFiles === 0 || Date.now() >= deadline) break;
+      await sleep(100);
+    }
+    if (!result) throw new Error('queue drain returned no result');
+    if (!options.quiet)
+      process.stdout.write(
+        options.json
+          ? `${JSON.stringify(result)}\n`
+          : `Queue drain: ${result.before.totalFiles ?? 'unknown'} → ${result.after.totalFiles ?? 'unknown'} files. No queued file was discarded.\n`,
+      );
+    return result.after.totalFiles === 0 ? 0 : 3;
+  }
+  if (command === 'optimize') {
+    const dryRun = args.includes('--dry-run');
+    if (dryRun) {
+      const preview = storageOptimizationPreflight(salidiumHome);
+      if (!options.quiet)
+        process.stdout.write(
+          options.json
+            ? `${JSON.stringify(preview)}\n`
+            : `Optimization preview: ${preview.beforeBytes} bytes; needs ${preview.requiredFreeBytes} free; ${preview.queue.totalFiles ?? 'unknown'} queued files. ${preview.canRun ? 'Ready.' : `Blocked: ${preview.blockers.join('; ')}.`}\n`,
+        );
+      return preview.canRun ? 0 : 3;
+    }
+    if (presence === 'unresponsive') {
+      process.stderr.write(
+        'the daemon is running but not answering; stop Salidium before offline maintenance\n',
+      );
+      return 2;
+    }
+    let restart = false;
+    let resume = false;
+    let exitCode = 0;
+    try {
+      if (daemon && presence === 'reachable') {
+        restart = true;
+        const current = await collectionStatus(daemon, presence, configuredHookPresent());
+        resume = current.state === 'active';
+        const drained = await maintenanceCommand('drain', ['--wait=60'], {
+          json: false,
+          quiet: true,
+        });
+        if (drained !== 0) throw new Error('the durable queue did not empty before the deadline');
+        await setCollectionState('pause', 'manual');
+        const stopped = await stopDaemon();
+        if (!stopped?.signaled || !stopped.exited)
+          throw new Error('the daemon did not stop cleanly');
+      }
+      const result = runStorageOptimizationMaintenance(salidiumHome, {
+        onProgress:
+          options.quiet || options.json
+            ? undefined
+            : (message) => process.stdout.write(`${message}…\n`),
+      });
+      if (!options.quiet)
+        process.stdout.write(
+          options.json
+            ? `${JSON.stringify(result)}\n`
+            : result.alreadyOptimized
+              ? 'Storage is already optimized.\n'
+              : `Optimized ${result.eventRows.toLocaleString()} events from ${formatBytes(result.beforeBytes)} to ${formatBytes(result.afterBytes)}; row counts, logical digests, and integrity matched.\n`,
+        );
+    } catch (error) {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      exitCode = 2;
+    } finally {
+      if (restart) {
+        try {
+          await ensureDaemon();
+          if (resume) await setCollectionState('resume');
+        } catch (error) {
+          process.stderr.write(
+            `maintenance finished, but daemon restart failed: ${String(error)}\n`,
+          );
+          exitCode = 2;
+        }
+      }
+    }
+    return exitCode;
+  }
+  if (command === 'acknowledge') {
+    const id = args[0];
+    if (!id) {
+      process.stderr.write('usage: salidium maintenance acknowledge ALERT_ID\n');
+      return 2;
+    }
+    let alerts: LocalAlertState;
+    if (daemon && presence === 'reachable') {
+      const response = await fetch(
+        `http://127.0.0.1:${daemon.port}/api/operations/alerts/${encodeURIComponent(id)}/acknowledge`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${daemon.token}` },
+          signal: AbortSignal.timeout(2_000),
+        },
+      );
+      if (!response.ok) throw new Error(`alert acknowledgement failed (${response.status})`);
+      alerts = (await response.json()) as LocalAlertState;
+    } else alerts = acknowledgeLocalAlert(salidiumHome, id);
+    if (!options.quiet)
+      process.stdout.write(
+        options.json ? `${JSON.stringify(alerts)}\n` : `Alert ${id} acknowledged.\n`,
+      );
+    return 0;
+  }
+  process.stderr.write('maintenance accepts status, queue, drain, optimize, or acknowledge\n');
+  return 2;
 }
 
 function formatBytes(bytes: number): string {
@@ -766,6 +1737,136 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
+}
+
+function queueLabel(status: CollectionStatus): string {
+  return `${status.queue.files.toLocaleString()} file${status.queue.files === 1 ? '' : 's'}, ${formatBytes(status.queue.bytes)}`;
+}
+
+function retentionLabel(retention: CollectionStatus['store']['retention']): string {
+  if (retention === null) return 'Unavailable';
+  return retention === 'forever' ? 'Forever' : `${retention} days`;
+}
+
+function collectionStatusLabel(status: CollectionStatus): string {
+  if (!status.pause) return status.state === 'paused' ? 'Paused; lease unreadable' : 'Active';
+  return `Paused until ${status.pause.expiresAt}`;
+}
+
+function hookStatusLabel(status: string | null): string {
+  if (status === 'configured') return 'Connected';
+  if (status === 'partial') return 'Incomplete';
+  if (status === 'invalid') return 'Configuration needs repair';
+  return 'Not connected';
+}
+
+function hookTrustLabel(trust: string | null): string {
+  if (trust === 'trusted') return 'Approved';
+  if (trust === 'managed') return 'Managed';
+  if (trust === 'untrusted') return 'Approval required';
+  if (trust === 'modified') return 'Changed since approval';
+  return 'Unavailable';
+}
+
+async function setCollectionState(
+  action: 'pause' | 'resume',
+  reason: 'manual' | 'stop' = 'manual',
+): Promise<CollectionStatus> {
+  const daemon = readDaemonJson(salidiumHome);
+  const presence = await presenceOf(daemon);
+  if (daemon && presence === 'reachable') {
+    try {
+      const response = await fetch(`http://127.0.0.1:${daemon.port}/api/collection`, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${daemon.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action, reason }),
+        signal: AbortSignal.timeout(2_000),
+      });
+      if (response.ok) return CollectionStatusSchema.parse(await response.json());
+    } catch {
+      /* The marker fallback still controls the relay if the daemon disappeared after presence. */
+    }
+  }
+  if (action === 'pause') writeCollectionPause(salidiumHome, reason);
+  else clearCollectionPause(salidiumHome);
+  return collectionStatus(daemon, presence, configuredHookPresent());
+}
+
+async function implicitlyResumeCollection(): Promise<void> {
+  if (!existsSync(daemonPaths(salidiumHome).pauseFile)) return;
+  const daemon = readDaemonJson(salidiumHome);
+  if (daemon && (await presenceOf(daemon)) === 'reachable') {
+    try {
+      const response = await fetch(`http://127.0.0.1:${daemon.port}/api/collection`, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${daemon.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'resume' }),
+        signal: AbortSignal.timeout(2_000),
+      });
+      if (response.ok) return;
+    } catch {
+      /* Fall through to the marker operation if the daemon disappeared during the request. */
+    }
+  }
+  clearCollectionPause(salidiumHome);
+}
+
+async function collectionStatus(
+  daemon: DaemonJson | undefined,
+  presence: Presence,
+  anyHooksConfigured: boolean,
+  queue?: CollectionStatus['queue'],
+): Promise<CollectionStatus> {
+  let observedPresence = presence;
+  if (daemon && presence === 'reachable' && queue === undefined) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${daemon.port}/api/collection`, {
+        headers: { Authorization: `Bearer ${daemon.token}` },
+        signal: AbortSignal.timeout(2_000),
+      });
+      if (response.ok) return CollectionStatusSchema.parse(await response.json());
+    } catch {
+      /* The direct observation below still reports the queue and store file. */
+    }
+    observedPresence = await presenceOf(daemon);
+  }
+  let retention: CollectionStatus['store']['retention'] = null;
+  let lastIngestAt: string | undefined;
+  const db = daemonPaths(salidiumHome).db;
+  if (observedPresence === 'absent' && existsSync(db)) {
+    try {
+      const store = new SqliteStore(db, { readOnly: true });
+      try {
+        retention = store.retentionPolicy();
+        const latest = store.listSessions(1)[0];
+        lastIngestAt = latest?.lastEventAt ?? latest?.startedAt;
+      } finally {
+        store.close();
+      }
+    } catch {
+      /* Unavailable is more accurate than a default policy or timestamp. */
+    }
+  }
+  return observeCollectionStatus({
+    home: salidiumHome,
+    retention,
+    lastIngestAt,
+    daemonReachable: observedPresence === 'reachable',
+    anyHooksConfigured,
+    ...(queue ? { queue } : {}),
+  });
+}
+
+function configuredHookPresent(): boolean {
+  return (['claude-code', 'codex'] as const).some(
+    (provider) => inspectBuiltInHooks(provider, userHome, salidiumHome).status !== 'not-configured',
+  );
 }
 
 function uiUrl(d: DaemonJson): string {
@@ -931,6 +2032,16 @@ async function ensureDaemon(): Promise<DaemonJson> {
       existing.protocolVersion === PROTOCOL_VERSION &&
       existing.storeSchemaVersion === SCHEMA_VERSION;
     if (runtimeCompatible) return existing;
+    const service = inspectMacOSService({ home: salidiumHome, userHome });
+    if (
+      service.installed &&
+      service.enabled &&
+      service.installedVersion !== null &&
+      service.installedVersion !== VERSION
+    )
+      throw new Error(
+        `the always-on runtime is ${service.installedVersion}, but this CLI is ${VERSION}; run \`salidium service install\` to update it before restarting`,
+      );
     const oldVersion = existing.version || 'unknown';
     const ordering = compareSemver(oldVersion, VERSION);
     if (ordering === undefined)
@@ -957,6 +2068,18 @@ async function ensureDaemon(): Promise<DaemonJson> {
     process.stdout.write(`updating daemon ${reason}\n`);
   }
   validateDaemonEnvironment();
+  const managed = kickstartManagedDaemon({ home: salidiumHome, userHome, version: VERSION });
+  if (managed.kind === 'failed') throw new Error(managed.message);
+  if (managed.kind === 'started') {
+    for (let i = 0; i < 100; i++) {
+      await sleep(100);
+      const launched = readDaemonJson(salidiumHome);
+      if (launched && (await alive(launched))) return launched;
+    }
+    throw new Error(
+      `the supervised daemon did not become ready; see ${daemonPaths(salidiumHome).startupLogFile}`,
+    );
+  }
   const script = process.argv[1] ?? '';
   const paths = daemonPaths(salidiumHome);
   mkdirSync(paths.home, { recursive: true, mode: 0o700 });
@@ -1200,10 +2323,17 @@ function validateDaemonEnvironment(): void {
   validateSalidiumHistoryDays(process.env.SALIDIUM_HISTORY_DAYS);
 }
 
-async function doctor(): Promise<number> {
+async function doctor(options: {
+  json: boolean;
+  quiet: boolean;
+  bundle: boolean;
+  dryRun: boolean;
+  output?: string;
+}): Promise<number> {
   const lines: string[] = [];
   let problems = 0;
-  for (const validation of essentialValidations()) {
+  const validations = essentialValidations();
+  for (const validation of validations) {
     lines.push(validation.message);
     if (validation.level === 'attention') problems++;
   }
@@ -1221,15 +2351,37 @@ async function doctor(): Promise<number> {
     settingsProblem = reason;
   });
   if (settingsProblem) {
-    lines.push('settings file is invalid; optional explanations are safely off until it is fixed');
+    lines.push(
+      'operational configuration is invalid; safe defaults are in force until it is repaired',
+    );
     problems++;
   }
   lines.push(`explanations ${explanationStateLabel(localExplanationState())}`);
   const context: IntegrationContext = { userHome, salidiumHome };
+  const providerResults: Array<{
+    id: string;
+    name: string;
+    detected: boolean;
+    validations: IntegrationValidation[];
+    historyFound: boolean;
+    hookStatus: string | null;
+    hookTrust: string | null;
+    hookTrustIssue: string | null;
+  }> = [];
   for (const provider of providerIntegrations) {
     const detection = provider.detect(context);
     if (!detection.detected) {
       lines.push(`${provider.name} not detected`);
+      providerResults.push({
+        id: provider.id,
+        name: provider.name,
+        detected: false,
+        validations: [],
+        historyFound: false,
+        hookStatus: null,
+        hookTrust: null,
+        hookTrustIssue: null,
+      });
       continue;
     }
     if (!provider.liveHooksSupported(context)) {
@@ -1239,18 +2391,139 @@ async function doctor(): Promise<number> {
       lines.push(
         `${provider.name} history ${provider.historyDirectories(context).some(existsSync) ? 'found' : 'not found yet'}`,
       );
+      providerResults.push({
+        id: provider.id,
+        name: provider.name,
+        detected: true,
+        validations: provider.validate(context),
+        historyFound: provider.historyDirectories(context).some(existsSync),
+        hookStatus: null,
+        hookTrust: null,
+        hookTrustIssue: null,
+      });
       continue;
     }
-    for (const validation of provider.validate(context)) {
+    const inspection = provider.inspect(context);
+    const providerValidations = provider.validate(context);
+    for (const validation of providerValidations) {
       lines.push(validation.message);
       if (validation.level === 'attention') problems++;
     }
-    lines.push(
-      `${provider.name} history ${provider.historyDirectories(context).some(existsSync) ? 'found' : 'not found yet'}`,
-    );
+    const historyFound = provider.historyDirectories(context).some(existsSync);
+    lines.push(`${provider.name} history ${historyFound ? 'found' : 'not found yet'}`);
+    providerResults.push({
+      id: provider.id,
+      name: provider.name,
+      detected: true,
+      validations: providerValidations,
+      historyFound,
+      hookStatus: inspection.status,
+      hookTrust: null,
+      hookTrustIssue: null,
+    });
   }
-  process.stdout.write(`${lines.join('\n')}\n`);
-  return problems ? 1 : 0;
+  const codexResult = providerResults.find((provider) => provider.id === 'codex');
+  if (codexResult?.detected && codexResult.hookStatus !== 'not-configured') {
+    const trust = await inspectCodexHookTrust(
+      process.cwd(),
+      process.env,
+      3_000,
+      undefined,
+      VERSION,
+    );
+    codexResult.hookTrust = trust.trust;
+    codexResult.hookTrustIssue = trust.issue ?? null;
+    lines.push(`Codex hook trust ${hookTrustLabel(trust.trust).toLowerCase()}`);
+    if (trust.trust === 'untrusted' || trust.trust === 'modified') problems++;
+  }
+  const collection = await collectionStatus(d, presence, configuredHookPresent());
+  lines.push(`collection ${collectionStatusLabel(collection).toLowerCase()}`);
+  lines.push(`queue ${queueLabel(collection)}`);
+  lines.push(
+    `store ${collection.store.bytes === null ? 'unavailable' : formatBytes(collection.store.bytes)}, retention ${retentionLabel(collection.store.retention).toLowerCase()}, last ingest ${collection.store.lastIngestAt ?? 'unavailable'}`,
+  );
+  if (collection.gaps.active.length > 0)
+    lines.push(
+      `collection has ${collection.gaps.active.length} active loss marker${collection.gaps.active.length === 1 ? '' : 's'}; exact dropped event counts are unavailable`,
+    );
+  if (collection.gaps.recovered.length > 0 || collection.gaps.omittedEpisodes > 0)
+    lines.push(
+      `collection ledger has ${collection.gaps.recovered.length} recovered episode${collection.gaps.recovered.length === 1 ? '' : 's'} and ${collection.gaps.omittedEpisodes} older omitted`,
+    );
+  if (collection.state === 'paused' && !collection.pause)
+    lines.push('collection pause marker is unreadable; any later CLI command will clear it');
+  const exit =
+    collection.health === 'runaway'
+      ? 4
+      : problems
+        ? 1
+        : collection.health === 'attention' || (collection.state === 'paused' && !collection.pause)
+          ? 3
+          : 0;
+  let bundle:
+    | { dryRun: true; manifest: ReturnType<typeof diagnosticManifest> }
+    | { dryRun: false; result: ReturnType<typeof createDiagnosticBundle> }
+    | undefined;
+  if (options.bundle) {
+    const now = new Date();
+    const manifest = diagnosticManifest(now);
+    if (options.dryRun) bundle = { dryRun: true, manifest };
+    else {
+      const providers = await observeProviders();
+      const operations = await readOperationsOverview(d, presence, providers);
+      const stamp = now
+        .toISOString()
+        .replaceAll(':', '')
+        .replace(/\.\d{3}Z$/, 'Z');
+      const outputPath = resolve(
+        options.output ?? join(process.cwd(), `salidium-diagnostics-${stamp}.json`),
+      );
+      const result = createDiagnosticBundle({
+        home: salidiumHome,
+        outputPath,
+        version: VERSION,
+        protocolVersion: PROTOCOL_VERSION,
+        storeSchemaVersion: operations.health.store.schemaVersion,
+        config: operations.config,
+        health: operations.health,
+        alerts: operations.alerts,
+        platform: {
+          platform: platform(),
+          release: release(),
+          arch: arch(),
+          node: process.versions.node,
+        },
+        now,
+      });
+      bundle = { dryRun: false, result };
+    }
+  }
+  if (options.quiet) return exit;
+  if (options.json) {
+    process.stdout.write(
+      `${JSON.stringify({
+        ok: exit === 0,
+        exitCode: exit,
+        daemon: d && presence !== 'absent' ? { ...d, token: undefined, presence } : { presence },
+        validations,
+        settingsProblem: settingsProblem ?? null,
+        providers: providerResults,
+        collection,
+        diagnosticBundle: bundle ?? null,
+      })}\n`,
+    );
+  } else {
+    if (bundle?.dryRun)
+      lines.push(
+        `diagnostic bundle preview: ${bundle.manifest.entries.map((entry) => entry.name).join(', ')}; excludes ${bundle.manifest.excludes.join(', ')}`,
+      );
+    else if (bundle)
+      lines.push(
+        `diagnostic bundle written to ${bundle.result.path} (${formatBytes(bundle.result.bytes)}, ${bundle.result.redactions} redactions)`,
+      );
+    process.stdout.write(`${lines.join('\n')}\n`);
+  }
+  return exit;
 }
 
 main(process.argv.slice(2)).then(

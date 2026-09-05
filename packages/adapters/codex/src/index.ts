@@ -1,6 +1,7 @@
 export { codexAdapter, codexProvider } from './codexAdapter.ts';
 export { buildCodexHooks, isSalidiumHook } from './hookConfig.ts';
 export {
+  CODEX_HOOK_EVENT_BUDGET,
   CODEX_HOOK_EVENTS,
   mapCodexToolInput,
   parseCodexHookPayload,

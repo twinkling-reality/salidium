@@ -4,12 +4,13 @@ import {
   type FSWatcher,
   fstatSync,
   openSync,
-  readdirSync,
   readSync,
   statSync,
   watch,
 } from 'node:fs';
-import { join } from 'node:path';
+import { opendir, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join, resolve, sep } from 'node:path';
 import { setImmediate as yieldToLoop } from 'node:timers/promises';
 import type { ProviderAdapter, RecordParser } from '@salidium/adapter-kit';
 import type { CanonicalEvent } from '@salidium/protocol';
@@ -40,6 +41,19 @@ interface TrackedSource {
 
 const CHUNK = 256 * 1024;
 const NEWLINE = 0x0a;
+export const SOURCE_IDLE_EVICT_MS = 60 * 60_000;
+
+function isInside(path: string, root: string): boolean {
+  const resolvedPath = resolve(path);
+  const resolvedRoot = resolve(root);
+  return resolvedPath === resolvedRoot || resolvedPath.startsWith(`${resolvedRoot}${sep}`);
+}
+
+/** Provider CLIs can persist the helper session despite their no-persistence flag. */
+function isSalidiumExplainerPath(path: string): boolean {
+  const salidiumHome = process.env.SALIDIUM_HOME ?? join(homedir(), '.salidium');
+  return isInside(path, join(salidiumHome, 'explainer'));
+}
 
 /**
  * Tails provider session files by byte offset. Splits records on `\n` bytes only (matching the
@@ -54,6 +68,8 @@ export class TranscriptTailer {
   private readonly log: Logger;
   private readonly maxRecordBytes: number;
   private readonly rootDiscoveryIntervalMs: number;
+  private readonly sweepIntervalMs: number;
+  private readonly sourceIdleMs: number;
   private readonly watchRoot: typeof watch;
   private readonly sources = new Map<string, TrackedSource>();
   private readonly watchers = new Map<string, FSWatcher>();
@@ -64,7 +80,11 @@ export class TranscriptTailer {
   private rescanTimer: NodeJS.Timeout | undefined;
   private rootDiscoveryTimer: NodeJS.Timeout | undefined;
   private roots: string[] = [];
+  private scanInFlight: Promise<void> | undefined;
+  private sweepInFlight = false;
   private stopped = false;
+  private paused = false;
+  private startedWith: { userHome: string; historyDays: number } | undefined;
 
   constructor(args: {
     adapters: ProviderAdapter[];
@@ -75,6 +95,9 @@ export class TranscriptTailer {
     maxRecordBytes?: number;
     /** Test seam; production checks for newly-created provider roots once per second. */
     rootDiscoveryIntervalMs?: number;
+    /** Test seams for proving the parser-state memory bound without waiting an hour. */
+    sweepIntervalMs?: number;
+    sourceIdleMs?: number;
     /** Test seam for filesystems where recursive watch attachment is unavailable. */
     watchRoot?: typeof watch;
   }) {
@@ -84,6 +107,8 @@ export class TranscriptTailer {
     this.log = args.log;
     this.maxRecordBytes = args.maxRecordBytes ?? MAX_INGEST_PAYLOAD_BYTES;
     this.rootDiscoveryIntervalMs = args.rootDiscoveryIntervalMs ?? 1000;
+    this.sweepIntervalMs = args.sweepIntervalMs ?? 2000;
+    this.sourceIdleMs = args.sourceIdleMs ?? SOURCE_IDLE_EVICT_MS;
     this.watchRoot = args.watchRoot ?? watch;
   }
 
@@ -99,6 +124,7 @@ export class TranscriptTailer {
 
   /** Starts watching provider roots and resolves after the initial recent-file backfill. */
   start(userHome: string, historyDays: number): Promise<void> {
+    this.startedWith = { userHome, historyDays };
     for (const adapter of this.adapters) {
       for (const root of adapter.sessionRoots(userHome)) {
         if (!this.roots.includes(root)) this.roots.push(root);
@@ -108,7 +134,7 @@ export class TranscriptTailer {
     // Explicit jobs are durable and bypass the ordinary age window. Process them before the
     // opportunistic recent-history scan so an adapter upgrade cannot strand old sessions.
     const initialBackfill = this.startBackfill(historyDays);
-    this.sweepTimer = setInterval(() => this.sweepActive(), 2000);
+    this.sweepTimer = setInterval(() => void this.sweepActive(), this.sweepIntervalMs);
     this.sweepTimer.unref?.();
     this.rescanTimer = setInterval(() => void this.scanRoots(historyDays, false), 60_000);
     this.rescanTimer.unref?.();
@@ -121,12 +147,12 @@ export class TranscriptTailer {
 
   private async startBackfill(historyDays: number): Promise<void> {
     await this.processReingestJobs();
-    if (!this.stopped) await this.scanRoots(historyDays, true);
+    if (!this.stopped && !this.paused) await this.scanRoots(historyDays, true);
   }
 
   /** Attaches watchers to roots that appeared after startup and forgets roots that vanished. */
   private ensureRootWatchers(): boolean {
-    if (this.stopped) return false;
+    if (this.stopped || this.paused) return false;
     let needsScan = false;
     for (const root of this.roots) {
       if (existsSync(root)) {
@@ -149,7 +175,7 @@ export class TranscriptTailer {
       if ((this.watcherRetryAfter.get(root) ?? 0) > Date.now()) continue;
       try {
         const watcher = this.watchRoot(root, { recursive: true }, (_event, filename) => {
-          if (!filename || this.stopped) return;
+          if (!filename || this.stopped || this.paused) return;
           const path = join(root, filename.toString());
           if (this.adapters.some((adapter) => adapter.matchSessionFile(path))) this.poke(path);
         });
@@ -172,6 +198,7 @@ export class TranscriptTailer {
 
   /** Ensures a specific file is tracked and read now (e.g. from a hook's transcript_path). */
   track(path: string): void {
+    if (this.paused) return;
     if (!this.adapters.some((a) => a.matchSessionFile(path))) return;
     this.poke(path, 0);
   }
@@ -188,6 +215,7 @@ export class TranscriptTailer {
   }
 
   private ensureTracked(path: string, forceFromStart = false): TrackedSource | undefined {
+    if (isSalidiumExplainerPath(path)) return undefined;
     const existing = this.sources.get(path);
     if (existing && !forceFromStart) return existing;
     if (existing?.reading) return undefined;
@@ -244,7 +272,7 @@ export class TranscriptTailer {
     path: string,
     opts: { forceFromStart?: boolean; fingerprintOrigin?: 'ingest' | 'backfill' } = {},
   ): Promise<boolean> {
-    if (this.stopped) return false;
+    if (this.stopped || this.paused) return false;
     const src = this.ensureTracked(path, opts.forceFromStart);
     if (!src) return false;
     if (src.reading) {
@@ -257,7 +285,7 @@ export class TranscriptTailer {
       do {
         src.dirty = false;
         complete = (await this.readOnce(src, opts.fingerprintOrigin ?? 'ingest')) && complete;
-      } while (src.dirty && !this.stopped);
+      } while (src.dirty && !this.stopped && !this.paused);
     } catch (err) {
       this.log.warn('tail read failed', { path, err: String(err) });
       complete = false;
@@ -314,7 +342,7 @@ export class TranscriptTailer {
       const buf = Buffer.allocUnsafe(CHUNK);
       let position = src.offset;
       let batches = 0;
-      while (position < st.size && !this.stopped) {
+      while (position < st.size && !this.stopped && !this.paused) {
         const n = readSync(fd, buf, 0, CHUNK, position);
         if (n <= 0) break;
         position += n;
@@ -387,7 +415,7 @@ export class TranscriptTailer {
         byteOffset: src.offset,
         lineNo: src.lineNo,
       });
-      return true;
+      return src.offset >= st.size;
     } finally {
       closeSync(fd);
     }
@@ -397,7 +425,7 @@ export class TranscriptTailer {
     const jobs = this.store.pendingReingestJobs();
     if (jobs.length) this.log.info('re-ingesting transcript evidence', { files: jobs.length });
     for (const job of jobs) {
-      if (this.stopped) return;
+      if (this.stopped || this.paused) return;
       this.store.startReingestJob(job.id);
       if (!existsSync(job.path)) {
         this.store.finishReingestJob(job.id, 'missing', 'provider file no longer exists');
@@ -443,30 +471,50 @@ export class TranscriptTailer {
     };
   }
 
-  private sweepActive(): void {
-    if (this.stopped) return;
-    const now = Date.now();
-    for (const src of this.sources.values()) {
-      // Only stat files touched in the last hour; older ones rely on fs.watch and rescans.
-      if (now - src.lastActivity > 60 * 60_000) continue;
-      try {
-        const st = statSync(src.path);
-        if (st.size !== src.offset || st.ino !== src.inode) this.poke(src.path, 0);
-      } catch {
-        /* gone */
+  private async sweepActive(): Promise<void> {
+    if (this.stopped || this.paused || this.sweepInFlight) return;
+    this.sweepInFlight = true;
+    try {
+      const now = Date.now();
+      for (const [path, src] of this.sources) {
+        // Stateful parsers retain tool-call maps. Once a source is idle, its durable cursor is
+        // enough: a recursive watch or later scan recreates the parser and replays from byte zero
+        // on growth.
+        if (now - src.lastActivity > this.sourceIdleMs) {
+          if (!src.reading && !this.pokeTimers.has(path)) this.sources.delete(path);
+          continue;
+        }
+        try {
+          const st = await stat(src.path);
+          if (st.size !== src.offset || st.ino !== src.inode) this.poke(src.path, 0);
+        } catch {
+          /* gone */
+        }
       }
+    } finally {
+      this.sweepInFlight = false;
     }
   }
 
   private async scanRoots(historyDays: number, initial: boolean): Promise<void> {
+    if (this.scanInFlight) return this.scanInFlight;
+    const scan = this.performScan(historyDays, initial).finally(() => {
+      if (this.scanInFlight === scan) this.scanInFlight = undefined;
+    });
+    this.scanInFlight = scan;
+    return scan;
+  }
+
+  private async performScan(historyDays: number, initial: boolean): Promise<void> {
+    if (this.paused) return;
     this.ensureRootWatchers();
-    const cutoff = Date.now() - historyDays * 24 * 60 * 60_000;
+    const cutoff = Math.max(0, Date.now() - historyDays * 24 * 60 * 60_000);
     const found: Array<{ path: string; mtime: number }> = [];
     for (const root of this.roots) {
-      for (const path of walk(root)) {
+      for await (const path of walk(root)) {
         if (!this.adapters.some((a) => a.matchSessionFile(path))) continue;
         try {
-          const st = statSync(path);
+          const st = await stat(path);
           if (st.mtimeMs >= cutoff) found.push({ path, mtime: st.mtimeMs });
         } catch {
           /* ignore */
@@ -476,11 +524,37 @@ export class TranscriptTailer {
     found.sort((a, b) => b.mtime - a.mtime);
     if (initial) this.log.info('backfilling transcripts', { files: found.length, historyDays });
     for (const f of found) {
-      if (this.stopped) return;
+      if (this.stopped || this.paused) return;
       if (!initial && this.sources.has(f.path)) continue;
+      // Do not recreate an evicted parser for a file whose durable cursor already covers the exact
+      // inode and byte length. A watch event or a later scan will read it when it changes.
+      const cursor = this.store.getSource(f.path);
+      if (cursor) {
+        try {
+          const current = await stat(f.path);
+          if (current.ino === cursor.inode && current.size === cursor.byteOffset) continue;
+        } catch {
+          continue;
+        }
+      }
       await this.readNow(f.path);
     }
     if (initial) this.log.info('backfill complete', { files: found.length });
+  }
+
+  pause(): void {
+    this.paused = true;
+    for (const timer of this.pokeTimers.values()) clearTimeout(timer);
+    this.pokeTimers.clear();
+  }
+
+  resume(): void {
+    if (!this.paused || this.stopped) return;
+    this.paused = false;
+    const started = this.startedWith;
+    if (!started) return;
+    void this.scanRoots(started.historyDays, false);
+    for (const source of this.sources.values()) this.poke(source.path, 0);
   }
 
   stop(): void {
@@ -493,16 +567,17 @@ export class TranscriptTailer {
   }
 }
 
-function* walk(dir: string): Generator<string> {
-  let entries: import('node:fs').Dirent[];
+async function* walk(dir: string): AsyncGenerator<string> {
+  let entries: Awaited<ReturnType<typeof opendir>>;
   try {
-    entries = readdirSync(dir, { withFileTypes: true });
+    entries = await opendir(dir);
   } catch {
     return;
   }
-  for (const e of entries) {
+  for await (const e of entries) {
     const p = join(dir, e.name);
-    if (e.isDirectory()) yield* walk(p);
-    else if (e.isFile()) yield p;
+    if (e.isDirectory()) {
+      for await (const child of walk(p)) yield child;
+    } else if (e.isFile()) yield p;
   }
 }

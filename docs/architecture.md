@@ -53,10 +53,17 @@ and built interface it needs.
 
 Provider adapters emit events with deterministic identifiers, exact UTC millisecond timestamps,
 provider provenance, and the smallest useful payload. Explicit RFC 3339 provider offsets are
-normalized at the adapter boundary. A transcript record with a missing or invalid timestamp emits
-only a deterministic ingest warning at the parser's observation time; it is not assigned an epoch
-or neighboring provider time. Examples include session and turn boundaries, agent messages, tool
-calls and results, file edits, verification runs, permissions, and usage reports.
+normalized at the adapter boundary. A canonical record family with a missing or invalid timestamp
+emits only a deterministic ingest warning at the parser's observation time; it is not assigned an
+epoch or neighboring provider time. Valid timestamp-free provider bookkeeping that Salidium does
+not interpret is ignored instead of becoming a permanent warning. Examples include session and turn
+boundaries, agent messages, tool calls and results, file edits, verification runs, permissions, and
+usage reports.
+
+Provider adapter contract version 2 requires a declared hook event budget. Each subscribed event is
+named once, assigned a pressure class, and paired with the fixed and per-tool-call traffic model that
+adapter registration validates. This makes a provider's collection cost reviewable before its hooks
+can run.
 
 Hook and durable-session records use channel-specific identifiers. When both describe the same
 activity, the reducer uses information content first and durable provider records as the tie-break.
@@ -101,13 +108,29 @@ reached, each hook invocation writes its own spool envelope and atomically renam
 daemon atomically claims ready files before ingestion. Legacy shared spool files remain readable for
 upgrade recovery, but new senders never concurrently append to one record.
 
-User settings and provider settings are replaced with same-directory temporary files and atomic
-renames. Existing invalid explainer settings fail closed so corruption cannot silently resume model
-calls. Missing settings still receive the documented first-run default.
+Operational policy is a versioned sparse document in `operations-config.json`. Owner-only,
+same-directory atomic replacement retains `operations-config.previous.json` as a recovery copy.
+Effective resolution applies shipped defaults, stored choices, and then compatible environment
+overrides, and reports the source of every value. Existing `settings.json` explainer preferences and
+SQLite retention metadata migrate into this single authority. Invalid current and previous files
+fall back to safe defaults, including explanations off, so corruption cannot silently resume model
+calls. Provider settings use the same atomic replacement discipline but are not Salidium policy.
 
-The store rejects a schema created by a newer Salidium version. Older schemas are migrated in one
-offline transaction before hooks or the HTTP listener start; derived checkpoints and change logs are
-replayed when their reducer contract changes.
+The store rejects a schema created by a newer Salidium version. Older logical schemas are migrated
+in one offline transaction before hooks or the HTTP listener start; derived checkpoints and change
+logs are replayed when their reducer contract changes. Schema 8 creates bounded token-usage read
+models and a durable preparation cursor without traversing the historical event archive inside that
+startup transaction. After the listener starts, a separate worker advances that cursor in bounded
+batches. A crash or deliberate stop leaves the cursor resumable. Historical retention, compaction,
+and storage optimization remain deferred or blocked until preparation is complete.
+
+New physical stores use 16 KiB pages. `events` is an ordinary rowid table with a unique
+`(session_id, seq)` primary-key index, and JSON payloads at or above 1 KiB use a versioned fast gzip
+BLOB. Checkpoints use binary plaintext or gzip BLOBs while retaining legacy text decoding. An
+existing physical layout is not a startup migration: `salidium storage optimize` creates a separate
+same-directory store, copies every current-schema table, verifies per-table row counts, logical
+event and checkpoint SHA-256, and SQLite integrity, syncs it, and atomically replaces the old file. A
+hard-linked rollback copy remains until the replacement reopens successfully.
 
 Session retention defaults to `forever`. A user can opt into 30, 90, or 365 days; after startup
 discovery has had time to identify live work, the daemon removes complete inactive sessions in
@@ -115,15 +138,69 @@ bounded hourly batches while preserving source cursors and tombstones so old pro
 resurrect deleted sessions. Currently loaded and pinned sessions are excluded; stored status is not
 trusted as the only liveness signal. Aggregate token usage is rolled forward before automatic
 expiry. `salidium retention compact` performs an integrity-checked offline compaction after a
-free-space preflight; cleanup itself leaves pages available for SQLite to reuse. Large new checkpoints use
-a versioned fast gzip encoding; existing plaintext checkpoints remain readable, and corrupt cache
-rows are discarded in favor of replaying the authoritative event log.
+free-space preflight; cleanup itself leaves pages available for SQLite to reuse. New checkpoints use
+a versioned binary fast gzip encoding; existing plaintext and base64 checkpoints remain readable,
+and corrupt cache rows are discarded in favor of replaying the authoritative event log.
 
 Structured and launcher logs use bounded numbered rotation. Logs contain operational fields rather
 than transcript content.
 
+## Local operations
+
+One versioned operations contract joins policy, health, maintenance, alerts, diagnostics, CLI, API,
+and the Ingest & Storage rail. The older collection and explainer endpoints remain compatibility
+views, not parallel authorities.
+
+Recurring health work reads queue file metadata, SQLite and WAL file sizes, the bounded gap ledger,
+maintenance state, and hook configuration. It does not read queue payloads or scan stored events.
+Queue inspection stops at its hard file ceiling; if that ceiling is crossed, totals are unavailable
+rather than partial. Schema 7 introduced aggregate samples, which are pruned by the configured local
+time window plus an absolute 17,280-row cap. Queue velocity, drain rate, storage growth, and time to
+empty require two exact observations separated by at least ten seconds and remain labelled
+estimates.
+
+Local alerts cover queue age and growth, database size, new gap fingerprints, daemon health,
+maintenance failure, and hook-trust change. A bounded owner-only ledger records active,
+acknowledged, and recovered episodes. Only state transitions are notification-eligible;
+deduplication, cooldown, and acknowledgement prevent repeated polling from becoming repeated
+notification. The shipped native sink is opt-in and launches only a trusted operating-system
+notification helper with minimized title/detail arguments. It introduces no telemetry or resident
+process of its own. When disabled or unavailable, the same ledger remains visible through the API,
+UI, and CLI.
+
+The optional macOS always-on layer is a separate supervision boundary. Two owner-scoped
+LaunchAgents run a stable copied CLI runtime and a small AppKit status item. Both restart only after
+an unsuccessful exit, so a crash recovers while an intentional stop remains stopped. The status
+item reads the owner-only `daemon.json`, authenticates to the loopback operations endpoint, and
+shows aggregate operational fields; it does not read events or transcript payloads. Menu actions
+invoke the copied CLI directly without a shell. LaunchAgent files carry a sanitized executable
+search path and local paths, but no bearer token. Install and update compile the helper into a
+staging directory and swap it only after compilation succeeds. Disable and uninstall target the two
+fixed labels; uninstall leaves the state database, queue, settings, and reports intact.
+
+Queue drain and store optimization share a durable maintenance state machine and atomic directory
+lock. Optimization preflight requires completed historical usage preparation, exact queue totals, an
+empty queue, and sufficient same-volume free space before the daemon stops. The workflow pauses
+collection, checkpoints WAL, copies and optimizes, verifies counts, logical digests and integrity,
+reopens the replacement, and restores the prior pause state. Stale locks become explicit recovery
+state. Failure leaves queue files and the pre-operation store recoverable rather than erasing
+ambiguous state.
+
+`salidium doctor --bundle --dry-run` displays the allowlisted diagnostic manifest without writing or
+checking the database. Bundle generation adds an on-demand quick check, aggregate health and alert
+state, effective policy, versions, and bounded log tails. Recursive redaction removes secrets and
+identifying paths; transcript contents, raw events, prompts, commands and output, and tokens are not
+inputs to the bundle.
+
+The daemon core depends on `OperationalConfigBackend`, `AlertSink`, and `SalidiumStore` interfaces.
+The shipped implementations remain a private local file, an opt-in native notification sink, and
+SQLite. These are test and extension boundaries; they do not introduce a second authority or imply
+that hosted providers can replace local evidence durability.
+
 The CLI and daemon exchange version metadata. A compatible current daemon can be reused; an older
-daemon must be restarted before the current CLI treats it as its own service.
+ordinary daemon is restarted before the current CLI treats it as its own service. An enabled macOS
+always-on installation owns a stable copied runtime instead, so a newer CLI refuses to replace that
+daemon implicitly and directs the user to run `salidium service install` first.
 
 ## Provenance and raw evidence
 
@@ -214,6 +291,12 @@ remains the sole authoritative event store used by the CLI. Replacing that autho
 would make transactions, replay, migrations, retention, and raw-evidence guarantees depend on a
 plug-in. Future external storage should therefore consume a versioned outbox, export, or replication
 stream while SQLite retains local authority, rather than substitute an arbitrary backend.
+
+Operational integration follows the same containment rule. A future configuration provider must
+implement the versioned backend contract and preserve explicit source and revision semantics. A
+future alert destination receives already-minimized transition records through `AlertSink`; it does
+not receive events, transcripts, prompts, or store access. Neither seam is active in the shipped
+local product.
 
 ### Intelligence sync foundation
 

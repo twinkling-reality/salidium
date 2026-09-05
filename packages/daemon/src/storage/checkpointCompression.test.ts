@@ -35,10 +35,14 @@ describe('versioned checkpoint compression', () => {
     store.close();
 
     const db = new DatabaseSync(path);
-    const encoded = db.prepare('SELECT state_json FROM checkpoints').get() as {
-      state_json: string;
+    const encoded = db
+      .prepare('SELECT state_json, typeof(state_json) AS storage_type FROM checkpoints')
+      .get() as {
+      state_json: Uint8Array;
+      storage_type: string;
     };
-    expect(encoded.state_json.startsWith('gzip-base64:v1:')).toBe(true);
+    expect(encoded.storage_type).toBe('blob');
+    expect(Buffer.from(encoded.state_json).subarray(0, 4).toString()).toBe('SCP1');
     db.prepare('UPDATE checkpoints SET state_json = ?').run(JSON.stringify(state));
     db.close();
 

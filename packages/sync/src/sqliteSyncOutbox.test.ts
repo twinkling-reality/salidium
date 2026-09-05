@@ -8,7 +8,7 @@ import {
   verifySyncOperationDigest,
 } from '@salidium/sync-contract';
 import { afterEach, describe, expect, it } from 'vitest';
-import { SqliteStore } from '../../daemon/src/storage/sqliteStore.ts';
+import { SCHEMA_VERSION, SqliteStore } from '../../daemon/src/storage/sqliteStore.ts';
 import { SqliteSyncOutbox } from './sqliteSyncOutbox.ts';
 
 const AT = '2026-08-19T12:00:00.000Z';
@@ -114,7 +114,7 @@ class FakeConsumer {
 }
 
 describe('durable minimized sync outbox', () => {
-  it('migrates schema 5 to empty disabled sync tables without rewriting existing metadata', () => {
+  it('migrates schema 5 to the current store without rewriting existing sync metadata', () => {
     const { path, outbox } = open();
     outbox.close();
     const old = new DatabaseSync(path);
@@ -136,7 +136,7 @@ describe('durable minimized sync outbox', () => {
     new SqliteStore(path).close();
     const migrated = new DatabaseSync(path, { readOnly: true });
     expect(migrated.prepare("SELECT value FROM meta WHERE key='schema_version'").get()).toEqual({
-      value: '6',
+      value: String(SCHEMA_VERSION),
     });
     expect(migrated.prepare("SELECT value FROM meta WHERE key='phase0_test_marker'").get()).toEqual(
       { value: 'preserved' },

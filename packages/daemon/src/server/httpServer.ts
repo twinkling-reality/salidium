@@ -10,18 +10,28 @@ import {
   projectSession,
 } from '@salidium/core';
 import type {
+  CollectionControlRequest,
+  CollectionStatus,
   DaemonInfo,
+  EffectiveOperationalConfig,
   ExplainerSettings,
   ExplainerSettingsRequest,
+  LocalAlertState,
+  MaintenanceState,
+  OperationalConfigPatch,
+  OperationsOverview,
   PersonalizationSettings,
   PersonalizationSettingsRequest,
   PersonalizedExplanation,
+  QueueInspection,
   StoredEvent,
   StreamMessage,
 } from '@salidium/protocol';
 import {
   CanonicalTimestampSchema,
+  CollectionControlRequestSchema,
   ExplainerSettingsRequestSchema,
+  OperationalConfigPatchSchema,
   PersonalizationSettingsRequestSchema,
 } from '@salidium/protocol';
 import type { HookIngress } from '../ingest/hookIngress.ts';
@@ -37,6 +47,29 @@ export interface HttpServerDeps {
   port: () => number;
   uiDist?: string;
   info: () => DaemonInfo;
+  collection?: {
+    status: () => CollectionStatus;
+    set: (request: CollectionControlRequest) => CollectionStatus;
+    disconnect: (provider: string) => CollectionStatus | undefined;
+  };
+  operations?: {
+    overview: () => OperationsOverview;
+    setConfig: (
+      patch: OperationalConfigPatch,
+      expectedRevision: number | undefined,
+    ) => EffectiveOperationalConfig;
+    resetConfig: (
+      key: string | undefined,
+      expectedRevision: number | undefined,
+    ) => EffectiveOperationalConfig;
+    inspectQueue: (limit: number) => QueueInspection;
+    drainQueue: () => {
+      state: MaintenanceState;
+      before: QueueInspection;
+      after: QueueInspection;
+    };
+    acknowledgeAlert: (id: string) => LocalAlertState;
+  };
   /**
    * The choices that survive a restart. Optional because the routes are the only thing that needs
    * them, and a test that stands the server up to exercise one other route should not have to
@@ -147,6 +180,91 @@ export function createHttpServer(deps: HttpServerDeps): Server {
     }
 
     if (req.method === 'GET' && url.pathname === '/api/info') return json(res, 200, deps.info());
+    if (req.method === 'GET' && url.pathname === '/api/operations' && deps.operations)
+      return json(res, 200, deps.operations.overview());
+    if (url.pathname === '/api/operations/config' && deps.operations) {
+      if (req.method === 'GET') return json(res, 200, deps.operations.overview().config);
+      const expected = revisionHeader(req);
+      if (expected === 'invalid')
+        return json(res, 400, { error: 'If-Match must be a revision number' });
+      if (req.method === 'PUT') {
+        const body = await readBody(req, MAX_SETTINGS_BODY_BYTES);
+        let payload: unknown;
+        try {
+          payload = JSON.parse(body);
+        } catch {
+          return json(res, 400, { error: 'invalid json' });
+        }
+        const parsed = OperationalConfigPatchSchema.safeParse(payload);
+        if (!parsed.success) return json(res, 400, { error: 'invalid operational configuration' });
+        try {
+          return json(res, 200, deps.operations.setConfig(parsed.data, expected));
+        } catch (error) {
+          if (String(error).includes('configuration changed'))
+            return json(res, 409, { error: 'configuration changed' });
+          throw error;
+        }
+      }
+      if (req.method === 'DELETE') {
+        try {
+          return json(
+            res,
+            200,
+            deps.operations.resetConfig(url.searchParams.get('key') ?? undefined, expected),
+          );
+        } catch (error) {
+          if (String(error).includes('configuration changed'))
+            return json(res, 409, { error: 'configuration changed' });
+          if (String(error).includes('unknown configuration key'))
+            return json(res, 400, { error: 'unknown configuration key' });
+          throw error;
+        }
+      }
+      return json(res, 405, { error: 'method not allowed' });
+    }
+    if (req.method === 'GET' && url.pathname === '/api/operations/queue' && deps.operations) {
+      const asked = Number(url.searchParams.get('limit') ?? 25);
+      if (!Number.isFinite(asked) || asked < 0)
+        return json(res, 400, { error: 'limit must be a nonnegative number' });
+      return json(res, 200, deps.operations.inspectQueue(Math.min(Math.trunc(asked), 200)));
+    }
+    if (
+      req.method === 'POST' &&
+      url.pathname === '/api/operations/maintenance/drain' &&
+      deps.operations
+    )
+      return json(res, 200, deps.operations.drainQueue());
+    const acknowledge = /^\/api\/operations\/alerts\/([^/]+)\/acknowledge$/.exec(url.pathname);
+    if (req.method === 'POST' && acknowledge?.[1] && deps.operations) {
+      try {
+        return json(res, 200, deps.operations.acknowledgeAlert(decodeURIComponent(acknowledge[1])));
+      } catch (error) {
+        if (String(error).includes('unknown alert'))
+          return json(res, 404, { error: 'unknown alert' });
+        throw error;
+      }
+    }
+    if (url.pathname === '/api/collection' && deps.collection) {
+      if (req.method === 'GET') return json(res, 200, deps.collection.status());
+      if (req.method === 'PUT') {
+        const body = await readBody(req, MAX_SETTINGS_BODY_BYTES);
+        let payload: unknown;
+        try {
+          payload = JSON.parse(body);
+        } catch {
+          return json(res, 400, { error: 'invalid json' });
+        }
+        const parsed = CollectionControlRequestSchema.safeParse(payload);
+        if (!parsed.success) return json(res, 400, { error: 'invalid collection control' });
+        return json(res, 200, deps.collection.set(parsed.data));
+      }
+      return json(res, 405, { error: 'method not allowed' });
+    }
+    const disconnect = /^\/api\/collection\/hooks\/([^/]+)$/.exec(url.pathname);
+    if (req.method === 'DELETE' && disconnect?.[1] && deps.collection) {
+      const status = deps.collection.disconnect(decodeURIComponent(disconnect[1]));
+      return status ? json(res, 200, status) : json(res, 404, { error: 'unknown provider' });
+    }
     if (req.method === 'GET' && url.pathname === '/api/sessions')
       return json(res, 200, registry.listSessions());
     /*
@@ -578,6 +696,14 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.end(JSON.stringify(body));
+}
+
+function revisionHeader(req: IncomingMessage): number | undefined | 'invalid' {
+  const raw = req.headers['if-match'];
+  if (raw === undefined) return undefined;
+  if (Array.isArray(raw) || !/^\d+$/.test(raw)) return 'invalid';
+  const value = Number(raw);
+  return Number.isSafeInteger(value) ? value : 'invalid';
 }
 
 function readBody(req: IncomingMessage, limit: number): Promise<string> {

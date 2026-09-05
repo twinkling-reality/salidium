@@ -28,6 +28,23 @@ export const CLAUDE_CODE_HOOK_EVENTS = [
   'SessionEnd',
 ] as const;
 
+export const CLAUDE_CODE_HOOK_EVENT_BUDGET = {
+  expectedPerTurn: { fixed: 2, perToolCall: 2 },
+  events: CLAUDE_CODE_HOOK_EVENTS.map((name) => ({
+    name,
+    pressure:
+      name === 'PreToolUse'
+        ? ('shed-first' as const)
+        : name === 'PostToolUse'
+          ? ('shed-second' as const)
+          : ['SessionEnd', 'Stop', 'SubagentStart', 'SubagentStop', 'PermissionRequest'].includes(
+                name,
+              )
+            ? ('lifecycle' as const)
+            : ('retain' as const),
+  })),
+} as const;
+
 /**
  * Normalizes one Claude Code hook payload (the JSON Claude Code writes to the hook's stdin)
  * into canonical events. Tool observations keep a `hook` suffix so the durable transcript can be

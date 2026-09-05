@@ -32,7 +32,8 @@ export type IconName =
   | 'check'
   | 'edit'
   | 'trash'
-  | 'outbound';
+  | 'outbound'
+  | 'storage';
 
 const PATHS: Record<IconName, React.ReactNode> = {
   /* One sheet laid over another: take this text. */
@@ -141,6 +142,14 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <>
       <path d="M2.5 13.5h11" />
       <path d="M4.5 11V7M8 11V3.5M11.5 11V8.5" />
+    </>
+  ),
+  /* A bounded queue entering the local store. */
+  storage: (
+    <>
+      <path d="M3 3.5h5M3 6.5h5M3 9.5h5" />
+      <path d="m9.5 6.5 2 2 2-2M11.5 3v5.5" />
+      <path d="M8.5 12.5h5" />
     </>
   ),
   /*

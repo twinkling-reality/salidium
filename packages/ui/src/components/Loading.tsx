@@ -22,15 +22,21 @@ export type LoadingSize = 'sm' | 'md';
 export function Loading({
   label,
   size = 'sm',
+  block = false,
   className = '',
 }: {
   /** What is being waited for, in words. A spinner with no sentence is a mystery. */
   label: string;
   size?: LoadingSize;
+  /** Gives a stand-alone panel wait the same spacing and tone everywhere it appears. */
+  block?: boolean;
   className?: string;
 }) {
   return (
-    <span className={`loading is-${size} ${className}`.trim()} role="status">
+    <span
+      className={`loading is-${size} ${block ? 'is-block' : ''} ${className}`.trim()}
+      role="status"
+    >
       <ThinkingOrb />
       <span className="loading-label shimmer">{label}</span>
     </span>

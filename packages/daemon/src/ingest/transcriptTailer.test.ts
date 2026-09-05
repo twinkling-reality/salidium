@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -140,6 +140,47 @@ describe('TranscriptTailer', () => {
     expect(store.latestSeq('claude-code:s1')).toBe(0);
   });
 
+  it("never tracks transcripts written by Salidium's own explainer", async () => {
+    const previousHome = process.env.SALIDIUM_HOME;
+    const explainerFile = join(tmp, 'state', 'explainer', 's1.jsonl');
+    try {
+      process.env.SALIDIUM_HOME = join(tmp, 'state');
+      mkdirSync(join(tmp, 'state', 'explainer'), { recursive: true });
+      writeFileSync(explainerFile, '{"n":1}\n');
+      tailer.track(explainerFile);
+      await sleep(60);
+      expect(tailer.watchedCount).toBe(0);
+      expect(store.getSource(explainerFile)).toBeUndefined();
+    } finally {
+      if (previousHome === undefined) delete process.env.SALIDIUM_HOME;
+      else process.env.SALIDIUM_HOME = previousHome;
+    }
+  });
+
+  it('evicts idle parser state and recreates it when the source grows', async () => {
+    tailer.stop();
+    tailer = new TranscriptTailer({
+      adapters: [lineAdapter],
+      registry,
+      store,
+      log: createLogger('silent'),
+      sweepIntervalMs: 10,
+      sourceIdleMs: 20,
+    });
+    void tailer.start(tmp, 30);
+    writeFileSync(file, '{"n":1}\n');
+    tailer.track(file);
+    expect(await messages()).toEqual(['line 1']);
+    const started = Date.now();
+    while (tailer.watchedCount !== 0) {
+      if (Date.now() - started > 1000) throw new Error('idle parser state was not evicted');
+      await sleep(10);
+    }
+    appendFileSync(file, '{"n":2}\n');
+    tailer.track(file);
+    expect(await messages()).toEqual(['line 1', 'line 2']);
+  });
+
   it('keeps a missing durable re-ingestion job retryable until the provider file returns', async () => {
     store.upsertSource({
       path: file,
@@ -177,6 +218,39 @@ describe('TranscriptTailer', () => {
     }
     expect(await messages()).toEqual(['line 9']);
     expect(store.reingestJobs()[0]?.attempts).toBe(2);
+  });
+
+  it('keeps an interrupted durable re-ingestion job retryable until the whole file is read', async () => {
+    const records = `${Array.from({ length: 14_000 }, (_, index) =>
+      JSON.stringify({ n: index, padding: 'x'.repeat(100) }),
+    ).join('\n')}\n`;
+    writeFileSync(file, records);
+    store.enqueueReingest({
+      path: file,
+      sessionId: 'claude-code:s1',
+      provider: 'claude-code',
+      byteOffset: Buffer.byteLength(records),
+      lineNo: 14_000,
+    });
+
+    const interrupted = tailer.start(tmp, 0);
+    tailer.stop();
+    await interrupted;
+
+    expect(store.reingestJobs()[0]?.status).toBe('failed');
+    expect(store.getSource(file)?.byteOffset ?? 0).toBeLessThan(statSync(file).size);
+
+    tailer = new TranscriptTailer({
+      adapters: [lineAdapter],
+      registry,
+      store,
+      log: createLogger('silent'),
+    });
+    await tailer.start(tmp, 0);
+
+    expect(store.reingestJobs()[0]?.status).toBe('completed');
+    expect(store.getSource(file)?.byteOffset).toBe(statSync(file).size);
+    expect(store.latestSeq('claude-code:s1')).toBe(13_999);
   });
 
   it('leaves the recovery cursor unchanged when the related flush fails', async () => {

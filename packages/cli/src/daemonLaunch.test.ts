@@ -124,6 +124,127 @@ afterEach(() => {
 });
 
 describe('detached daemon launch failures', () => {
+  it('pauses with a lease and any later CLI command resumes collection', () => {
+    const home = temporaryHome();
+    const paused = run(home, ['pause', '--json'], '0');
+    expect(paused.status).toBe(0);
+    expect(JSON.parse(paused.stdout)).toMatchObject({
+      state: 'paused',
+      pause: { reason: 'manual' },
+      queue: { files: 0, bytes: 0 },
+    });
+    expect(existsSync(join(home, 'hooks-paused'))).toBe(true);
+
+    const service = run(home, ['service', 'status', '--json'], '0');
+    expect(service.status).toBe(1);
+    expect(JSON.parse(service.stdout)).toMatchObject({
+      supported: process.platform === 'darwin',
+      installed: false,
+      enabled: false,
+    });
+    // Inspection is the exception to implicit resume: asking whether supervision is installed
+    // must not restart collection the user deliberately paused.
+    expect(existsSync(join(home, 'hooks-paused'))).toBe(true);
+
+    const version = run(home, ['--version'], '0');
+    expect(version.status).toBe(0);
+    expect(existsSync(join(home, 'hooks-paused'))).toBe(false);
+    expect(JSON.parse(readFileSync(join(home, 'collection-gaps.json'), 'utf8'))).toMatchObject({
+      episodes: [{ reason: 'collection-paused', exactCount: null }],
+    });
+  });
+
+  it('reports machine cost as JSON and supports an exit-code-only status', () => {
+    const home = temporaryHome();
+    const json = run(home, ['status', '--json'], '0');
+    expect(json.status).toBe(1);
+    expect(JSON.parse(json.stdout)).toMatchObject({
+      daemon: { presence: 'absent' },
+      collection: {
+        state: 'active',
+        queue: { files: 0, bytes: 0, oldestAt: null },
+        store: { bytes: null, retention: null, lastIngestAt: null },
+      },
+    });
+    const quiet = run(home, ['status', '--quiet'], '0');
+    expect(quiet.status).toBe(1);
+    expect(quiet.stdout).toBe('');
+    expect(quiet.stderr).toBe('');
+  });
+
+  it('shows, changes, and resets versioned local configuration with source labels', () => {
+    const home = temporaryHome();
+    const initial = run(home, ['config', 'show', '--json'], '0');
+    expect(initial.status).toBe(0);
+    expect(JSON.parse(initial.stdout)).toMatchObject({
+      contractVersion: 1,
+      schemaVersion: 1,
+      values: {
+        history: {
+          days: { value: 0, source: 'environment', environment: 'SALIDIUM_HISTORY_DAYS' },
+        },
+        alerts: { queueAgeMinutes: { value: 10, source: 'default' } },
+      },
+    });
+
+    const changed = run(home, ['config', 'set', 'alerts.queueAgeMinutes', '30', '--json'], '0');
+    expect(changed.status).toBe(0);
+    expect(JSON.parse(changed.stdout)).toMatchObject({
+      revision: 1,
+      values: { alerts: { queueAgeMinutes: { value: 30, source: 'stored' } } },
+    });
+    expect(JSON.parse(readFileSync(join(home, 'operations-config.json'), 'utf8'))).toMatchObject({
+      version: 1,
+      settings: { alerts: { queueAgeMinutes: 30 } },
+    });
+
+    const reset = run(home, ['config', 'reset', 'alerts.queueAgeMinutes', '--json'], '0');
+    expect(reset.status).toBe(0);
+    expect(JSON.parse(reset.stdout)).toMatchObject({
+      revision: 2,
+      values: { alerts: { queueAgeMinutes: { value: 10, source: 'default' } } },
+    });
+
+    const notifications = run(
+      home,
+      ['config', 'set', 'alerts.nativeNotifications', 'true', '--json'],
+      '0',
+    );
+    expect(notifications.status).toBe(0);
+    expect(JSON.parse(notifications.stdout)).toMatchObject({
+      revision: 3,
+      values: { alerts: { nativeNotifications: { value: true, source: 'stored' } } },
+    });
+  });
+
+  it('previews diagnostic contents and inspects an empty durable queue as structured JSON', () => {
+    const home = temporaryHome();
+    const preview = run(home, ['doctor', '--bundle', '--dry-run', '--json'], '0');
+    const diagnostic = JSON.parse(preview.stdout).diagnosticBundle;
+    expect(diagnostic).toMatchObject({
+      dryRun: true,
+      manifest: { contractVersion: 1 },
+    });
+    expect(diagnostic.manifest.excludes).toEqual(
+      expect.arrayContaining([
+        'transcript contents',
+        'raw canonical events',
+        'prompts and command output',
+        'authentication tokens and secrets',
+      ]),
+    );
+
+    const queue = run(home, ['maintenance', 'queue', '--limit=0', '--json'], '0');
+    expect(queue.status).toBe(0);
+    expect(JSON.parse(queue.stdout)).toMatchObject({
+      contractVersion: 1,
+      exactTotals: true,
+      totalFiles: 0,
+      totalBytes: 0,
+      entries: [],
+    });
+  });
+
   it('keeps explanations local by default and changes the persisted setting while stopped', () => {
     const home = temporaryHome();
     const initial = run(home, ['explanations'], '0');
@@ -133,8 +254,9 @@ describe('detached daemon launch failures', () => {
     const changed = run(home, ['explanations', 'when-done'], '0');
     expect(changed.status).toBe(0);
     expect(changed.stdout).toMatch(/Saved: When done · One model call after a session ends/);
-    expect(JSON.parse(readFileSync(join(home, 'settings.json'), 'utf8'))).toMatchObject({
-      explainerCadence: 'session',
+    expect(JSON.parse(readFileSync(join(home, 'operations-config.json'), 'utf8'))).toMatchObject({
+      version: 1,
+      settings: { explainer: { cadence: 'session' } },
     });
   });
 
@@ -150,10 +272,84 @@ describe('detached daemon launch failures', () => {
       expect(status.stdout).toMatch(
         /Explanations: Each reply · One model call after each agent reply/,
       );
+      expect(status.stdout).toMatch(/Local endpoint: http:\/\/127\.0\.0\.1:\d+ · state /);
+      expect(status.stdout).toMatch(/Desktop notifications: Off/);
+      expect(status.stdout).toMatch(/Control: salidium open/);
     } finally {
       run(home, ['explanations', 'off'], '0');
       run(home, ['stop'], '0');
     }
+  }, 30_000);
+
+  it('stops watch mode promptly on Ctrl-C instead of waiting for the refresh interval', async () => {
+    const home = temporaryHome();
+    expect(start(home, '0').status).toBe(0);
+    const watcher = spawn(
+      process.execPath,
+      ['--conditions=development', entry, 'status', '--watch', '--interval=60'],
+      {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          SALIDIUM_HOME: home,
+          SALIDIUM_PORT: '0',
+          SALIDIUM_HISTORY_DAYS: '0',
+          SALIDIUM_NO_GIT: '1',
+        },
+      },
+    );
+    let stdout = '';
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('watch mode produced no snapshot')), 8_000);
+        watcher.once('error', reject);
+        watcher.stdout?.on('data', (chunk: Buffer) => {
+          stdout += chunk.toString();
+          if (!stdout.includes('Health:')) return;
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+      const interruptedAt = Date.now();
+      watcher.kill('SIGINT');
+      const code = await new Promise<number | null>((resolve) =>
+        watcher.once('exit', (exitCode) => resolve(exitCode)),
+      );
+      expect(Date.now() - interruptedAt).toBeLessThan(5_000);
+      expect(code).toBe(0);
+    } finally {
+      if (watcher.pid && processExists(watcher.pid)) watcher.kill('SIGTERM');
+      run(home, ['stop'], '0');
+    }
+  }, 30_000);
+
+  it('stops collection as well as the daemon and accounts for the saved queue', () => {
+    const home = temporaryHome();
+    expect(start(home, '0').status).toBe(0);
+    const stopped = run(home, ['stop'], '0');
+    expect(stopped.status).toBe(0);
+    expect(stopped.stdout).toMatch(/Collection is paused until/);
+    expect(stopped.stdout).toMatch(/Observed queue at pause: 0 files, 0 B/);
+    expect(existsSync(join(home, 'hooks-paused'))).toBe(true);
+  }, 30_000);
+
+  it('reports the new lossless layout and preserves an existing pause during optimization', () => {
+    const home = temporaryHome();
+    expect(start(home, '0').status).toBe(0);
+    expect(run(home, ['stop'], '0').status).toBe(0);
+    const pause = readFileSync(join(home, 'hooks-paused'), 'utf8');
+
+    const status = run(home, ['storage'], '0');
+    expect(status.status).toBe(0);
+    expect(status.stdout).toMatch(/Layout: Optimized/);
+    // An ordinary status command follows the implicit-resume rule.
+    expect(existsSync(join(home, 'hooks-paused'))).toBe(false);
+
+    writeFileSync(join(home, 'hooks-paused'), pause);
+    const optimized = run(home, ['storage', 'optimize'], '0');
+    expect(optimized.status).toBe(0);
+    expect(optimized.stdout).toMatch(/already optimized/);
+    expect(readFileSync(join(home, 'hooks-paused'), 'utf8')).toBe(pause);
   }, 30_000);
 
   it('prints the installed version without starting the daemon', () => {
@@ -299,6 +495,10 @@ describe('detached daemon launch failures', () => {
       const retention = run(home, ['retention', '30'], '0');
       expect(retention.status).toBe(2);
       expect(retention.stderr).toMatch(/stop Salidium.*offline maintenance/);
+
+      const storage = run(home, ['storage', 'optimize'], '0');
+      expect(storage.status).toBe(2);
+      expect(storage.stderr).toMatch(/stop Salidium.*offline maintenance/);
     } finally {
       await dispose(sleeper);
     }
