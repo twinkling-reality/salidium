@@ -62,17 +62,19 @@ jobs:
           "$RUNNER_TEMP/npm-install/node_modules/.bin/salidium" help > /dev/null
 
           export SALIDIUM_HOME="$RUNNER_TEMP/home"
-          export SALIDIUM_PORT=47950
+          # Let the OS reserve an available port; fixed ports can collide on hosted runners.
+          export SALIDIUM_PORT=0
           export SALIDIUM_HISTORY_DAYS=0
           node "$RUNNER_TEMP/install/bundle/salidium.mjs" daemon &
           for _ in $(seq 1 40); do [ -f "$SALIDIUM_HOME/daemon.json" ] && break; sleep 0.5; done
           test -f "$SALIDIUM_HOME/daemon.json" || { echo "daemon never wrote daemon.json"; exit 1; }
 
           token=$(node -e "console.log(require(process.env.SALIDIUM_HOME + '/daemon.json').token)")
+          port=$(node -e "console.log(require(process.env.SALIDIUM_HOME + '/daemon.json').port)")
           # The UI has to come from the bundle, and the API has to refuse an unauthenticated call.
-          ui=$(curl -sf -o /dev/null -w '%{http_code}' "http://127.0.0.1:$SALIDIUM_PORT/")
-          open=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$SALIDIUM_PORT/api/info")
-          auth=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "http://127.0.0.1:$SALIDIUM_PORT/api/info")
+          ui=$(curl -sf -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/")
+          open=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/api/info")
+          auth=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "http://127.0.0.1:$port/api/info")
           echo "ui=$ui unauthenticated=$open authenticated=$auth"
           # One assertion per line. Chained with `&&`, only the last of the three could ever fail
           # the step: `set -e` ignores a non-final command in an AND-OR list, and the `&&` stops at

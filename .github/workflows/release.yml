@@ -123,7 +123,8 @@ jobs:
           "$RUNNER_TEMP/install/node_modules/.bin/salidium" help > /dev/null
 
           export SALIDIUM_HOME="$RUNNER_TEMP/home"
-          export SALIDIUM_PORT=47950
+          # Let the OS reserve an available port; fixed ports can collide on hosted runners.
+          export SALIDIUM_PORT=0
           export SALIDIUM_HISTORY_DAYS=0
           "$RUNNER_TEMP/install/node_modules/.bin/salidium" daemon &
           daemon_pid=$!
@@ -132,9 +133,10 @@ jobs:
           test -f "$SALIDIUM_HOME/daemon.json" || { echo "daemon never wrote daemon.json"; exit 1; }
 
           token=$(node -e "console.log(require(process.env.SALIDIUM_HOME + '/daemon.json').token)")
-          ui=$(curl -sf -o /dev/null -w '%{http_code}' "http://127.0.0.1:$SALIDIUM_PORT/")
-          open=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$SALIDIUM_PORT/api/info")
-          auth=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "http://127.0.0.1:$SALIDIUM_PORT/api/info")
+          port=$(node -e "console.log(require(process.env.SALIDIUM_HOME + '/daemon.json').port)")
+          ui=$(curl -sf -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/")
+          open=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/api/info")
+          auth=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "http://127.0.0.1:$port/api/info")
           echo "ui=$ui unauthenticated=$open authenticated=$auth"
           # One assertion per line; see the identical check in ci.yml. Chained with `&&`, only the
           # last could fail the step, which left the unauthenticated probe unable to block a publish.
@@ -147,7 +149,7 @@ jobs:
           doctor_output=$("$RUNNER_TEMP/install/node_modules/.bin/salidium" doctor 2>&1 || true)
           printf '%s\n' "$doctor_output" | grep -F 'Node 24'
           printf '%s\n' "$doctor_output" | grep -F 'Interface build is available'
-          printf '%s\n' "$doctor_output" | grep -F "daemon running on $SALIDIUM_PORT"
+          printf '%s\n' "$doctor_output" | grep -F "daemon running on $port"
           "$RUNNER_TEMP/install/node_modules/.bin/salidium" stop
           wait "$daemon_pid"
           trap - EXIT
@@ -159,7 +161,7 @@ jobs:
           pnpm --dir "$RUNNER_TEMP/v030" install --frozen-lockfile
           pnpm --dir "$RUNNER_TEMP/v030" package
           export SALIDIUM_HOME="$RUNNER_TEMP/upgrade-home"
-          export SALIDIUM_PORT=47951
+          export SALIDIUM_PORT=0
           export SALIDIUM_HISTORY_DAYS=0
           node "$RUNNER_TEMP/v030/packages/cli/bundle/salidium.mjs" daemon &
           old_pid=$!
