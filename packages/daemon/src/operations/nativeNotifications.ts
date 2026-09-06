@@ -23,13 +23,29 @@ export interface NativeNotificationOptions {
   onError?: (error: unknown) => void;
 }
 
+/*
+ * A recovery is written as a recovery, not as the alarm with a word in front of it.
+ *
+ * This used to return `Recovered: ${alert.title}` over the unchanged body, so the all-clear for a
+ * queue backlog arrived as "Recovered: The durable queue is growing / Net growth crossed 100 files
+ * in the sampled window. Open Salidium or run salidium status for details." Every sentence after
+ * the first word described the problem in the present tense and then asked the reader to go
+ * investigate a condition that was already over. `recoveryTitle` and `recoveryDetail` are optional
+ * on the schema so a ledger written before they existed still parses; those alerts fall back to
+ * the old text, which is why the prefix survives here rather than being deleted.
+ */
 function notificationText(alert: LocalAlert): { title: string; detail: string } {
+  if (alert.state === 'recovered')
+    return {
+      title: alert.recoveryTitle ?? `Recovered: ${alert.title}`,
+      detail: alert.recoveryDetail ?? alert.detail,
+    };
   const detail =
     alert.kind === 'maintenance-failure'
       ? 'Maintenance needs local review. Open Salidium or run salidium maintenance status for details.'
       : alert.detail;
   return {
-    title: alert.state === 'recovered' ? `Recovered: ${alert.title}` : alert.title,
+    title: alert.title,
     detail: `${detail} Open Salidium or run salidium status for details.`,
   };
 }

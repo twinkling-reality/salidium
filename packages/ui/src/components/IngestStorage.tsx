@@ -1,3 +1,4 @@
+import { formatBytes } from '@salidium/core';
 import type {
   DaemonInfo,
   EffectiveOperationalConfig,
@@ -11,17 +12,75 @@ import { type OperationsAction, useAppStore } from '../store/appStore.ts';
 import { ToolButton } from './Controls.tsx';
 import { Loading } from './Loading.tsx';
 
-function formatBytes(bytes: number | null): string {
-  if (bytes === null) return 'Unavailable';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
+function bytesOrUnavailable(bytes: number | null): string {
+  return bytes === null ? 'Unavailable' : formatBytes(bytes);
+}
+
+/*
+ * Enum values the reader never has a reason to learn.
+ *
+ * `health.overall` was rendered straight into the badge, so a store needing attention said
+ * "attention" in lower case beside a heading that says "Needs attention" everywhere else, and
+ * `maintenance.phase` printed "failure" the same way.
+ */
+function healthLabel(overall: OperationsHealthSnapshot['overall']): string {
+  if (overall === 'critical') return 'Critical';
+  if (overall === 'attention') return 'Needs attention';
+  return 'Healthy';
+}
+
+function measureLabel(availability: 'exact' | 'unavailable'): string {
+  return availability === 'exact' ? 'measured' : 'unavailable';
+}
+
+function phaseLabel(phase: NonNullable<OperationsHealthSnapshot['maintenance']>['phase']): string {
+  if (phase === 'failure') return 'Did not finish';
+  if (phase === 'recovery') return 'Recovering';
+  if (phase === 'completed') return 'Finished';
+  return 'Running';
+}
+
+function alertStateLabel(alert: LocalAlert): string {
+  if (alert.state === 'recovered') return 'Over';
+  if (alert.state === 'acknowledged') return 'Acknowledged';
+  if (alert.severity === 'critical') return 'Needs attention now';
+  if (alert.severity === 'warning') return 'Worth a look';
+  return 'For information';
 }
 
 function retentionLabel(value: OperationsHealthSnapshot['store']['retention']): string {
   if (value === null) return 'Unavailable';
-  return value === 'forever' ? 'Forever' : `${value} days`;
+  return value === 'forever' ? 'Kept forever' : `Kept ${value} days`;
+}
+
+/*
+ * What a growth rate means over a day, and how much room is left.
+ *
+ * The panel showed "+499.8 KiB/min" and nothing else, which is a true number nobody can act on:
+ * the reader cannot tell from it whether the store gains a megabyte a week or a gigabyte a day.
+ * Retention defaults to keeping everything, and the only signal that the store is large was an
+ * alert at 5 GiB, by which point there are 5 GiB. A per-day figure and the distance to that mark
+ * are the two facts that make it a decision instead of a surprise.
+ *
+ * Both are plainly labelled projections. A rate measured over an hour of heavy agent use does not
+ * continue overnight, and saying "at this rate" is the honest form of that.
+ */
+function perDayLabel(estimate: OperationsHealthSnapshot['estimates']['storageGrowth']): string {
+  if (!estimate || estimate.value <= 0) return '';
+  return `about ${formatBytes(estimate.value * 60 * 24)} a day at this rate`;
+}
+
+function headroomLabel(total: number | null, warnAt: number): string {
+  if (total === null) return '';
+  const mark = formatBytes(warnAt);
+  if (total >= warnAt) return `past its ${mark} warning mark`;
+  /*
+   * A store small enough that the room left rounds to the whole mark gets the mark on its own.
+   * Otherwise a fresh install reads "5.00 GiB below the 5.00 GiB warning mark", which looks like
+   * the same number printed twice by mistake.
+   */
+  const room = formatBytes(warnAt - total);
+  return room === mark ? `warns at ${mark}` : `${room} below its ${mark} warning mark`;
 }
 
 function pauseExpiry(value: string): string {
@@ -58,21 +117,41 @@ function actionLabel(action: OperationsAction): string {
   return 'Updating collection';
 }
 
+/*
+ * An absent rate says which of the two reasons it is absent for.
+ *
+ * Every null read "Needs two samples", including the drain rate sitting beside a queue velocity
+ * reporting eighty-four of them. `drainRate` is null whenever the queue is not shrinking, which is
+ * a fact about the queue and not about the sample window.
+ */
 function rateLabel(
   estimate: OperationsHealthSnapshot['estimates']['queueVelocity'],
   kind: 'queue' | 'storage',
+  absent = 'Needs two measurements',
 ): string {
-  if (!estimate) return 'Needs two samples';
-  if (kind === 'storage') {
-    const sign = estimate.value > 0 ? '+' : estimate.value < 0 ? '−' : '';
-    return `${sign}${formatBytes(Math.abs(estimate.value))}/min`;
-  }
-  const sign = estimate.value > 0 ? '+' : estimate.value < 0 ? '−' : '';
-  return `${sign}${Math.abs(estimate.value).toFixed(1)} files/min`;
+  if (!estimate) return absent;
+  /*
+   * The sign comes from the number as shown, not the number as measured. A velocity of -0.004
+   * files per minute is negative and rounds to 0.0, which rendered as "−0.0 files/min".
+   */
+  const shown =
+    kind === 'storage'
+      ? formatBytes(Math.abs(estimate.value))
+      : Math.abs(estimate.value).toFixed(1);
+  const zero = /^[0.]+(?: B)?$/.test(shown);
+  const sign = zero ? '' : estimate.value > 0 ? '+' : '−';
+  return `${sign}${shown}${kind === 'storage' ? '/min' : ' files/min'}`;
 }
 
 function Readout({ overview, now }: { overview: OperationsOverview; now: number }) {
   const { health } = overview;
+  const perDay = perDayLabel(health.estimates.storageGrowth);
+  const absentReason =
+    health.estimates.queueVelocity === null ? 'Needs two measurements' : 'Not shrinking';
+  const headroom = headroomLabel(
+    health.store.totalBytes,
+    overview.config.values.alerts.databaseSizeBytes.value,
+  );
   const direction =
     !health.estimates.queueVelocity || health.estimates.queueVelocity.value === 0
       ? 'steady'
@@ -85,12 +164,14 @@ function Readout({ overview, now }: { overview: OperationsOverview; now: number 
         <h3 className="mu-title" id="is-readout">
           Current readout
         </h3>
-        <span className={`operations-health is-${health.overall}`}>{health.overall}</span>
+        <span className={`operations-health is-${health.overall}`}>
+          {healthLabel(health.overall)}
+        </span>
       </div>
       <dl className="is-readout">
         <div>
           <dt>
-            Collection <small className="measure-kind">exact</small>
+            Collection <small className="measure-kind">measured</small>
           </dt>
           <dd>
             {health.collection.state === 'active' ? 'Active' : 'Paused'}
@@ -101,28 +182,33 @@ function Readout({ overview, now }: { overview: OperationsOverview; now: number 
         </div>
         <div>
           <dt>
-            Queued now <small className="measure-kind">{health.queue.availability}</small>
+            Waiting to be stored{' '}
+            <small className="measure-kind">{measureLabel(health.queue.availability)}</small>
           </dt>
           <dd>
             {health.queue.files === null
               ? 'Unavailable'
               : `${health.queue.files.toLocaleString()} files`}
-            <small>{formatBytes(health.queue.bytes)}</small>
+            <small>{bytesOrUnavailable(health.queue.bytes)}</small>
           </dd>
         </div>
         <div>
           <dt>
-            Oldest queued <small className="measure-kind">exact</small>
+            Oldest waiting <small className="measure-kind">measured</small>
           </dt>
           <dd>{health.queue.oldestAt ? relativeTime(health.queue.oldestAt, now) : 'None'}</dd>
         </div>
         <div>
           <dt>
-            Store now <small className="measure-kind">{health.store.availability}</small>
+            On this Mac{' '}
+            <small className="measure-kind">{measureLabel(health.store.availability)}</small>
           </dt>
           <dd>
-            {formatBytes(health.store.totalBytes)}
-            <small>{retentionLabel(health.store.retention)} retention</small>
+            {bytesOrUnavailable(health.store.totalBytes)}
+            <small>
+              {retentionLabel(health.store.retention)}
+              {headroom ? ` · ${headroom}` : ''}
+            </small>
           </dd>
         </div>
       </dl>
@@ -140,20 +226,22 @@ function Readout({ overview, now }: { overview: OperationsOverview; now: number 
         </div>
         <div>
           <strong>Drain rate</strong>
-          <span>{rateLabel(health.estimates.drainRate, 'queue')}</span>
+          <span>{rateLabel(health.estimates.drainRate, 'queue', absentReason)}</span>
           <small>estimate</small>
         </div>
         <div>
           <strong>Storage growth</strong>
           <span>{rateLabel(health.estimates.storageGrowth, 'storage')}</span>
-          <small>estimate</small>
+          <small>{perDay || 'estimate'}</small>
         </div>
         <div>
           <strong>Time to empty</strong>
           <span>
             {health.estimates.timeToEmpty
               ? `${Math.max(1, Math.round(health.estimates.timeToEmpty.value / 60))} min`
-              : 'Unavailable'}
+              : health.queue.files === 0
+                ? 'Already empty'
+                : absentReason}
           </span>
           <small>estimate</small>
         </div>
@@ -271,7 +359,7 @@ function Controls({
           aria-live={health.maintenance.phase === 'failure' ? 'assertive' : 'polite'}
         >
           <span>
-            {health.maintenance.phase}
+            {phaseLabel(health.maintenance.phase)}
             {health.maintenance.progress === null
               ? ''
               : ` · ${Math.round(health.maintenance.progress * 100)}%`}
@@ -592,11 +680,13 @@ function Alerts({ alerts }: { alerts: OperationsOverview['alerts'] }) {
       aria-atomic={alert.severity === 'critical' && alert.state === 'active' ? true : undefined}
     >
       <div>
-        <strong>{alert.title}</strong>
-        <span>{alert.detail}</span>
-        <small>
-          {alert.severity} · {alert.state}
-        </small>
+        <strong>
+          {alert.state === 'recovered' ? (alert.recoveryTitle ?? alert.title) : alert.title}
+        </strong>
+        <span>
+          {alert.state === 'recovered' ? (alert.recoveryDetail ?? alert.detail) : alert.detail}
+        </span>
+        <small>{alertStateLabel(alert)}</small>
       </div>
       {allowAcknowledge && alert.state === 'active' && (
         <button
@@ -620,7 +710,7 @@ function Alerts({ alerts }: { alerts: OperationsOverview['alerts'] }) {
       </div>
       <div aria-live="polite" aria-relevant="additions text">
         {alerts.active.length === 0 ? (
-          <p className="is-empty">No active alerts</p>
+          <p className="is-empty">Nothing needs attention</p>
         ) : (
           <ol className="operations-alerts">
             {alerts.active.map((alert) => alertRow(alert, true))}
@@ -628,7 +718,7 @@ function Alerts({ alerts }: { alerts: OperationsOverview['alerts'] }) {
         )}
         {recovered.length > 0 && (
           <>
-            <h4 className="operations-alerts-subtitle">Recently recovered</h4>
+            <h4 className="operations-alerts-subtitle">Recently resolved</h4>
             <ol className="operations-alerts is-recent">
               {recovered.map((alert) => alertRow(alert, false))}
             </ol>

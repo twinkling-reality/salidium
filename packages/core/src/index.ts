@@ -18,6 +18,7 @@ export {
   looksLikeTask,
 } from './claims/classifyAgentMessage.ts';
 export { markdownShape, plainText } from './claims/markdown.ts';
+export { byteLabelVectors, formatBytes } from './format/bytes.ts';
 export { cloneState, replayEvents } from './history/replay.ts';
 export * from './projections/projectSession.ts';
 export {

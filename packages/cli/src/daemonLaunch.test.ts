@@ -470,7 +470,7 @@ describe('detached daemon launch failures', () => {
       expect(doctor.stdout).not.toMatch(/daemon not running/);
 
       const status = run(home, ['status'], '0');
-      expect(status.stdout).toMatch(new RegExp(`running: pid ${sleeper.pid}.*not answering`));
+      expect(status.stdout).toMatch(new RegExp(`Daemon: Not answering · pid ${sleeper.pid}`));
       // Zero still means the daemon answered, which this one did not.
       expect(status.status).toBe(1);
     } finally {
@@ -525,7 +525,7 @@ describe('detached daemon launch failures', () => {
     );
 
     expect(run(home, ['doctor'], '0').stdout).toMatch(/daemon not running/);
-    expect(run(home, ['status'], '0').stdout).toMatch(/^not running$/m);
+    expect(run(home, ['status'], '0').stdout).toMatch(/^Daemon: Stopped$/m);
   });
 
   it('authenticates and replaces a running daemon whose version differs from the CLI', () => {

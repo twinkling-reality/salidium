@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { formatBytes } from '@salidium/core';
 import type {
   EffectiveOperationalConfig,
   LocalAlert,
@@ -74,12 +75,23 @@ function alertId(key: string, at: string): string {
   return createHash('sha256').update(`${key}\0${at}`).digest('hex').slice(0, 24);
 }
 
+/*
+ * A condition says both what turning on means and what turning off means.
+ *
+ * Only the first half used to exist, so recovery was rendered in the words that announced the
+ * problem. The macOS notification prefixed "Recovered: " and kept the body, which produced
+ * "Recovered: The durable queue is growing / Net growth crossed 100 files in the sampled window":
+ * an all-clear that a reader can only tell from the alarm by parsing the first word. The app's
+ * recovered list had no prefix at all and was distinguishable from an active alert by a CSS class.
+ */
 interface Condition {
   key: string;
   kind: LocalAlert['kind'];
   severity: LocalAlert['severity'];
   title: string;
   detail: string;
+  recoveryTitle: string;
+  recoveryDetail: string;
 }
 
 function conditions(
@@ -101,7 +113,9 @@ function conditions(
       kind: 'queue-age',
       severity: 'warning',
       title: 'Queued work is aging',
-      detail: `The oldest durable queue item is at least ${values.alerts.queueAgeMinutes.value} minutes old.`,
+      detail: `The oldest item waiting to be stored is at least ${values.alerts.queueAgeMinutes.value} minutes old.`,
+      recoveryTitle: 'Queued work is moving again',
+      recoveryDetail: `Nothing has been waiting longer than ${values.alerts.queueAgeMinutes.value} minutes. No action is needed.`,
     });
   const velocity = snapshot.estimates.queueVelocity;
   if (
@@ -113,8 +127,10 @@ function conditions(
       key: 'queue-growth',
       kind: 'queue-growth',
       severity: 'warning',
-      title: 'The durable queue is growing',
-      detail: `Net growth crossed ${values.alerts.queueGrowthFiles.value} files in the sampled window.`,
+      title: 'Salidium is falling behind',
+      detail: `Your agents are producing work faster than Salidium is storing it: ${values.alerts.queueGrowthFiles.value} more files are waiting than when this window started. Nothing is lost while it waits.`,
+      recoveryTitle: 'Salidium caught up',
+      recoveryDetail: 'The backlog stopped growing. No action is needed.',
     });
   if (
     snapshot.store.totalBytes !== null &&
@@ -125,7 +141,15 @@ function conditions(
       kind: 'database-size',
       severity: 'notice',
       title: 'Local storage crossed its warning size',
-      detail: `The SQLite store and recovery log use ${snapshot.store.totalBytes} bytes.`,
+      detail: `Salidium is using ${formatBytes(snapshot.store.totalBytes)} on this Mac, past the ${formatBytes(values.alerts.databaseSizeBytes.value)} mark. Retention is set to ${snapshot.store.retention === 'forever' ? 'keep everything forever' : `${snapshot.store.retention} days`}.`,
+      recoveryTitle: 'Local storage is back under its warning size',
+      /*
+       * No measurement in here. Recovery wording is composed while the condition is still true and
+       * refreshed only for as long as it stays true, so quoting `store.totalBytes` would put the
+       * size that raised the alert into the sentence saying the alert is over: "Salidium is using
+       * 5.01 GiB, below the 5.00 GiB mark". The threshold is config and does not have that problem.
+       */
+      recoveryDetail: `Salidium is back below ${formatBytes(values.alerts.databaseSizeBytes.value)}. Open Salidium to see the current size.`,
     });
   if (
     snapshot.gaps.latestFingerprint &&
@@ -137,9 +161,15 @@ function conditions(
       severity: snapshot.gaps.active > 0 ? 'critical' : 'warning',
       title:
         snapshot.gaps.active > 0
-          ? 'Collection loss is active'
-          : 'A new collection gap was recorded',
-      detail: 'The gap ledger changed. Exact dropped-event counts remain unavailable.',
+          ? 'Salidium is missing some activity'
+          : 'Salidium missed some activity',
+      detail:
+        snapshot.gaps.active > 0
+          ? 'Agent activity is happening that Salidium is not recording. Reports covering this period will be incomplete. How much was missed cannot be counted.'
+          : 'A period of agent activity went unrecorded. Reports covering it will be incomplete. How much was missed cannot be counted.',
+      recoveryTitle: 'Salidium is recording everything again',
+      recoveryDetail:
+        'Collection is complete from here on. Reports covering the earlier gap stay incomplete.',
     });
   if (snapshot.daemon.state !== 'running')
     out.push({
@@ -148,17 +178,24 @@ function conditions(
       severity: snapshot.daemon.state === 'unresponsive' ? 'critical' : 'warning',
       title:
         snapshot.daemon.state === 'unresponsive'
-          ? 'The daemon is not answering'
-          : 'The daemon is stopped',
-      detail: `Daemon state changed to ${snapshot.daemon.state}.`,
+          ? 'Salidium is not responding'
+          : 'Salidium has stopped',
+      detail:
+        snapshot.daemon.state === 'unresponsive'
+          ? 'Salidium is running but not answering. Agent activity is not being recorded while this lasts.'
+          : 'Salidium is not running. Agent activity is not being recorded until it starts again.',
+      recoveryTitle: 'Salidium is running again',
+      recoveryDetail: 'Recording has resumed. No action is needed.',
     });
   if (snapshot.maintenance?.phase === 'failure' || snapshot.maintenance?.phase === 'recovery')
     out.push({
       key: `maintenance-failure:${snapshot.maintenance.operationId}`,
       kind: 'maintenance-failure',
       severity: 'critical',
-      title: 'Maintenance needs recovery',
+      title: 'Maintenance did not finish',
       detail: (snapshot.maintenance.failure ?? snapshot.maintenance.message).slice(0, 500),
+      recoveryTitle: 'Maintenance finished',
+      recoveryDetail: 'The operation that needed attention completed. No action is needed.',
     });
   for (const hook of snapshot.hooks) {
     const prior = priorHookTrust[hook.id];
@@ -169,8 +206,14 @@ function conditions(
         key: `hook-trust-change:${hook.id}`,
         kind: 'hook-trust-change',
         severity: hook.trust === 'modified' || hook.trust === 'untrusted' ? 'critical' : 'notice',
-        title: `${hook.name} hook trust changed`,
-        detail: `Trust changed from ${prior} to ${hook.trust}.`,
+        title: unsafe
+          ? `The ${hook.name} hook is no longer approved`
+          : `The ${hook.name} hook was approved`,
+        detail: unsafe
+          ? `The hook file changed since you approved it (${prior} to ${hook.trust}). Salidium will not trust it until you approve the new version.`
+          : `Approval state went from ${prior} to ${hook.trust}.`,
+        recoveryTitle: `The ${hook.name} hook is approved again`,
+        recoveryDetail: 'The hook file matches an approved version. No action is needed.',
       });
   }
   return out;
@@ -219,6 +262,8 @@ export async function evaluateLocalAlerts(
       existing.severity = condition.severity;
       existing.title = condition.title;
       existing.detail = condition.detail;
+      existing.recoveryTitle = condition.recoveryTitle;
+      existing.recoveryDetail = condition.recoveryDetail;
       existing.notificationEligible = false;
       continue;
     }
@@ -233,6 +278,8 @@ export async function evaluateLocalAlerts(
       state: 'active',
       title: condition.title,
       detail: condition.detail,
+      recoveryTitle: condition.recoveryTitle,
+      recoveryDetail: condition.recoveryDetail,
       firstSeenAt: at,
       lastSeenAt: at,
       lastTransitionAt: at,
