@@ -67,7 +67,7 @@ other operating systems.
 
 ### Upgrading from 0.3.0
 
-Install 0.4.0 normally and keep the same `SALIDIUM_HOME`. The first 0.4.0 daemon start upgrades the
+Install 0.4.x normally and keep the same `SALIDIUM_HOME`. The first 0.4.x daemon start upgrades the
 version 0.3.0 schema in one transaction before hooks or the HTTP listener start. It does not rewrite
 the historical event archive as part of that transaction.
 
@@ -79,7 +79,7 @@ start. Automatic retention is deferred, and retention application, compaction, a
 optimization refuse to run, until preparation is complete.
 
 An installed macOS always-on service runs a stable copy of the packaged CLI and interface. After
-upgrading the package, run `salidium service install` to stage and activate the 0.4.0 copy before
+upgrading the package, run `salidium service install` to stage and activate the new copy before
 starting or restarting that service. The update preserves the event store, queue, settings, reports,
 and other local data; installation enables and starts the updated login items.
 
