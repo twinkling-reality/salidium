@@ -74,7 +74,7 @@ monorepo, prohibit workspace/git/path dependencies, verify the package digest pr
 oldest/newest supported versions. A server still rejects raw or unknown fields from a compromised
 client. Audit authorization decisions, consent, accepted ranges and conflicts, membership, memory
 lifecycle, retrieval reason codes, export, deletion stages, restore fences, keys, service identities,
-and contract releases—but never payload content, paths, raw ids, tokens, or unbounded exceptions.
+and contract releases, but never payload content, paths, raw ids, tokens, or unbounded exceptions.
 
 ## Required adversarial tests
 

@@ -3065,7 +3065,6 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  text-transform: capitalize;
 }
 
 .operations-health::before {
@@ -3267,7 +3266,6 @@
   color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  text-transform: capitalize;
 }
 
 .maintenance-state p {
@@ -3358,10 +3356,14 @@
   font-size: var(--text-xs);
 }
 
-.operations-alerts small {
-  text-transform: capitalize;
-}
-
+/*
+ * No `text-transform` on any of the three rules above.
+ *
+ * Each capitalized an enum that reached the page raw: `health.overall` as "attention",
+ * `maintenance.phase` as "failure", and an alert's state line as "notice · recovered". They now
+ * carry written labels, and capitalize turned "Needs attention now" into "Needs Attention Now".
+ * `.setting-source` keeps its rule: those really are enum values.
+ */
 .operations-alerts-subtitle {
   margin: var(--space-3) 0 0;
   color: var(--text-tertiary);

@@ -45,7 +45,7 @@ Put local handoffs, audits, corpus measurements, and planning notes under `.priv
 `.private.md` or `.internal.md` suffix. Those locations are ignored. Public architecture decisions
 belong in `docs/` and should describe the durable contract rather than a private work diary.
 
-Before opening a pull request, review the entire diff—including generated and binary files—and run
+Before opening a pull request, review the entire diff, including generated and binary files, and run
 the checks above. Report suspected vulnerabilities or accidental private data through
 [SECURITY.md](SECURITY.md), not a public issue.
 

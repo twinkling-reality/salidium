@@ -54,7 +54,7 @@ The installer copies the current packaged CLI and UI into `~/.salidium/service/c
 compiles the small AppKit menu helper locally with Apple's Swift compiler. It fails before changing
 the active login service if the compiler is unavailable; install Xcode Command Line Tools and retry
 in that case. Re-run `salidium service install` after upgrading Salidium to replace the stable copy.
-LaunchAgent files contain only executable and state-directory paths—never the daemon bearer token.
+LaunchAgent files contain only executable and state-directory paths, never the daemon bearer token.
 Supported `SALIDIUM_*` environment overrides that are present during installation are copied into
 the private LaunchAgent so login startup has the same policy; re-run installation after changing an
 environment override.
@@ -92,8 +92,8 @@ and the active explanation mode.
 `salidium stop` pauses new collection before it stops the background service. Work already in the
 queue stays there and the command prints its exact observed file count and bytes. The pause is a
 24-hour lease. A later ordinary Salidium command resumes collection, and `salidium resume` does so
-explicitly. Lifecycle commands whose purpose is to preserve state—`pause`, `stop`, and every
-`service` command—and coordinated `storage optimize` do not implicitly resume it. If the daemon
+explicitly. Lifecycle commands whose purpose is to preserve state (`pause`, `stop`, and every
+`service` command) and coordinated `storage optimize` do not implicitly resume it. If the daemon
 crashes while paused and no ordinary command runs, the marker cannot clear itself. The next ordinary
 command resumes collection and preserves that interval in the collection-gap ledger instead of
 silently forgetting it.
@@ -148,8 +148,11 @@ set `SALIDIUM_HISTORY_DAYS` to a whole number zero or greater to change that win
 use `--interval=SECONDS` from 0.5 to 60 to choose the display interval. Queue depth, oldest item,
 store and recovery-log bytes, gaps, daemon and pause state, maintenance, and hook configuration are
 observations. Queue velocity, drain rate, storage growth, and time to empty appear only when enough
-bounded samples exist and are labelled estimates. `--json` returns the version 1 operations
-contract; `--quiet` returns only its exit meaning.
+bounded samples exist and are labelled estimates. `Store outlook` restates two of those as a
+decision: roughly how much the store gains in a day at the rate just measured, and how far it is
+from the size that raises the `alerts.databaseSizeBytes` notice. Both halves are projections, and a
+rate measured while agents are busy does not continue overnight. `--json` returns the version 1
+operations contract; `--quiet` returns only its exit meaning.
 
 `salidium config show` prints each effective setting and whether it came from a shipped default, the
 stored file, or an environment override. Change one supported value with
@@ -174,7 +177,9 @@ verified copy and replacement, restarts, and returns collection to its prior sta
 phase after completion, failure, or crash recovery.
 
 Local alerts are visible in status and the rail. They cover an aging or growing queue, database
-size, new collection gaps, daemon health, failed maintenance, and hook-trust changes. Acknowledge an
+size, new collection gaps, daemon health, failed maintenance, and hook-trust changes. An alert
+carries wording for both of its edges, so a recovery is announced in its own words rather than in
+the ones that raised it. Acknowledge an
 episode in the rail or with `salidium maintenance acknowledge ALERT_ID`. Acknowledgement lasts until
 recovery; repeated samples do not create repeated alerts, and cooldown applies before a later new
 episode can notify again.
@@ -182,7 +187,7 @@ episode can notify again.
 Native desktop notifications are opt-in because notification previews can appear on a lock screen.
 Enable them in **Local policy** or with
 `salidium config set alerts.nativeNotifications true`. Notifications contain only the minimized
-alert title and detail—never transcript text, prompts, commands, tokens, or filesystem paths—and
+alert title and detail, never transcript text, prompts, commands, tokens, or filesystem paths, and
 fire only for a new or recovered episode. Salidium uses the operating system's local notification
 facility on macOS, Windows, and Linux when one is available. Delivery is best effort and respects
 OS notification permissions. A daemon cannot report its own crash after it has exited. On macOS,

@@ -346,6 +346,17 @@ export const LocalAlertSchema = z
     state: z.enum(['active', 'acknowledged', 'recovered']),
     title: z.string().min(1).max(160),
     detail: z.string().min(1).max(500),
+    /*
+     * What to say once the condition is over.
+     *
+     * Without these a recovered alert can only be shown in the words that announced it, and every
+     * surface that renders one inherits the present tense: the macOS notification read "Recovered:
+     * The durable queue is growing", which is the all-clear and the alarm in one line. Optional
+     * because a ledger written before this field existed still has to parse; readers fall back to
+     * `title` and `detail`.
+     */
+    recoveryTitle: z.string().min(1).max(160).optional(),
+    recoveryDetail: z.string().min(1).max(500).optional(),
     firstSeenAt: CanonicalTimestampSchema,
     lastSeenAt: CanonicalTimestampSchema,
     lastTransitionAt: CanonicalTimestampSchema,

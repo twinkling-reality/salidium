@@ -62,6 +62,13 @@ describe('native operational notifications', () => {
     expect(recovered?.args).toContain('--urgency=low');
     expect(recovered?.args.join(' ')).toContain('Recovered: Queued work is aging');
 
+    /*
+     * A ledger written before `recoveryTitle` existed still notifies, in the old words. This is
+     * the only path the prefix survives on, and it is why the assertion above still reads that
+     * way: the factory omits both recovery fields.
+     */
+    expect(recovered?.args.join(' ')).not.toContain('Queued work is moving again');
+
     const maintenance = resolveNativeNotification(
       alert({
         kind: 'maintenance-failure',
@@ -71,6 +78,34 @@ describe('native operational notifications', () => {
     );
     expect(maintenance?.args.join(' ')).not.toContain('/Users/alice/private-project');
     expect(maintenance?.args.join(' ')).not.toContain('ghp_canary');
+  });
+
+  /*
+   * The all-clear is not the alarm with a word in front of it.
+   *
+   * A real recovered `queue-growth` notification read "Recovered: The durable queue is growing /
+   * Net growth crossed 100 files in the sampled window. Open Salidium or run salidium status for
+   * details." Nothing after the first word said the condition was over, and it closed by sending
+   * the reader to investigate something that had already stopped.
+   */
+  it('states a recovery in its own words and asks for nothing', () => {
+    const invocation = resolveNativeNotification(
+      alert({
+        kind: 'queue-growth',
+        state: 'recovered',
+        title: 'Salidium is falling behind',
+        detail: 'Your agents are producing work faster than Salidium is storing it.',
+        recoveryTitle: 'Salidium caught up',
+        recoveryDetail: 'The backlog stopped growing. No action is needed.',
+      }),
+      { platform: 'darwin', environment: {}, resolveExecutable: resolver },
+    );
+    const text = invocation?.args.join(' ') ?? '';
+    expect(text).toContain('Salidium caught up');
+    expect(text).toContain('No action is needed.');
+    expect(text).not.toContain('falling behind');
+    expect(text).not.toContain('Recovered:');
+    expect(text).not.toContain('run salidium status');
   });
 
   it('encodes Windows notification content before it crosses the PowerShell boundary', () => {

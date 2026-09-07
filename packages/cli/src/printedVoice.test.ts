@@ -3,6 +3,32 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const packages = join(import.meta.dirname, '..', '..');
+const repository = join(packages, '..');
+
+/*
+ * Directories whose contents are not written by hand: dependencies, build output, and the
+ * artefacts a test run leaves behind. Walking them is slow and anything found inside is not
+ * something a person can fix by editing it.
+ */
+const SKIPPED = new Set([
+  '.git',
+  'node_modules',
+  'dist',
+  'bundle',
+  'test-results',
+  'playwright-report',
+  '.next',
+]);
+
+function markdown(dir: string, found: string[] = []): string[] {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (SKIPPED.has(entry.name)) continue;
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) markdown(path, found);
+    else if (entry.name.endsWith('.md')) found.push(path);
+  }
+  return found;
+}
 
 function sources(dir: string, found: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -55,6 +81,46 @@ describe('what the product prints', () => {
         });
       }
     }
+    expect(offenders).toEqual([]);
+  });
+
+  /*
+   * The menu bar is a product surface and was never covered.
+   *
+   * The rule above walks each package's `src` for `.ts` and `.tsx`. `SalidiumMenuBar.swift` is under
+   * `packages/cli/native`, so it sat outside the sweep with four em dashes in the first line of
+   * the menu: "Salidium — Healthy" and its three siblings, which is the first thing anyone sees
+   * on clicking the icon. Same comment handling, `//` only: the file has no block comments and a
+   * Swift string containing `//` would lose a line rather than invent a violation, which is the
+   * same safe direction the function above documents.
+   */
+  it('never contains an em dash in the menu bar either', () => {
+    const file = join(packages, 'cli', 'native', 'SalidiumMenuBar.swift');
+    const offenders = readFileSync(file, 'utf8')
+      .replace(/\/\/[^\n]*/g, '')
+      .split('\n')
+      .flatMap((line, i) => (line.includes('—') ? [`SalidiumMenuBar.swift:${i + 1}`] : []));
+    expect(offenders).toEqual([]);
+  });
+});
+
+/*
+ * The same rule for prose, which had eight and no guard.
+ *
+ * `using-salidium.md` explained what a notification contains in a sentence with an em dash on each
+ * side of the exclusion list, and `CONTRIBUTING.md` opened its review instruction with a pair.
+ * These are read by people deciding whether to trust the product and by people about to contribute
+ * to it, which makes them a surface even though no process prints them.
+ */
+describe('what the documentation says', () => {
+  it('never contains an em dash', () => {
+    const offenders = markdown(repository).flatMap((file) =>
+      readFileSync(file, 'utf8')
+        .split('\n')
+        .flatMap((line, i) =>
+          line.includes('—') ? [`${file.slice(repository.length + 1)}:${i + 1}`] : [],
+        ),
+    );
     expect(offenders).toEqual([]);
   });
 });

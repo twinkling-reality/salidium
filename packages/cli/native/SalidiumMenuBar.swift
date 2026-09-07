@@ -138,7 +138,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         snapshot.pid = integer(daemonHealth["pid"])
         if let collection = health["collection"] as? [String: Any],
            let state = collection["state"] as? String {
-            snapshot.collection = state == "active" ? "Active" : "Paused"
+            snapshot.collection = state == "active" ? "On" : "Paused"
         }
         if let queue = health["queue"] as? [String: Any] {
             snapshot.queueFiles = integer(queue["files"])
@@ -170,9 +170,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     }
 
     private static func retentionLabel(_ value: Any) -> String {
-        if let text = value as? String { return text == "forever" ? "Forever" : text }
-        if let days = integer(value) { return "\(days) days" }
-        return "Unavailable"
+        if let text = value as? String { return text == "forever" ? "kept forever" : text }
+        if let days = integer(value) { return "kept \(days) days" }
+        return "retention unavailable"
     }
 
     private static func titleCase(_ value: String) -> String {
@@ -191,21 +191,24 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         menu.removeAllItems()
         configureStatusIcon()
 
+        // No em dash in anything the product says. `printedVoice.test.ts` reads this file for them.
         let heading: String
         switch snapshot.health {
-        case .healthy: heading = "Salidium — Healthy"
-        case .attention: heading = "Salidium — Needs Attention"
-        case .critical: heading = "Salidium — Critical"
-        case .offline: heading = "Salidium — Stopped"
+        case .healthy: heading = "Salidium · Healthy"
+        case .attention: heading = "Salidium · Needs Attention"
+        case .critical: heading = "Salidium · Critical"
+        case .offline: heading = "Salidium · Not Running"
         }
         addLabel(heading, emphasized: true)
         menu.addItem(.separator())
 
-        addLabel(snapshot.pid.map { "Running · PID \($0)" } ?? "Daemon · Not running")
-        addLabel("Collection · \(snapshot.collection)")
-        addLabel("Queue · \(queueLabel())")
-        addLabel("Storage · \(storageLabel())")
-        addLabel(snapshot.activeAlerts == 0 ? "Alerts · None active" : "Alerts · \(snapshot.activeAlerts) active")
+        addLabel(snapshot.pid.map { "Running · PID \($0)" } ?? "Not running")
+        addLabel("Recording · \(snapshot.collection)")
+        addLabel("Waiting to be stored · \(queueLabel())")
+        addLabel("On this Mac · \(storageLabel())")
+        addLabel(snapshot.activeAlerts == 0
+                 ? "Nothing needs attention"
+                 : "\(snapshot.activeAlerts) need\(snapshot.activeAlerts == 1 ? "s" : "") attention")
         if let maintenance = snapshot.maintenance { addLabel("Maintenance · \(maintenance)") }
 
         menu.addItem(.separator())
@@ -217,7 +220,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
             addAction(paused ? "Resume Collection" : "Pause Collection",
                       paused ? #selector(resumeCollection) : #selector(pauseCollection),
                       enabled: true)
-            addAction("Drain Queue Toward Empty", #selector(drainQueue), enabled: true)
+            addAction("Store One Batch Now", #selector(drainQueue), enabled: true)
             addAction("Stop Salidium", #selector(stopSalidium), enabled: true)
         }
         addAction("Refresh Now", #selector(refreshNow), key: "r", enabled: true)
@@ -259,16 +262,23 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
 
     private func storageLabel() -> String {
         guard let bytes = snapshot.storeBytes else { return "Unavailable" }
-        return "\(Self.byteLabel(bytes)) · \(snapshot.retention) retention"
+        return "\(Self.byteLabel(bytes)) · \(snapshot.retention)"
     }
 
+    /*
+     * The same rendering as `formatBytes` in `@salidium/core`, which the app and the CLI use.
+     *
+     * Decimal, matching Finder, but not `ByteCountFormatter`: its adaptive mode renders one byte as
+     * "0 KB" and 999999 as "1 MB", and the same function formats rates where that loses the value.
+     * `byteLabelVectors` in that module pins the cases, and `macosService.test.ts` checks them
+     * against this function, because Swift cannot import it.
+     */
     private static func byteLabel(_ bytes: Int) -> String {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .file
-        formatter.allowedUnits = [.useKB, .useMB, .useGB]
-        formatter.includesUnit = true
-        formatter.isAdaptive = true
-        return formatter.string(fromByteCount: Int64(bytes))
+        let value = Double(bytes)
+        if bytes < 1000 { return "\(bytes) B" }
+        if bytes < 1000 * 1000 { return String(format: "%.1f KB", value / 1000) }
+        if bytes < 1000 * 1000 * 1000 { return String(format: "%.1f MB", value / (1000 * 1000)) }
+        return String(format: "%.2f GB", value / (1000 * 1000 * 1000))
     }
 
     private func addLabel(_ title: String, emphasized: Bool = false) {

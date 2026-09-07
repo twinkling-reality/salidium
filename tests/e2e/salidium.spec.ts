@@ -601,9 +601,18 @@ test('ingest and storage reports local cost and controls collection', async ({ p
   await expect(ingest.getByRole('heading', { name: 'Local alerts' })).toBeVisible();
   await expect(ingest.getByRole('button', { name: 'Local policy' })).toBeVisible();
   await expect(ingest.getByText('Active', { exact: true })).toBeVisible();
-  await expect(ingest).toContainText('Queued now');
-  await expect(ingest).toContainText('Store now');
-  await expect(ingest).toContainText('retention');
+  await expect(ingest).toContainText('Waiting to be stored');
+  await expect(ingest).toContainText('On this Mac');
+  await expect(ingest).toContainText('Kept forever');
+  /*
+   * Where the store stands against the size that raises an alert.
+   *
+   * Retention defaults to keeping everything and the only signal that the store had grown was that
+   * alert firing at 5 GB, which arrives once there are already 5 GB. A fixture store is small
+   * enough that the room left rounds to the whole mark, which is the case that used to render as
+   * "5.00 GB below the 5.00 GB warning mark".
+   */
+  await expect(ingest).toContainText('warns at 5.00 GB');
   await expect(ingest.getByRole('heading', { name: 'Where it runs' })).toBeVisible();
   await expect(ingest).toContainText('Closing it does not stop collection');
   await expect(ingest).toContainText('127.0.0.1:');
@@ -687,8 +696,10 @@ test('rare operations failures remain legible and actionable', async ({
       kind: 'collection-gap' as const,
       severity: 'notice' as const,
       state: 'recovered' as const,
-      title: 'Collection gap recovered',
-      detail: 'Collection resumed and new observations are durable.',
+      title: 'Salidium missed some activity',
+      detail: 'A period of agent activity went unrecorded.',
+      recoveryTitle: 'Salidium is recording everything again',
+      recoveryDetail: 'Collection is complete from here on.',
       acknowledgedAt: null,
       recoveredAt: at,
     };
@@ -719,18 +730,37 @@ test('rare operations failures remain legible and actionable', async ({
   await page.getByRole('button', { name: 'Ingest & Storage', exact: true }).click();
   const ingest = page.getByRole('complementary', { name: 'Ingest & Storage' });
 
-  await expect(ingest.getByText('critical', { exact: true })).toBeVisible();
+  /*
+   * Every state a reader sees here is in words, not in the enum that produced it.
+   *
+   * The badge printed `health.overall` straight through, so a critical store said "critical" in
+   * lower case beside a heading that says "Needs attention"; the maintenance row printed
+   * "failure · 65%"; and an alert's only state line was "notice · recovered".
+   */
+  await expect(ingest.getByText('Critical', { exact: true })).toBeVisible();
   await expect(ingest.getByText('Maintenance needs recovery')).toBeVisible();
   await expect(ingest.getByText('The original store is intact.')).toBeVisible();
   await expect(ingest.getByText('Verification stopped before replacement.')).toBeVisible();
-  await expect(ingest.getByText('failure · 65%', { exact: true })).toBeVisible();
+  await expect(ingest.getByText('Did not finish · 65%', { exact: true })).toBeVisible();
   await expect(ingest.getByRole('progressbar', { name: 'Maintenance progress' })).toHaveAttribute(
     'value',
     '0.65',
   );
-  await expect(ingest.getByText('Recently recovered')).toBeVisible();
-  await expect(ingest.getByText('Collection gap recovered')).toBeVisible();
-  await expect(ingest.getByText('notice · recovered', { exact: true })).toBeVisible();
+  await expect(ingest.getByText('Needs attention now', { exact: true })).toBeVisible();
+
+  /*
+   * A resolved alert is shown in its own words rather than the ones that raised it.
+   *
+   * The row rendered `title` and `detail` whatever the state, so the recovered entry repeated the
+   * problem in the present tense and differed from an active one by a CSS class. The macOS
+   * notification had the same fault from the same source: "Recovered: The durable queue is
+   * growing".
+   */
+  await expect(ingest.getByText('Recently resolved')).toBeVisible();
+  await expect(ingest.getByText('Salidium is recording everything again')).toBeVisible();
+  await expect(ingest.getByText('Collection is complete from here on.')).toBeVisible();
+  await expect(ingest.getByText('Salidium missed some activity')).toHaveCount(0);
+  await expect(ingest.getByText('Over', { exact: true })).toBeVisible();
   await expect(ingest.getByRole('button', { name: 'Acknowledge' })).toBeVisible();
   await ingest.getByText('Maintenance needs recovery').scrollIntoViewIfNeeded();
   await page.screenshot({

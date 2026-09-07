@@ -14,7 +14,7 @@ import { arch, homedir, platform, release } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { basename as pathBasename } from '@salidium/core';
+import { formatBytes, basename as pathBasename } from '@salidium/core';
 import {
   acknowledgeLocalAlert,
   resumeCollection as clearCollectionPause,
@@ -883,10 +883,10 @@ async function main(argv: string[]): Promise<number> {
         );
         process.stdout.write(`Policy: ${policy === 'forever' ? 'forever' : `${policy} days`}\n`);
         process.stdout.write(`Store: ${formatBytes(storeBytes)}\n`);
-        if (storeBytes >= 1024 * 1024 * 1024)
+        if (storeBytes >= 1000 * 1000 * 1000)
           process.stdout.write(
             inspectStoreLayout(db).optimized
-              ? 'Storage warning: history is over 1 GiB. Preview exactly what retention would delete before opting in.\n'
+              ? 'Storage warning: history is over 1 GB. Preview exactly what retention would delete before opting in.\n'
               : 'Lossless storage optimization is available before deleting history. Run `salidium storage`, then `salidium storage optimize`; it coordinates queue drain and daemon stop.\n',
           );
         process.stdout.write(`Pinned: ${store.pinnedSessionIds().length}\n`);
@@ -1249,13 +1249,29 @@ async function readOperationsOverview(
   };
 }
 
-function estimateLabel(estimate: OperationsHealthSnapshot['estimates']['queueVelocity']): string {
-  if (!estimate) return 'Unavailable (needs at least two exact samples)';
+/*
+ * An absent estimate says which of the two reasons it is absent for.
+ *
+ * Everything null read "Unavailable (needs at least two exact samples)", which for the drain rate
+ * was printed directly under a velocity line reporting eighty-four of them. `drainRate` is null
+ * whenever the queue is not shrinking, and `timeToEmpty` whenever it is not shrinking or is
+ * already empty; neither has anything to do with how many samples there are.
+ */
+function estimateLabel(
+  estimate: OperationsHealthSnapshot['estimates']['queueVelocity'],
+  absent = 'Unavailable (needs two measurements)',
+): string {
+  if (!estimate) return absent;
   const value =
     estimate.unit === 'bytes/minute'
       ? `${formatBytes(Math.abs(estimate.value))}/minute`
       : Math.abs(estimate.value).toFixed(1);
-  const sign = estimate.value < 0 ? '−' : estimate.value > 0 ? '+' : '';
+  /*
+   * The sign comes from the number as shown, not the number as measured. A velocity of -0.004
+   * files per minute is negative and rounds to 0.0, which printed as "−0.0 files/minute".
+   */
+  const zero = /^[0.]+(?: B\/minute)?$/.test(value);
+  const sign = zero ? '' : estimate.value < 0 ? '−' : '+';
   const unit = estimate.unit === 'bytes/minute' ? '' : ` ${estimate.unit}`;
   return `${sign}${value}${unit} · derived from ${estimate.samples} samples over ${Math.round(estimate.sampleWindowSeconds)}s`;
 }
@@ -1437,12 +1453,20 @@ async function statusCommand(options: {
         );
       } else {
         const health = operations.health;
-        if (health.daemon.state === 'stopped') process.stdout.write('not running\n');
+        /*
+         * One line about the daemon, in one shape.
+         *
+         * A stopped daemon printed a bare "not running" and then "Daemon: Stopped" directly under
+         * it, and an unresponsive one changed the label itself to "Daemon running:" so the colon
+         * fell in a different column than the six lines below it. The bare line existed because
+         * `daemonLaunch.test.ts` asserted on it; what that test is for is that `status` reports a
+         * dead daemon, which "Daemon: Stopped" says on its own.
+         */
         process.stdout.write(
           health.daemon.state === 'running'
             ? `Daemon: Running · pid ${health.daemon.pid} · since ${health.daemon.startedAt}\n`
             : health.daemon.state === 'unresponsive'
-              ? `Daemon running: pid ${health.daemon.pid} · not answering\n`
+              ? `Daemon: Not answering · pid ${health.daemon.pid}\n`
               : 'Daemon: Stopped\n',
         );
         process.stdout.write(
@@ -1467,24 +1491,51 @@ async function statusCommand(options: {
         process.stdout.write(
           `Store (exact): ${health.store.totalBytes === null ? 'Unavailable' : formatBytes(health.store.totalBytes)}, retention ${retentionLabel(health.store.retention)}, last ingest ${health.store.lastIngestAt ?? 'Unavailable'}\n`,
         );
+        /*
+         * How fast the store is filling, and how much room is left before the warning.
+         *
+         * "Storage growth (estimate): +499.8 KiB/minute" was already printed four lines down and
+         * is a number nobody can act on: it does not say whether that is a megabyte a week or a
+         * gigabyte a day. Retention defaults to keeping everything and the only other signal is an
+         * alert that fires at 5 GB, which arrives once there are already 5 GB.
+         */
+        const projection = storageProjection(
+          health.store.totalBytes,
+          health.estimates.storageGrowth,
+          operations.config.values.alerts.databaseSizeBytes.value,
+        );
+        if (projection) process.stdout.write(`Store outlook: ${projection}\n`);
         process.stdout.write(
           `Queue velocity (estimate): ${estimateLabel(health.estimates.queueVelocity)}\n`,
         );
+        const sampled = health.estimates.queueVelocity !== null;
+        const notShrinking = 'Unavailable (the queue is not shrinking)';
         process.stdout.write(
-          `Drain rate (estimate): ${estimateLabel(health.estimates.drainRate)}\n`,
+          `Drain rate (estimate): ${estimateLabel(
+            health.estimates.drainRate,
+            sampled ? notShrinking : undefined,
+          )}\n`,
         );
         process.stdout.write(
           `Storage growth (estimate): ${estimateLabel(health.estimates.storageGrowth)}\n`,
         );
         process.stdout.write(
-          `Time to empty (estimate): ${health.estimates.timeToEmpty ? `${Math.round(health.estimates.timeToEmpty.value)} seconds · derived` : 'Unavailable'}\n`,
+          `Time to empty (estimate): ${
+            health.estimates.timeToEmpty
+              ? `${Math.round(health.estimates.timeToEmpty.value)} seconds · derived`
+              : health.queue.files === 0
+                ? 'Already empty'
+                : sampled
+                  ? notShrinking
+                  : 'Unavailable (needs two measurements)'
+          }\n`,
         );
         process.stdout.write(
           `Health: ${health.overall === 'critical' ? 'Critical' : health.overall === 'attention' ? 'Needs attention' : 'Healthy'}\n`,
         );
         process.stdout.write(`Explanations: ${explanationStateLabel(explanations)}\n`);
         process.stdout.write(
-          `Maintenance: ${health.maintenance ? `${health.maintenance.phase} · ${health.maintenance.message}` : 'Idle'}\n`,
+          `Maintenance: ${health.maintenance ? `${maintenancePhaseLabel(health.maintenance.phase)} · ${health.maintenance.message}` : 'Idle'}\n`,
         );
         process.stdout.write(
           `Alerts: ${operations.alerts.active.length} active${operations.alerts.active.some((alert) => alert.state === 'acknowledged') ? ' (some acknowledged)' : ''}\n`,
@@ -1732,11 +1783,35 @@ async function maintenanceCommand(
   return 2;
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
+function maintenancePhaseLabel(phase: string): string {
+  if (phase === 'failure') return 'Did not finish';
+  if (phase === 'recovery') return 'Recovering';
+  if (phase === 'completed') return 'Finished';
+  if (phase === 'running') return 'Running';
+  return phase;
+}
+
+/** Both halves are labelled projections: a rate measured over an hour does not run overnight. */
+function storageProjection(
+  total: number | null,
+  growth: OperationsHealthSnapshot['estimates']['storageGrowth'],
+  warnAt: number,
+): string {
+  const parts: string[] = [];
+  if (growth && growth.value > 0)
+    parts.push(`about ${formatBytes(growth.value * 60 * 24)} a day at this rate`);
+  if (total !== null) {
+    const mark = formatBytes(warnAt);
+    const room = formatBytes(warnAt - total);
+    parts.push(
+      total >= warnAt
+        ? `past its ${mark} warning mark`
+        : room === mark
+          ? `warns at ${mark}`
+          : `${room} below its ${mark} warning mark`,
+    );
+  }
+  return parts.join(' · ');
 }
 
 function queueLabel(status: CollectionStatus): string {

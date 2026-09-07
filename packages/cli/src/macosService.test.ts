@@ -11,6 +11,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
+import { byteLabelVectors } from '@salidium/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   activateMacOSService,
@@ -340,5 +341,43 @@ describe('macOS always-on service', () => {
       }),
     ).toThrow("without Salidium's ownership marker");
     expect(readFileSync(join(paths.root, 'someone-elses-file'), 'utf8')).toBe('keep');
+  });
+});
+
+/*
+ * The menu bar renders bytes the same way the app and the CLI do.
+ *
+ * It used `ByteCountFormatter` with `.file`, which is decimal, while `formatBytes` in
+ * `@salidium/core` is binary. One store read at one instant was "2.71 GB" in the menu and
+ * "2.53 GiB" in the window that menu opens, and nothing on either surface said which convention
+ * produced it.
+ *
+ * Swift cannot import the module, so this reads the source and checks that every unit and
+ * precision `byteLabelVectors` implies is present in it. That catches the drift that actually
+ * happens, which is one side being changed and the other forgotten; it does not execute the Swift,
+ * so it cannot catch a wrong threshold. The vectors were verified against a real `swift` run when
+ * the function was written.
+ */
+describe('menu bar byte rendering', () => {
+  it('uses the units and precision the shared formatter produces', () => {
+    const swift = readFileSync(
+      join(import.meta.dirname, '..', 'native', 'SalidiumMenuBar.swift'),
+      'utf8',
+    );
+    const body = /private static func byteLabel[\s\S]*?\n {4}}/.exec(swift)?.[0];
+    expect(body).toBeDefined();
+
+    const expected = new Set(
+      byteLabelVectors.map(([, label]) => {
+        const [value, unit] = label.split(' ');
+        const decimals = value.includes('.') ? (value.split('.')[1]?.length ?? 0) : 0;
+        return unit === 'B' ? 'B' : `%.${decimals}f ${unit}`;
+      }),
+    );
+    for (const form of expected) {
+      if (form === 'B') expect(body).toContain(') B"');
+      else expect(body).toContain(form);
+    }
+    expect(body).not.toContain('ByteCountFormatter');
   });
 });
