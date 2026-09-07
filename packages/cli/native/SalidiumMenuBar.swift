@@ -268,18 +268,17 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     /*
      * The same rendering as `formatBytes` in `@salidium/core`, which the app and the CLI use.
      *
-     * This was `ByteCountFormatter` with `.file`, which is decimal, so one store read at one
-     * instant was "2.71 GB" in this menu and "2.53 GiB" in the window the menu opens. A reader who
-     * looked at both saw two sizes for one number and nothing to say which was right.
+     * Decimal, matching Finder, but not `ByteCountFormatter`: its adaptive mode renders one byte as
+     * "0 KB" and 999999 as "1 MB", and the same function formats rates where that loses the value.
      * `byteLabelVectors` in that module pins the cases, and `macosService.test.ts` checks them
      * against this function, because Swift cannot import it.
      */
     private static func byteLabel(_ bytes: Int) -> String {
         let value = Double(bytes)
-        if bytes < 1024 { return "\(bytes) B" }
-        if bytes < 1024 * 1024 { return String(format: "%.1f KiB", value / 1024) }
-        if bytes < 1024 * 1024 * 1024 { return String(format: "%.1f MiB", value / (1024 * 1024)) }
-        return String(format: "%.2f GiB", value / (1024 * 1024 * 1024))
+        if bytes < 1000 { return "\(bytes) B" }
+        if bytes < 1000 * 1000 { return String(format: "%.1f KB", value / 1000) }
+        if bytes < 1000 * 1000 * 1000 { return String(format: "%.1f MB", value / (1000 * 1000)) }
+        return String(format: "%.2f GB", value / (1000 * 1000 * 1000))
     }
 
     private func addLabel(_ title: String, emphasized: Bool = false) {

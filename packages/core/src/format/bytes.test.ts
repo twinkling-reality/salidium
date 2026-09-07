@@ -15,12 +15,17 @@ describe('shared byte rendering', () => {
   });
 
   it('switches unit at each boundary rather than one byte late', () => {
-    expect(formatBytes(1023)).toBe('1023 B');
-    expect(formatBytes(1024)).toBe('1.0 KiB');
-    expect(formatBytes(1024 * 1024 - 1)).toBe('1024.0 KiB');
-    expect(formatBytes(1024 * 1024)).toBe('1.0 MiB');
-    expect(formatBytes(1024 ** 3 - 1)).toBe('1024.0 MiB');
-    expect(formatBytes(1024 ** 3)).toBe('1.00 GiB');
+    expect(formatBytes(999)).toBe('999 B');
+    expect(formatBytes(1000)).toBe('1.0 KB');
+    expect(formatBytes(1000 * 1000 - 1)).toBe('1000.0 KB');
+    expect(formatBytes(1000 * 1000)).toBe('1.0 MB');
+    expect(formatBytes(1000 ** 3 - 1)).toBe('1000.0 MB');
+    expect(formatBytes(1000 ** 3)).toBe('1.00 GB');
+  });
+
+  /* Finder is what a reader compares this against, so the agreement is worth asserting. */
+  it('agrees with what Get Info reports for the same file', () => {
+    expect(formatBytes(2_720_022_528)).toBe('2.72 GB');
   });
 
   /*

@@ -883,10 +883,10 @@ async function main(argv: string[]): Promise<number> {
         );
         process.stdout.write(`Policy: ${policy === 'forever' ? 'forever' : `${policy} days`}\n`);
         process.stdout.write(`Store: ${formatBytes(storeBytes)}\n`);
-        if (storeBytes >= 1024 * 1024 * 1024)
+        if (storeBytes >= 1000 * 1000 * 1000)
           process.stdout.write(
             inspectStoreLayout(db).optimized
-              ? 'Storage warning: history is over 1 GiB. Preview exactly what retention would delete before opting in.\n'
+              ? 'Storage warning: history is over 1 GB. Preview exactly what retention would delete before opting in.\n'
               : 'Lossless storage optimization is available before deleting history. Run `salidium storage`, then `salidium storage optimize`; it coordinates queue drain and daemon stop.\n',
           );
         process.stdout.write(`Pinned: ${store.pinnedSessionIds().length}\n`);
@@ -1497,7 +1497,7 @@ async function statusCommand(options: {
          * "Storage growth (estimate): +499.8 KiB/minute" was already printed four lines down and
          * is a number nobody can act on: it does not say whether that is a megabyte a week or a
          * gigabyte a day. Retention defaults to keeping everything and the only other signal is an
-         * alert that fires at 5 GiB, which arrives once there are already 5 GiB.
+         * alert that fires at 5 GB, which arrives once there are already 5 GB.
          */
         const projection = storageProjection(
           health.store.totalBytes,

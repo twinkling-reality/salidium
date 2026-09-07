@@ -147,7 +147,7 @@ function conditions(
        * No measurement in here. Recovery wording is composed while the condition is still true and
        * refreshed only for as long as it stays true, so quoting `store.totalBytes` would put the
        * size that raised the alert into the sentence saying the alert is over: "Salidium is using
-       * 5.01 GiB, below the 5.00 GiB mark". The threshold is config and does not have that problem.
+       * 5.01 GB, below the 5.00 GB mark". The threshold is config and does not have that problem.
        */
       recoveryDetail: `Salidium is back below ${formatBytes(values.alerts.databaseSizeBytes.value)}. Open Salidium to see the current size.`,
     });

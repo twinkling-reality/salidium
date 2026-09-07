@@ -26,7 +26,13 @@ export const DEFAULT_OPERATIONAL_CONFIG: OperationalConfigSettings = {
   alerts: {
     queueAgeMinutes: 10,
     queueGrowthFiles: 100,
-    databaseSizeBytes: 5 * 1024 * 1024 * 1024,
+    /*
+     * Decimal, to pair with how the size is shown. Left at 5 GiB it read "warns at 5.37 GB", which
+     * is not a number anyone chose, and the rail's own picker offered GiB steps that no longer
+     * matched any label. This lowers the warning by about seven percent; it is a notice about a
+     * local file, and `alerts.databaseSizeBytes` still overrides it.
+     */
+    databaseSizeBytes: 5 * 1000 * 1000 * 1000,
     cooldownMinutes: 30,
     nativeNotifications: false,
   },

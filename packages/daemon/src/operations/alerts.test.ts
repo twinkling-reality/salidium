@@ -67,26 +67,26 @@ class CapturingSink implements AlertSink {
 describe('local alert policy transitions', () => {
   /*
    * Recovery wording is composed while the condition is still true, so it cannot quote a reading
-   * taken then. The `database-size` all-clear said "Salidium is using 5.01 GiB, below the 5.00 GiB
+   * taken then. The `database-size` all-clear said "Salidium is using 5.01 GB, below the 5.00 GB
    * mark", which is the size that raised the alert inside the sentence saying it is over.
    */
   it('never states a measurement in the words it will recover with', async () => {
     const dir = home();
     const config = resolveOperationalConfig(dir, { environment: {} });
     const over = snapshot();
-    over.store.totalBytes = 6 * 1024 ** 3;
+    over.store.totalBytes = 6 * 1000 ** 3;
     const raised = await evaluateLocalAlerts(dir, over, config);
     const alert = raised.active.find((candidate) => candidate.kind === 'database-size');
-    expect(alert?.detail).toContain('6.00 GiB');
+    expect(alert?.detail).toContain('6.00 GB');
     expect(alert?.recoveryDetail).toBeDefined();
-    expect(alert?.recoveryDetail).not.toContain('6.00 GiB');
+    expect(alert?.recoveryDetail).not.toContain('6.00 GB');
 
     const under = snapshot();
-    under.store.totalBytes = 1024 ** 3;
+    under.store.totalBytes = 1000 ** 3;
     const cleared = await evaluateLocalAlerts(dir, under, config);
     const recovered = cleared.recent.find((candidate) => candidate.kind === 'database-size');
     expect(recovered?.state).toBe('recovered');
-    expect(recovered?.recoveryDetail).not.toContain('6.00 GiB');
+    expect(recovered?.recoveryDetail).not.toContain('6.00 GB');
     expect(recovered?.recoveryTitle).toBe('Local storage is back under its warning size');
   });
 

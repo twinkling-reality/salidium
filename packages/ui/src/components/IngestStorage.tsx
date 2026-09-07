@@ -56,10 +56,10 @@ function retentionLabel(value: OperationsHealthSnapshot['store']['retention']): 
 /*
  * What a growth rate means over a day, and how much room is left.
  *
- * The panel showed "+499.8 KiB/min" and nothing else, which is a true number nobody can act on:
+ * The panel showed "+499.8 KB/min" and nothing else, which is a true number nobody can act on:
  * the reader cannot tell from it whether the store gains a megabyte a week or a gigabyte a day.
  * Retention defaults to keeping everything, and the only signal that the store is large was an
- * alert at 5 GiB, by which point there are 5 GiB. A per-day figure and the distance to that mark
+ * alert at 5 GB, by which point there are 5 GB. A per-day figure and the distance to that mark
  * are the two facts that make it a decision instead of a surprise.
  *
  * Both are plainly labelled projections. A rate measured over an hour of heavy agent use does not
@@ -76,7 +76,7 @@ function headroomLabel(total: number | null, warnAt: number): string {
   if (total >= warnAt) return `past its ${mark} warning mark`;
   /*
    * A store small enough that the room left rounds to the whole mark gets the mark on its own.
-   * Otherwise a fresh install reads "5.00 GiB below the 5.00 GiB warning mark", which looks like
+   * Otherwise a fresh install reads "5.00 GB below the 5.00 GB warning mark", which looks like
    * the same number printed twice by mistake.
    */
   const room = formatBytes(warnAt - total);
@@ -572,9 +572,9 @@ function PolicySettings({ config }: { config: EffectiveOperationalConfig }) {
                 change({ alerts: { databaseSizeBytes: Number(event.target.value) } })
               }
             >
-              {[1, 5, 10, 20].map((gib) => (
-                <option value={gib * 1024 * 1024 * 1024} key={gib}>
-                  {gib} GiB
+              {[1, 5, 10, 20].map((gb) => (
+                <option value={gb * 1000 * 1000 * 1000} key={gb}>
+                  {gb} GB
                 </option>
               ))}
             </select>

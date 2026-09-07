@@ -608,11 +608,11 @@ test('ingest and storage reports local cost and controls collection', async ({ p
    * Where the store stands against the size that raises an alert.
    *
    * Retention defaults to keeping everything and the only signal that the store had grown was that
-   * alert firing at 5 GiB, which arrives once there are already 5 GiB. A fixture store is small
+   * alert firing at 5 GB, which arrives once there are already 5 GB. A fixture store is small
    * enough that the room left rounds to the whole mark, which is the case that used to render as
-   * "5.00 GiB below the 5.00 GiB warning mark".
+   * "5.00 GB below the 5.00 GB warning mark".
    */
-  await expect(ingest).toContainText('warns at 5.00 GiB');
+  await expect(ingest).toContainText('warns at 5.00 GB');
   await expect(ingest.getByRole('heading', { name: 'Where it runs' })).toBeVisible();
   await expect(ingest).toContainText('Closing it does not stop collection');
   await expect(ingest).toContainText('127.0.0.1:');
