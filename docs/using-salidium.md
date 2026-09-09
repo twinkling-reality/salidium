@@ -37,13 +37,40 @@ to cover those cases:
 salidium service install
 ```
 
-The menu-bar icon shows healthy, needs-attention, critical, or stopped state. Its menu shows the
-daemon PID, collection state, queue and storage readings, retention, active-alert count, and
-maintenance state. Readings are exact when they can be observed within the safety ceiling and say
-unavailable rather than displaying a partial count as fact. The menu can open Salidium, start or
-stop it, pause or resume collection, drain the queue toward empty for a bounded interval, refresh,
-and open the local data folder. Native alert notifications remain a separate opt-in setting;
-always-on mode does not enable lock-screen notifications.
+The menu-bar icon is the Salidium mark, drawn as a template image so macOS renders it correctly on
+a light or dark menu bar and while its menu is open. State is a change of shape rather than of
+colour alone: the bare mark while recording, a pause glyph while paused, a dot when something needs
+you, a slash when Salidium is running but not recording, and a dimmed mark when it is not running.
+
+The menu leads with one sentence saying whether your agent work is being captured, and it uses the
+same words the alert would: "Recording your agent work", "Salidium is falling behind", "Claude Code
+needs repair", "Paused, recording resumes at 4:30 PM". Below that are the actions that answer
+it, then one storage row showing what Salidium is using on this Mac against its warning size, with
+the growth per day at the current rate. Readings are exact when they can be observed within the
+safety ceiling and say unavailable rather than displaying a partial count as fact.
+
+Choosing an item closes the menu, so an action that takes time says so in two places: the mark
+fades slowly while it runs, and the next time you open the menu its first line is what is
+happening, such as "Storing waiting work". The fade is skipped when Reduce Motion is on; the line
+is not, because it is the part that carries the information.
+
+Rows appear only when they mean something. The queue row and its **Store Waiting Files Now** action
+are shown when work is actually waiting, because an empty queue is the steady state rather than a
+stage work passes through. Maintenance is shown while a phase is running, not after it finished.
+**Local Operations…** opens the panel that holds storage, retention, alert thresholds and provider
+settings, so the menu does not carry a second copy of them. Native alert notifications remain a
+separate opt-in setting; always-on mode does not enable lock-screen notifications.
+
+When a menu action fails, the alert names what you asked for, gives the reason the command
+reported, and offers **Show Log**. The reason stays in the menu after you dismiss it, until you try
+again or the daemon starts, so a refused start does not disappear the moment you press OK.
+
+A provider is reported only when Salidium can see it and something is actually wrong with its
+hooks: malformed, or changed since the agent approved them. A provider you disconnected on purpose,
+or never installed, is not a fault and is not mentioned.
+
+The menu shows aggregate operational state only. It does not list sessions, projects or paths, and
+it does not read events or transcript payloads.
 
 The service starts at login and macOS relaunches it after an unsuccessful exit. A deliberate
 `salidium stop` is a successful exit and stays stopped; **Start Salidium** in the menu or
@@ -93,10 +120,12 @@ and the active explanation mode.
 queue stays there and the command prints its exact observed file count and bytes. The pause is a
 24-hour lease. A later ordinary Salidium command resumes collection, and `salidium resume` does so
 explicitly. Lifecycle commands whose purpose is to preserve state (`pause`, `stop`, and every
-`service` command) and coordinated `storage optimize` do not implicitly resume it. If the daemon
-crashes while paused and no ordinary command runs, the marker cannot clear itself. The next ordinary
-command resumes collection and preserves that interval in the collection-gap ledger instead of
-silently forgetting it.
+`service` command) and coordinated `storage optimize` do not implicitly resume it. Any command can
+be told to leave a pause alone with `--no-resume`, which is for a caller that has already seen the
+daemon answer: the marker it would clear can only be stale if the process that clears leases has
+died, and a live daemon expires its own. If the daemon crashes while paused and no ordinary command
+runs, the marker cannot clear itself. The next ordinary command resumes collection and preserves
+that interval in the collection-gap ledger instead of silently forgetting it.
 
 Use `salidium pause` to stop new hook and transcript observations without stopping the interface.
 Use **Ingest & Storage** in the interface for the same control and its **Local operations** view:
@@ -167,6 +196,25 @@ not preferences.
 Provider lists use comma-separated identifiers, for example
 `salidium config set providers.enabled claude-code,codex`. Use `none` to disable every provider
 adapter after restart without changing provider-owned hook files.
+
+### What is using the space
+
+`salidium storage composition` measures what the store is made of and prints it by part and by
+project, and **Local operations** shows the same measurement as a bar with the projects beneath it.
+The parts are recorded sessions, replay checkpoints, provenance records, reusable space, and the
+remainder, which is indexes and page overhead. That last one is a subtraction rather than its own
+measurement, and it is labelled that way wherever it appears: naming what each index costs needs a
+scan of every page in the file, which takes longer than the answer is worth.
+
+Two of the parts are worth knowing about. Replay checkpoints are derived state that makes a session
+open quickly, and `salidium storage optimize` rebuilds them more compactly. Reusable space is pages
+that deleted history has already freed inside the file but that have not gone back to the disk;
+`salidium retention compact` is what returns them.
+
+The measurement reads the header of every stored event, so it takes about ten seconds on a store of
+a few gigabytes. It is never run on a timer and never as part of health. The daemon runs it on a
+worker with its own connection, so collection and control are unaffected while it works, and the
+answer carries the moment it was true rather than presenting itself as live.
 
 `salidium maintenance queue` lists bounded queue metadata without reading payloads.
 `salidium maintenance drain` asks the running daemon to make bounded batches durable; repeat or add
@@ -274,6 +322,7 @@ nothing is sent to an agent and the deterministic report remains available.
 | `salidium retention apply` | Apply one bounded cleanup batch while the daemon is stopped. |
 | `salidium retention compact` | Integrity-check and reclaim reusable database pages offline. |
 | `salidium storage` | Inspect the event layout and SQLite page size. |
+| `salidium storage composition` | Measure what is using the space, by part and by project. |
 | `salidium config show` / `set` / `reset` | Inspect or change versioned policy with effective-value sources. |
 | `salidium maintenance queue` / `drain` | Inspect bounded queue metadata or drain durable work safely. |
 | `salidium maintenance optimize [--dry-run]` | Preflight or run the coordinated verified storage workflow. |

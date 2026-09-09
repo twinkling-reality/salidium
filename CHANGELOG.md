@@ -1,5 +1,68 @@
 # Changelog
 
+## Unreleased
+
+- Add `--no-resume`, so a caller can run a command without clearing a pause the reader asked for.
+  Implicit resume exists to clear a marker whose owner has died: a pause is a lease that the running
+  daemon expires, so a daemon that crashed while paused leaves collection stopped with nothing able
+  to restart it, and ADR 0003 makes the next ordinary command that recovery step. The flag is for a
+  caller that has already seen the daemon answer, and so cannot be in that case, and whose surface
+  cannot show the reader that recovery happened.
+- Never resume collection from a private worker entrypoint. The daemon schedules that work itself,
+  so it must not be a way to begin recording again on a Salidium that was deliberately paused.
+- Stop the menu bar from resuming a pause you asked for. It only offers actions after a live health
+  response, so it can never be in the crashed-daemon case implicit resume recovers from, and it
+  sends command output to the null device, so choosing **Open Salidium** on a paused Salidium
+  started recording again with nothing anywhere saying so. It now passes `--no-resume`. **Store One
+  Batch Now** no longer appears while paused either, where draining is a no-op and only appeared to
+  work because running the command resumed collection first.
+- Say what is happening in the menu bar instead of reporting readings. It led with a row naming the
+  application, which the icon it was opened from had already established, and then six equal rows of
+  internal state, one of which was the daemon's own process id and another of which was a queue
+  depth whose normal value is zero. It now leads with one sentence in the words the alert already
+  uses, followed by the action that answers it. A finished maintenance operation is no longer shown
+  as though it were still running, the queue row appears only when work is actually waiting, and the
+  alert count is replaced by what the alert says.
+- Tell the truth about whether work is being recorded. `Recording · On` meant only that the pause
+  marker was absent, so it stayed on while a provider's hooks were invalid or no longer trusted. The
+  menu now reads per-provider hook state and names what is wrong in the words the interface already
+  uses, so hooks that need repair are not reported as a provider that is not connected. A provider
+  that is not installed, or that you disconnected on purpose, is not a fault and is not mentioned.
+- Draw the menu-bar icon as the Salidium mark, as a template image, so macOS renders it on light and
+  dark menu bars and while the menu is open. It was a generic filled checkmark with template mode
+  turned off and a colour applied by hand, which identified no application and opted out of that
+  rendering. State is now a change of shape, not of colour alone, which is also the only option a
+  template image leaves: the system paints it one colour, so an amber badge and a red one would
+  arrive identical.
+- Show what local storage is doing in the menu rather than only how large it is, with a bar against
+  the configured warning size and the growth per day at the current rate, which the interface
+  already computed and the menu did not.
+- Show that a menu action is running. Choosing an item closes the menu, so **Store Waiting Files
+  Now** ran the CLI for up to thirty seconds with nothing on screen to say so. The mark now fades
+  slowly while a command runs, and reopening the menu leads with what is happening. Reduce Motion
+  turns off the fade and keeps the line.
+- Answer what is actually using the space. Salidium could say the store was three gigabytes and how
+  fast that was growing, but nothing anywhere could say what was in it, so the only available
+  response to a large store was to delete history and hope. `salidium storage composition` and the
+  **Local operations** panel now measure it: recorded sessions, replay checkpoints, provenance
+  records, reusable space, and the remainder of indexes and page overhead, with the projects that
+  account for it ranked beneath. The remainder is a subtraction and says so. On the store this was
+  built against, replay checkpoints were half a gigabyte of a three gigabyte file, which storage
+  optimization rebuilds and nothing had ever reported.
+- Measure that composition on a worker. It reads the header of every stored event, which is ten
+  seconds on a large store, and `node:sqlite` is synchronous: on the daemon's own loop that would be
+  ten seconds of hooks going unanswered and spooling to disk. The daemon spawns that worker through
+  the same command surface everything else uses, which is why no private worker entrypoint clears a
+  pause: without that, asking what was using the disk would have quietly restarted a deliberate one.
+- Say why the daemon would not start. A refused start reported only the name of the log file that
+  held the reason, so the whole message was an instruction to go and read something; it now carries
+  the reason itself, such as `listen EADDRINUSE: address already in use`, and keeps the path.
+- Handle a failed menu action as a state rather than a moment. The alert said "Salidium could not
+  complete that command" over a sentence ending in an absolute path, named neither what you had
+  asked for nor what to do next, and left nothing behind once dismissed: the menu went back to
+  "Not running" with no sign that a start had just been refused. It now names the action, offers
+  **Show Log**, and keeps the reason in the menu until the next attempt or until the daemon starts.
+
 ## 0.4.1 - 2026-09-07
 
 - State a recovered alert in its own words. Every alert now carries wording for both of its edges,

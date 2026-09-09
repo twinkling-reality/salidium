@@ -8,9 +8,15 @@ import type {
   CanonicalEvent,
   SemanticChange,
   SessionSummary,
+  StorageComposition,
   StoredEvent,
 } from '@salidium/protocol';
-import { ProviderIdSchema, SessionSummarySchema, StoredEventWireSchema } from '@salidium/protocol';
+import {
+  OPERATIONS_CONTRACT_VERSION,
+  ProviderIdSchema,
+  SessionSummarySchema,
+  StoredEventWireSchema,
+} from '@salidium/protocol';
 import type {
   AuditMessageRow,
   CheckpointRow,
@@ -2185,6 +2191,113 @@ export class SqliteStore implements SalidiumStore {
       this.stmts.unpinSession.run(sessionId);
     });
     return true;
+  }
+
+  /*
+   * What the store is made of, measured rather than estimated.
+   *
+   * Every part here is one pass over a table. The events pass is the expensive one: `length(json)`
+   * does not read a blob's payload, but it does read the header of every row, so on a store with
+   * 1.3 million events that is a ten second scan and the reason this never runs on the health path
+   * or on a timer. The daemon runs it on a worker with its own read-only connection for the same
+   * reason it runs usage backfill there: a ten second synchronous scan on the main loop is ten
+   * seconds of unanswered hooks.
+   *
+   * `structure` is deliberately a subtraction. Naming what each index costs needs `dbstat`, which
+   * is a further nine to fifteen seconds because it walks every page in the file, and the answer
+   * it adds is "your indexes are large" rather than anything a reader can act on. The difference
+   * is honest, arrives free, and is labelled as a remainder wherever it is shown.
+   */
+  storageComposition(projectLimit = 12): StorageComposition {
+    const started = Date.now();
+    const scalar = (sql: string): number => {
+      const row = this.db.prepare(sql).get() as Record<string, unknown> | undefined;
+      const value = row ? Object.values(row)[0] : 0;
+      return typeof value === 'number' ? value : Number(value ?? 0);
+    };
+    const pageSize = scalar('PRAGMA page_size');
+    const fileBytes = scalar('PRAGMA page_count') * pageSize;
+    const reusable = scalar('PRAGMA freelist_count') * pageSize;
+
+    const sessions = this.db
+      .prepare(
+        `SELECT id, COALESCE(NULLIF(repo_root, ''), NULLIF(cwd, ''), '') AS project FROM sessions`,
+      )
+      .all() as { id: string; project: string }[];
+    const projectOf = new Map(sessions.map((row) => [row.id, row.project]));
+
+    const perProject = new Map<string, { sessions: number; bytes: number }>();
+    for (const row of sessions) {
+      const entry = perProject.get(row.project) ?? { sessions: 0, bytes: 0 };
+      entry.sessions += 1;
+      perProject.set(row.project, entry);
+    }
+
+    let sessionBytes = 0;
+    let checkpointBytes = 0;
+    const accumulate = (sql: string, into: (bytes: number) => void) => {
+      for (const row of this.db.prepare(sql).all() as { id: string; b: number | null }[]) {
+        const bytes = Number(row.b ?? 0);
+        into(bytes);
+        const project = projectOf.get(row.id);
+        if (project === undefined) continue;
+        const entry = perProject.get(project);
+        if (entry) entry.bytes += bytes;
+      }
+    };
+    accumulate(
+      'SELECT session_id AS id, SUM(length(json)) AS b FROM events GROUP BY session_id',
+      (b) => {
+        sessionBytes += b;
+      },
+    );
+    accumulate(
+      'SELECT session_id AS id, SUM(length(json)) AS b FROM changes GROUP BY session_id',
+      (b) => {
+        sessionBytes += b;
+      },
+    );
+    accumulate(
+      'SELECT session_id AS id, SUM(length(state_json)) AS b FROM checkpoints GROUP BY session_id',
+      (b) => {
+        checkpointBytes += b;
+      },
+    );
+
+    /*
+     * Provenance is stored as text columns rather than one blob, so its size is the sum of the
+     * columns that carry content. `origin` is nullable and an absent one contributes nothing.
+     */
+    const provenanceBytes = scalar(
+      `SELECT COALESCE(SUM(length(session_id) + length(event_id) + length(path)
+         + length(record_hash) + length(captured_at) + length(COALESCE(origin, ''))), 0) AS b
+       FROM raw_record_fingerprints`,
+    );
+
+    const named = sessionBytes + checkpointBytes + provenanceBytes + reusable;
+    const ranked = [...perProject.entries()]
+      .map(([path, value]) => ({ path, sessions: value.sessions, bytes: value.bytes }))
+      .sort((a, b) => b.bytes - a.bytes || b.sessions - a.sessions);
+
+    return {
+      contractVersion: OPERATIONS_CONTRACT_VERSION,
+      state: 'ready',
+      computedAt: new Date(started).toISOString(),
+      elapsedMs: Date.now() - started,
+      fileBytes,
+      sessions: sessions.length,
+      parts: [
+        { key: 'sessions', bytes: sessionBytes },
+        { key: 'checkpoints', bytes: checkpointBytes },
+        { key: 'provenance', bytes: provenanceBytes },
+        // A store measured while it is being written to can name more than the file holds.
+        { key: 'structure', bytes: Math.max(fileBytes - named, 0) },
+        { key: 'reusable', bytes: reusable },
+      ],
+      projects: ranked.slice(0, projectLimit),
+      projectsOmitted: Math.max(ranked.length - projectLimit, 0),
+      failure: null,
+    };
   }
 
   /** Offline space reclamation after bounded cleanup batches. */

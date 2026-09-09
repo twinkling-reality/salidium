@@ -11,6 +11,7 @@ import { relativeTime } from '../lib/format.ts';
 import { type OperationsAction, useAppStore } from '../store/appStore.ts';
 import { ToolButton } from './Controls.tsx';
 import { Loading } from './Loading.tsx';
+import { StorageCompositionView } from './StorageComposition.tsx';
 
 function bytesOrUnavailable(bytes: number | null): string {
   return bytes === null ? 'Unavailable' : formatBytes(bytes);
@@ -874,6 +875,7 @@ export function IngestStorageRail({
         {overview && (
           <div className="is-body">
             <Readout overview={overview} now={now} />
+            <StorageCompositionView now={now} />
             <Runtime health={overview.health} info={info} now={now} />
             <Alerts alerts={overview.alerts} />
             <Controls overview={overview} info={info} />

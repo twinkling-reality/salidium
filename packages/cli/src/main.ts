@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdirSync,
   openSync,
+  readFileSync,
   statfsSync,
   statSync,
 } from 'node:fs';
@@ -14,6 +15,7 @@ import { arch, homedir, platform, release } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { parentPort } from 'node:worker_threads';
 import { formatBytes, basename as pathBasename } from '@salidium/core';
 import {
   acknowledgeLocalAlert,
@@ -83,6 +85,7 @@ import {
   uninstallMacOSService,
 } from './macosService.ts';
 import { runFirstRunOnboarding } from './onboarding.ts';
+import { clearsPauseOnRun } from './pauseOnRun.ts';
 import { renderReport } from './render.ts';
 import { resolveBrowserLaunch, validateSalidiumPort } from './runtime.ts';
 import { providerDisplayName, sessionSearchQuery } from './showSession.ts';
@@ -139,6 +142,7 @@ Usage:
   salidium retention apply      Apply one cleanup batch now (daemon must be stopped)
   salidium retention compact    Return reusable SQLite pages to the OS (daemon must be stopped)
   salidium storage              Show the lossless storage layout and page size
+  salidium storage composition  Measure what is using the space, by part and by project
   salidium storage optimize     Coordinate, copy, verify, and install the compact layout
   salidium pin [session]        Exempt a session from automatic retention
   salidium unpin [session]      Remove the retention exemption
@@ -160,7 +164,9 @@ Environment:
 
 Native Windows imports transcript history but does not install the POSIX live-hook relay.
 Ordinary commands resume an expired or manual pause. pause, stop, service commands, and coordinated
-storage optimize do not; resume changes collection state explicitly.
+storage optimize do not; resume changes collection state explicitly. Add --no-resume to any command
+to leave a pause in place, for a caller that has already seen the daemon answer and so cannot be
+recovering a marker its dead owner left behind.
 `;
 
 const require = createRequire(import.meta.url);
@@ -184,14 +190,10 @@ async function main(argv: string[]): Promise<number> {
   const jsonOutput = argv.includes('--json');
   const quiet = argv.includes('--quiet');
   const positional = argv.filter(
-    (value) => !['--yes', '-y', '--no-open', '--json', '--quiet'].includes(value),
+    (value) => !['--yes', '-y', '--no-open', '--json', '--quiet', '--no-resume'].includes(value),
   );
   const [cmd = 'up', arg, ...args] = positional;
-  if (
-    !['pause', 'resume', 'stop', 'service', '__usage-backfill'].includes(cmd) &&
-    !(cmd === 'storage' && arg === 'optimize')
-  )
-    await implicitlyResumeCollection();
+  if (clearsPauseOnRun(cmd, arg, argv)) await implicitlyResumeCollection();
   switch (cmd) {
     case 'help':
     case '--help':
@@ -227,6 +229,24 @@ async function main(argv: string[]): Promise<number> {
           if (progress.complete) return 0;
           await sleep(10);
         }
+      } finally {
+        store.close();
+      }
+    }
+    /*
+     * The other private worker entrypoint. Measuring what the store is made of reads the header of
+     * every stored event, which is ten seconds on a three gigabyte store, and `node:sqlite` is
+     * synchronous: run on the daemon's loop that is ten seconds of hooks going unanswered and
+     * spooling to disk. It runs here instead, on its own event loop and its own connection, and
+     * posts one message back.
+     */
+    case '__storage-composition': {
+      if (!arg || !resolve(arg).startsWith(`${resolve(salidiumHome)}${sep}`))
+        throw new Error('storage composition store must be inside the Salidium state directory');
+      const store = new SqliteStore(resolve(arg), { concurrentWriter: true });
+      try {
+        parentPort?.postMessage(store.storageComposition());
+        return 0;
       } finally {
         store.close();
       }
@@ -906,9 +926,51 @@ async function main(argv: string[]): Promise<number> {
         process.stderr.write(`no store at ${db}\n`);
         return 1;
       }
-      if (arg !== undefined && arg !== 'optimize') {
-        process.stderr.write('storage accepts only `optimize`\n');
+      if (arg !== undefined && arg !== 'optimize' && arg !== 'composition') {
+        process.stderr.write('storage accepts only `composition` or `optimize`\n');
         return 2;
+      }
+      /*
+       * Measured here rather than asked of the daemon. It is read-only, a typed command is allowed
+       * to take the ten seconds it costs, and this way the answer is available with the daemon
+       * stopped, which is exactly when someone is looking at a store that has grown too large.
+       */
+      if (arg === 'composition') {
+        const store = new SqliteStore(db, { concurrentWriter: true });
+        try {
+          const measured = store.storageComposition();
+          if (jsonOutput) {
+            process.stdout.write(`${JSON.stringify(measured)}\n`);
+            return 0;
+          }
+          const label: Record<string, string> = {
+            sessions: 'Recorded sessions',
+            checkpoints: 'Replay checkpoints',
+            provenance: 'Provenance records',
+            structure: 'Indexes and internal structure',
+            reusable: 'Reusable space',
+          };
+          process.stdout.write(`On this Mac: ${formatBytes(measured.fileBytes ?? 0)}\n`);
+          for (const part of measured.parts)
+            process.stdout.write(
+              `  ${(label[part.key] ?? part.key).padEnd(30)} ${formatBytes(part.bytes)}\n`,
+            );
+          process.stdout.write(
+            `\n${measured.sessions ?? 0} sessions across ${measured.projects.length + measured.projectsOmitted} projects.\n`,
+          );
+          for (const project of measured.projects)
+            process.stdout.write(
+              `  ${formatBytes(project.bytes).padStart(9)}  ${String(project.sessions).padStart(4)} ${project.sessions === 1 ? 'session ' : 'sessions'}  ${project.path || 'No project recorded'}\n`,
+            );
+          if (measured.projectsOmitted > 0)
+            process.stdout.write(`  ${measured.projectsOmitted} more not listed.\n`);
+          process.stdout.write(
+            '\nIndexes and internal structure is the remainder after the named parts, not a separate measurement.\n',
+          );
+          return 0;
+        } finally {
+          store.close();
+        }
       }
       if (arg === undefined) {
         const layout = inspectStoreLayout(db);
@@ -2184,11 +2246,37 @@ async function ensureDaemon(): Promise<DaemonJson> {
   for (let i = 0; i < 100; i++) {
     await sleep(100);
     if (childFailure)
-      throw new Error(`daemon ${childFailure} before it became ready; see ${paths.startupLogFile}`);
+      throw new Error(
+        `daemon ${childFailure} before it became ready: ${startupFailureReason(paths.startupLogFile)}`,
+      );
     const d = readDaemonJson(salidiumHome);
     if (d && d.pid === child.pid && (await alive(d))) return d;
   }
-  throw new Error(`daemon did not start; see ${paths.startupLogFile}`);
+  throw new Error(`daemon did not start: ${startupFailureReason(paths.startupLogFile)}`);
+}
+
+/*
+ * Why the daemon would not start, in the words it used, rather than the path to where it said them.
+ *
+ * A start that fails writes the reason to the startup log and then this reported only the file
+ * name, so the whole message was an instruction to go and read something. In the menu bar that is
+ * worse than useless: the alert cannot be copied out easily and the reader is holding a modal that
+ * names an absolute path in a state directory. The last line of that log is the reason, and it is
+ * one line, so it belongs in the sentence. The path stays for the cases the last line does not
+ * settle.
+ */
+function startupFailureReason(logFile: string): string {
+  try {
+    const lines = readFileSync(logFile, 'utf8')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const last = lines.at(-1);
+    if (last) return `${last.slice(0, 200)} (see ${logFile})`;
+  } catch {
+    /* An unreadable or absent log is itself unremarkable; the path is still worth naming. */
+  }
+  return `see ${logFile}`;
 }
 
 /** Compares ordinary semver versions without adding a runtime dependency to the bundled CLI. */

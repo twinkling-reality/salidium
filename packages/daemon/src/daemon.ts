@@ -20,11 +20,13 @@ import {
   type ExplainerCadence,
   type ExplainerSettings,
   type ExplainerSettingsRequest,
+  OPERATIONS_CONTRACT_VERSION,
   type OperationalConfigPatch,
   type OperationsHealthSnapshot,
   type OperationsOverview,
   type PersonalizationSettingsRequest,
   PROTOCOL_VERSION,
+  type StorageComposition,
 } from '@salidium/protocol';
 import { type DaemonConfig, daemonPaths, resolveDaemonConfig } from './config/daemonConfig.ts';
 import {
@@ -483,6 +485,69 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     return effective;
   };
 
+  /*
+   * The last measurement of what the store is made of, and the worker computing the next one.
+   *
+   * Held in memory rather than written to disk: it is a description of the file as it was at one
+   * moment, it costs ten seconds rather than an hour to produce again, and a stale one restored
+   * across a restart would be the same mistake the menu bar made with its maintenance record.
+   */
+  let composition: StorageComposition = {
+    contractVersion: OPERATIONS_CONTRACT_VERSION,
+    state: 'absent',
+    computedAt: null,
+    elapsedMs: null,
+    fileBytes: null,
+    sessions: null,
+    parts: [],
+    projects: [],
+    projectsOmitted: 0,
+    failure: null,
+  };
+  let compositionWorker: Worker | undefined;
+  const analyzeStorage = (): StorageComposition => {
+    if (compositionWorker) return composition;
+    const runtime = process.argv[1];
+    if (!runtime) {
+      composition = {
+        ...composition,
+        state: 'failed',
+        failure: 'Salidium could not locate its own runtime.',
+      };
+      return composition;
+    }
+    const worker = new Worker(resolve(runtime), {
+      argv: ['__storage-composition', paths.db],
+    });
+    compositionWorker = worker;
+    worker.unref();
+    composition = { ...composition, state: 'running', failure: null };
+    worker.once('message', (message: StorageComposition) => {
+      composition = message;
+    });
+    worker.once('error', (error) => {
+      log.warn('storage composition worker failed', { err: String(error) });
+      composition = { ...composition, state: 'failed', failure: String(error).slice(0, 500) };
+    });
+    worker.once('exit', (code) => {
+      if (compositionWorker === worker) compositionWorker = undefined;
+      // A nonzero exit with no message is the only way this ends without either branch above.
+      if (code !== 0 && composition.state === 'running')
+        composition = {
+          ...composition,
+          state: 'failed',
+          failure: `The measurement stopped with status ${code}.`,
+        };
+      else if (composition.state === 'running')
+        composition = {
+          ...composition,
+          state: 'failed',
+          failure: 'The measurement produced no result.',
+        };
+    });
+    return composition;
+  };
+
   let port = config.port;
   const server = createHttpServer({
     registry,
@@ -526,6 +591,8 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
       },
       drainQueue: () => runQueueDrainMaintenance(config.home, () => hooks.drainSpool()),
       acknowledgeAlert: (id: string) => acknowledgeLocalAlert(config.home, id),
+      storageComposition: () => composition,
+      analyzeStorage,
     },
     settings: {
       explainer: explainerSettings,
@@ -615,6 +682,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     if (retentionTimer) clearInterval(retentionTimer);
     if (usageBackfillRetryTimer) clearTimeout(usageBackfillRetryTimer);
     if (usageBackfillWorker) void usageBackfillWorker.terminate();
+    if (compositionWorker) void compositionWorker.terminate();
     if (healthTimer) clearTimeout(healthTimer);
     if (hookTrustTimer) clearInterval(hookTrustTimer);
     trustRefreshController?.abort();

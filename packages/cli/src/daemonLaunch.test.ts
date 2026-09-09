@@ -399,6 +399,12 @@ describe('detached daemon launch failures', () => {
       expect(result.stderr).toMatch(/daemon exited with code 1 before it became ready/);
       expect(result.stderr).toMatch(/daemon-startup\.log/);
       /*
+       * The reason, not only the path to it. This used to end at the log file name, so the whole
+       * message was an instruction to go and read something; in the menu bar that arrives as a
+       * modal naming an absolute path inside a state directory and nothing a reader can act on.
+       */
+      expect(result.stderr).toMatch(/EADDRINUSE|address already in use/);
+      /*
        * Promptness is asserted by the two lines above rather than by a clock. This path spawns a
        * second Node process, and that child's own startup is most of the elapsed time and none of
        * the behaviour, so there is no budget here that a loaded machine cannot break. What is

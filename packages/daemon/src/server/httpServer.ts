@@ -24,6 +24,7 @@ import type {
   PersonalizationSettingsRequest,
   PersonalizedExplanation,
   QueueInspection,
+  StorageComposition,
   StoredEvent,
   StreamMessage,
 } from '@salidium/protocol';
@@ -69,6 +70,8 @@ export interface HttpServerDeps {
       after: QueueInspection;
     };
     acknowledgeAlert: (id: string) => LocalAlertState;
+    storageComposition: () => StorageComposition;
+    analyzeStorage: () => StorageComposition;
   };
   /**
    * The choices that survive a restart. Optional because the routes are the only thing that needs
@@ -234,6 +237,16 @@ export function createHttpServer(deps: HttpServerDeps): Server {
       deps.operations
     )
       return json(res, 200, deps.operations.drainQueue());
+    if (url.pathname === '/api/operations/storage' && deps.operations) {
+      if (req.method === 'GET') return json(res, 200, deps.operations.storageComposition());
+      /*
+       * A POST because it starts work, not because it changes anything: the measurement is
+       * read-only and its answer replaces the previous one. It returns immediately with the
+       * running state and the caller polls the GET.
+       */
+      if (req.method === 'POST') return json(res, 200, deps.operations.analyzeStorage());
+      return json(res, 405, { error: 'method not allowed' });
+    }
     const acknowledge = /^\/api\/operations\/alerts\/([^/]+)\/acknowledge$/.exec(url.pathname);
     if (req.method === 'POST' && acknowledge?.[1] && deps.operations) {
       try {

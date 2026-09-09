@@ -3220,11 +3220,229 @@
 .operations-control-help,
 .operations-policy-note,
 .operations-restart,
-.operations-runtime-note {
+.operations-runtime-note,
+.composition-note {
   margin: var(--space-3) 0 0;
   color: var(--text-tertiary);
   font-size: var(--text-xs);
   line-height: 1.45;
+}
+
+/* ------------------------------------------------- storage composition */
+
+/*
+ * What the store is made of, as one bar and its legend.
+ *
+ * Five fills, and they are steps on the grey ramp rather than five hues. Colour in this app is a
+ * verdict (rule 4) or an identity, and neither is what a share of a database file is: a red slice
+ * beside a green one would have a reader looking for the bad news in their own storage. The ramp
+ * is ordered the way the parts are, so contrast against the panel falls off as the parts get
+ * further from the reader's own material: their recorded sessions carry the text tone, and space
+ * the file is merely holding is barely there. Because the grey slots invert between the themes,
+ * the same five tokens give a dark-to-light ramp on white and a light-to-dark one on charcoal
+ * without a second set of values.
+ *
+ * `reusable` also gets a hatch. It is the quietest band by design and it is the one at the end of
+ * the ramp, so on the light theme it was two steps from the track it sits in; a texture separates
+ * it from an empty bar in a way a fifth grey could not, and it is the honest picture anyway, since
+ * that part of the file is holes rather than content.
+ */
+.is-composition {
+  --part-sessions: var(--gray-10);
+  --part-checkpoints: var(--gray-8);
+  --part-provenance: var(--gray-7);
+  --part-structure: var(--gray-6);
+  --part-reusable: var(--gray-5);
+}
+
+.composition-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+}
+
+.composition-total strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.composition-total small {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+/*
+ * The hairline is a border rather than an inset shadow so the segments cannot paint over it: an
+ * inset shadow sits under an element's own children, and this bar is nothing but children. It
+ * matters at the pale end of the ramp, where a store that is mostly reusable space would otherwise
+ * be a bar the eye cannot find against the panel it lies on.
+ */
+.composition-bar {
+  display: flex;
+  height: 12px;
+  margin-top: var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: 2px;
+  background: var(--bg-muted);
+  overflow: hidden;
+}
+
+/*
+ * A hairline in the panel's own ground between neighbours, drawn inside the segment so it costs no
+ * width. Two adjacent steps of one ramp are a single band without it, which is the failure any
+ * monochrome sequence has and the reason most charts reach for hues instead.
+ */
+.composition-part + .composition-part {
+  box-shadow: inset 1px 0 0 var(--bg);
+}
+
+.composition-swatch {
+  align-self: center;
+  width: 9px;
+  height: 9px;
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: 2px;
+}
+
+.composition-part.is-sessions,
+.composition-swatch.is-sessions {
+  background: var(--part-sessions);
+}
+
+.composition-part.is-checkpoints,
+.composition-swatch.is-checkpoints {
+  background: var(--part-checkpoints);
+}
+
+.composition-part.is-provenance,
+.composition-swatch.is-provenance {
+  background: var(--part-provenance);
+}
+
+.composition-part.is-structure,
+.composition-swatch.is-structure {
+  background: var(--part-structure);
+}
+
+.composition-part.is-reusable,
+.composition-swatch.is-reusable {
+  background-color: var(--part-reusable);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0 3px,
+    color-mix(in srgb, var(--gray-7) 60%, transparent) 3px 5px
+  );
+}
+
+.composition-legend {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.composition-legend li {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px var(--space-2);
+  min-width: 0;
+}
+
+.composition-legend-label {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.composition-legend-bytes {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.composition-legend-note {
+  grid-column: 2 / -1;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.composition-legend-note code {
+  font-size: 0.94em;
+}
+
+/* A caption belongs to the heading above it, not to the block before that heading. */
+.composition-subtitle + .composition-note {
+  margin-top: 2px;
+}
+
+.composition-projects {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.composition-projects li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 3px var(--space-2);
+  min-width: 0;
+}
+
+/* The tail of the path is the part that identifies it; the head is shared and truncates away. */
+.composition-project-name {
+  overflow: hidden;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composition-project-bytes {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-align: right;
+}
+
+.composition-project-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-muted);
+  overflow: hidden;
+}
+
+.composition-project-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--text-tertiary);
+}
+
+.composition-project-count {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.composition-omitted {
+  margin: var(--space-2) 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
 }
 
 .operations-runtime-path {
@@ -3364,7 +3582,8 @@
  * carry written labels, and capitalize turned "Needs attention now" into "Needs Attention Now".
  * `.setting-source` keeps its rule: those really are enum values.
  */
-.operations-alerts-subtitle {
+.operations-alerts-subtitle,
+.composition-subtitle {
   margin: var(--space-3) 0 0;
   color: var(--text-tertiary);
   font-size: var(--text-xs);
