@@ -39,5 +39,9 @@
     "vite": "8.2.1",
     "wrangler": "4.124.0"
   },
+  "overrides": {
+    "js-yaml": "^4.3.2",
+    "sharp": "^0.35.4"
+  },
   "type": "module"
 }
