@@ -92,7 +92,7 @@ const RAW: Array<Omit<Page, "n">> = [
         "The page is a control panel, not the daemon. Closing it does not stop collection. `salidium open` returns to it, and `salidium status --watch` monitors the daemon, queue, storage, and alerts in a terminal.",
       ),
       p(
-        "On macOS, `salidium service install` adds login startup, crash recovery, and a native menu-bar control. The menu shows health, PID, collection, queue, storage, alerts, and maintenance, and can open, start, stop, pause, resume, or drain the queue toward empty for a bounded interval. Queue and storage values are exact when safely observable and say unavailable rather than showing a partial value. A deliberate stop stays stopped; a crash is relaunched. `salidium service disable` turns both login items off, and `salidium service uninstall` removes their copied runtime while keeping reports and settings.",
+        "On macOS, `salidium service install` adds login startup, crash recovery, and a native menu-bar control. The menu leads with one sentence saying whether your agent work is being captured, then the actions that answer it: open Salidium, pause or resume recording, store waiting work when any is waiting, and stop. It also carries one storage row, showing what Salidium is using on this Mac against its warning size. Values are exact when safely observable and say unavailable rather than showing a partial value. A deliberate stop stays stopped; a crash is relaunched. `salidium service disable` turns both login items off, and `salidium service uninstall` removes their copied runtime while keeping reports and settings.",
       ),
       note(
         "The macOS installer compiles its small native helper with Apple's Swift compiler. If it is unavailable, install Xcode Command Line Tools and retry. Native lock-screen notifications remain separately opt-in.",
@@ -509,7 +509,7 @@ const RAW: Array<Omit<Page, "n">> = [
       ),
       h("Local operations"),
       p(
-        "Ingest & Storage and `salidium status` read the same versioned local operations state. Queue and store values are exact when safely observable and explicitly unavailable when a bounded scan cannot establish a total. Queue velocity, drain rate, storage growth, and time to empty are labelled estimates and appear only after enough exact samples exist.",
+        "Ingest & Storage and `salidium status` read the same versioned local operations state. Queue and store values are exact when safely observable and explicitly unavailable when a bounded scan cannot establish a total. Queue velocity, drain rate, storage growth, and time to empty are labelled estimates and appear only after enough exact samples exist. What is using this space measures the store on request, splitting it into recorded sessions, replay checkpoints, provenance records, reusable space, and the remainder of indexes and internal structure, with the projects that account for it ranked beneath; it reads every stored event, so it is asked for rather than polled and carries the moment it was taken.",
       ),
       list(
         "Local policy records whether each value came from a shipped default, the stored file, or an environment override.",
@@ -593,6 +593,7 @@ const RAW: Array<Omit<Page, "n">> = [
         ["`salidium retention apply`", "Apply one bounded cleanup batch while the daemon is stopped."],
         ["`salidium retention compact`", "Integrity-check and return reusable SQLite pages to the operating system while stopped."],
         ["`salidium storage`", "Inspect the event layout and SQLite page size."],
+        ["`salidium storage composition`", "Measure what is using the space, by part and by project."],
         ["`salidium storage optimize`", "Alias for coordinated, verified storage optimization."],
         ["`salidium pin`", "Exempt a session from automatic retention."],
         ["`salidium unpin`", "Remove that exemption."],
