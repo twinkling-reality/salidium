@@ -22,5 +22,22 @@ export default defineConfig({
     exclude: ['**/node_modules/**', '**/dist/**'],
     environment: 'node',
     passWithNoTests: false,
+    /*
+     * Above the budget the suite's own helpers already take, rather than below it.
+     *
+     * Several tests here spawn a real Node process running this CLI from TypeScript source, and
+     * some of those spawn a second one. `daemonLaunch.test.ts` gives each `run` a 9 s ceiling and
+     * the daemon's ready loop polls a hundred times at 100 ms, so a single legitimate case can
+     * reach ten seconds before anything is wrong. The default of five is under both, which meant
+     * the suite was not asserting a budget, it was racing one: a full run failed two to four tests
+     * while every one of them passed alone, the file blamed moved between runs, and the same thing
+     * happened on CI, where a green `check` and a red one landed on identical commits. That is the
+     * shape of a timeout set too low, not of a defect, and it makes the suite something people
+     * learn to re-run rather than read.
+     *
+     * Twenty is still a bound. A test that genuinely hangs fails here, fifteen seconds later than
+     * it used to.
+     */
+    testTimeout: 20_000,
   },
 });
