@@ -3,6 +3,7 @@ import type {
   CanonicalEvent,
   SemanticChange,
   SessionSummary,
+  StorageComposition,
   StoredEvent,
 } from '@salidium/protocol';
 
@@ -195,6 +196,11 @@ export interface SalidiumStore {
   pinnedSessionIds(): string[];
   isSessionTombstoned(sessionId: string): boolean;
   forgetSession(sessionId: string, now?: Date): boolean;
+  /**
+   * What the store is made of. One pass per table, ten seconds on a large one, so callers run it
+   * off the main loop and never on a timer.
+   */
+  storageComposition?(projectLimit?: number): StorageComposition;
   compact(): void;
   close(): void;
 }

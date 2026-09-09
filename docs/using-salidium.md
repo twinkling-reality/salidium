@@ -193,6 +193,25 @@ Provider lists use comma-separated identifiers, for example
 `salidium config set providers.enabled claude-code,codex`. Use `none` to disable every provider
 adapter after restart without changing provider-owned hook files.
 
+### What is using the space
+
+`salidium storage composition` measures what the store is made of and prints it by part and by
+project, and **Local operations** shows the same measurement as a bar with the projects beneath it.
+The parts are recorded sessions, replay checkpoints, provenance records, reusable space, and the
+remainder, which is indexes and page overhead. That last one is a subtraction rather than its own
+measurement, and it is labelled that way wherever it appears: naming what each index costs needs a
+scan of every page in the file, which takes longer than the answer is worth.
+
+Two of the parts are worth knowing about. Replay checkpoints are derived state that makes a session
+open quickly, and `salidium storage optimize` rebuilds them more compactly. Reusable space is pages
+that deleted history has already freed inside the file but that have not gone back to the disk;
+`salidium retention compact` is what returns them.
+
+The measurement reads the header of every stored event, so it takes about ten seconds on a store of
+a few gigabytes. It is never run on a timer and never as part of health. The daemon runs it on a
+worker with its own connection, so collection and control are unaffected while it works, and the
+answer carries the moment it was true rather than presenting itself as live.
+
 `salidium maintenance queue` lists bounded queue metadata without reading payloads.
 `salidium maintenance drain` asks the running daemon to make bounded batches durable; repeat or add
 `--wait=SECONDS` to wait for empty. `salidium maintenance optimize --dry-run` reports the queue and
@@ -299,6 +318,7 @@ nothing is sent to an agent and the deterministic report remains available.
 | `salidium retention apply` | Apply one bounded cleanup batch while the daemon is stopped. |
 | `salidium retention compact` | Integrity-check and reclaim reusable database pages offline. |
 | `salidium storage` | Inspect the event layout and SQLite page size. |
+| `salidium storage composition` | Measure what is using the space, by part and by project. |
 | `salidium config show` / `set` / `reset` | Inspect or change versioned policy with effective-value sources. |
 | `salidium maintenance queue` / `drain` | Inspect bounded queue metadata or drain durable work safely. |
 | `salidium maintenance optimize [--dry-run]` | Preflight or run the coordinated verified storage workflow. |

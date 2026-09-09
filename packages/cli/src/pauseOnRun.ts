@@ -14,8 +14,10 @@
  * nothing able to restart it. ADR 0003 makes the next ordinary command that recovery step.
  *
  * Three kinds of caller are excluded. Lifecycle commands whose purpose is to preserve state, which
- * is the ADR's own list. Private worker entrypoints such as `__usage-backfill`, because the daemon
- * spawns those itself and work it scheduled must never be a way to start recording again. And
+ * is the ADR's own list. Private worker entrypoints, because the daemon spawns those itself and a
+ * measurement someone asked for must not be a way to start recording again: `__storage-composition`
+ * runs every time Analyze is pressed, and without it here that press would silently undo a
+ * deliberate pause, which is the fault `--no-resume` was added to fix, through another door. And
  * `--no-resume` itself, for a caller that has already seen the daemon answer and so cannot be
  * recovering after a crash, and whose surface cannot show that recovery happened.
  */

@@ -201,6 +201,59 @@ export const OperationsStoreMeasurementSchema = z
   })
   .strict();
 
+/*
+ * What the local store is made of, in the terms the product already uses for its own parts.
+ *
+ * Deliberately not table names. A reader asking what is using three gigabytes is not asking which
+ * b-tree; they are asking how much of it is the record of their work, how much is machinery, and
+ * how much they can get back. `sessions` is the evidence, `checkpoints` is derived state that
+ * exists to make replay fast, `provenance` is the per-record attribution that makes an event
+ * traceable to the line it came from, and `structure` is the remainder: indexes and page overhead,
+ * measured by difference rather than claimed precisely, because naming an index's size needs a
+ * `dbstat` scan that costs more than the answer is worth.
+ */
+export const StorageCompositionPartSchema = z
+  .object({
+    key: z.enum(['sessions', 'checkpoints', 'provenance', 'structure', 'reusable']),
+    bytes: z.number().int().nonnegative(),
+  })
+  .strict();
+export type StorageCompositionPart = z.infer<typeof StorageCompositionPartSchema>;
+
+export const StorageCompositionProjectSchema = z
+  .object({
+    /** Repository root, else working directory, else empty when the session recorded neither. */
+    path: z.string(),
+    sessions: z.number().int().nonnegative(),
+    bytes: z.number().int().nonnegative(),
+  })
+  .strict();
+export type StorageCompositionProject = z.infer<typeof StorageCompositionProjectSchema>;
+
+/*
+ * Measuring this reads every row header in the events table, which is ten seconds on a three
+ * gigabyte store, so it is never computed on the health path and never on a timer. It is asked
+ * for, it runs on a worker with its own read-only connection, and the answer carries the moment
+ * it was true. `stale` is that answer still being shown after the store has moved on.
+ */
+export const StorageCompositionSchema = z
+  .object({
+    contractVersion: z.literal(OPERATIONS_CONTRACT_VERSION),
+    state: z.enum(['absent', 'running', 'ready', 'failed']),
+    computedAt: CanonicalTimestampSchema.nullable(),
+    elapsedMs: z.number().int().nonnegative().nullable(),
+    /** The database file at the moment of measurement, from page count and page size. */
+    fileBytes: z.number().int().nonnegative().nullable(),
+    sessions: z.number().int().nonnegative().nullable(),
+    parts: z.array(StorageCompositionPartSchema),
+    projects: z.array(StorageCompositionProjectSchema),
+    /** Projects measured but not listed, so a truncated list can say so rather than imply totality. */
+    projectsOmitted: z.number().int().nonnegative(),
+    failure: z.string().max(500).nullable(),
+  })
+  .strict();
+export type StorageComposition = z.infer<typeof StorageCompositionSchema>;
+
 export const MaintenancePhaseSchema = z.enum([
   'idle',
   'pause',

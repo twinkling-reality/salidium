@@ -14,6 +14,7 @@ import { arch, homedir, platform, release } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { parentPort } from 'node:worker_threads';
 import { formatBytes, basename as pathBasename } from '@salidium/core';
 import {
   acknowledgeLocalAlert,
@@ -140,6 +141,7 @@ Usage:
   salidium retention apply      Apply one cleanup batch now (daemon must be stopped)
   salidium retention compact    Return reusable SQLite pages to the OS (daemon must be stopped)
   salidium storage              Show the lossless storage layout and page size
+  salidium storage composition  Measure what is using the space, by part and by project
   salidium storage optimize     Coordinate, copy, verify, and install the compact layout
   salidium pin [session]        Exempt a session from automatic retention
   salidium unpin [session]      Remove the retention exemption
@@ -226,6 +228,24 @@ async function main(argv: string[]): Promise<number> {
           if (progress.complete) return 0;
           await sleep(10);
         }
+      } finally {
+        store.close();
+      }
+    }
+    /*
+     * The other private worker entrypoint. Measuring what the store is made of reads the header of
+     * every stored event, which is ten seconds on a three gigabyte store, and `node:sqlite` is
+     * synchronous: run on the daemon's loop that is ten seconds of hooks going unanswered and
+     * spooling to disk. It runs here instead, on its own event loop and its own connection, and
+     * posts one message back.
+     */
+    case '__storage-composition': {
+      if (!arg || !resolve(arg).startsWith(`${resolve(salidiumHome)}${sep}`))
+        throw new Error('storage composition store must be inside the Salidium state directory');
+      const store = new SqliteStore(resolve(arg), { concurrentWriter: true });
+      try {
+        parentPort?.postMessage(store.storageComposition());
+        return 0;
       } finally {
         store.close();
       }
@@ -905,9 +925,51 @@ async function main(argv: string[]): Promise<number> {
         process.stderr.write(`no store at ${db}\n`);
         return 1;
       }
-      if (arg !== undefined && arg !== 'optimize') {
-        process.stderr.write('storage accepts only `optimize`\n');
+      if (arg !== undefined && arg !== 'optimize' && arg !== 'composition') {
+        process.stderr.write('storage accepts only `composition` or `optimize`\n');
         return 2;
+      }
+      /*
+       * Measured here rather than asked of the daemon. It is read-only, a typed command is allowed
+       * to take the ten seconds it costs, and this way the answer is available with the daemon
+       * stopped, which is exactly when someone is looking at a store that has grown too large.
+       */
+      if (arg === 'composition') {
+        const store = new SqliteStore(db, { concurrentWriter: true });
+        try {
+          const measured = store.storageComposition();
+          if (jsonOutput) {
+            process.stdout.write(`${JSON.stringify(measured)}\n`);
+            return 0;
+          }
+          const label: Record<string, string> = {
+            sessions: 'Recorded sessions',
+            checkpoints: 'Replay checkpoints',
+            provenance: 'Provenance records',
+            structure: 'Indexes and internal structure',
+            reusable: 'Reusable space',
+          };
+          process.stdout.write(`On this Mac: ${formatBytes(measured.fileBytes ?? 0)}\n`);
+          for (const part of measured.parts)
+            process.stdout.write(
+              `  ${(label[part.key] ?? part.key).padEnd(30)} ${formatBytes(part.bytes)}\n`,
+            );
+          process.stdout.write(
+            `\n${measured.sessions ?? 0} sessions across ${measured.projects.length + measured.projectsOmitted} projects.\n`,
+          );
+          for (const project of measured.projects)
+            process.stdout.write(
+              `  ${formatBytes(project.bytes).padStart(9)}  ${String(project.sessions).padStart(4)} ${project.sessions === 1 ? 'session ' : 'sessions'}  ${project.path || 'No project recorded'}\n`,
+            );
+          if (measured.projectsOmitted > 0)
+            process.stdout.write(`  ${measured.projectsOmitted} more not listed.\n`);
+          process.stdout.write(
+            '\nIndexes and internal structure is the remainder after the named parts, not a separate measurement.\n',
+          );
+          return 0;
+        } finally {
+          store.close();
+        }
       }
       if (arg === undefined) {
         const layout = inspectStoreLayout(db);

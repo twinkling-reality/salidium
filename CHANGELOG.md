@@ -41,6 +41,19 @@
   Now** ran the CLI for up to thirty seconds with nothing on screen to say so. The mark now fades
   slowly while a command runs, and reopening the menu leads with what is happening. Reduce Motion
   turns off the fade and keeps the line.
+- Answer what is actually using the space. Salidium could say the store was three gigabytes and how
+  fast that was growing, but nothing anywhere could say what was in it, so the only available
+  response to a large store was to delete history and hope. `salidium storage composition` and the
+  **Local operations** panel now measure it: recorded sessions, replay checkpoints, provenance
+  records, reusable space, and the remainder of indexes and page overhead, with the projects that
+  account for it ranked beneath. The remainder is a subtraction and says so. On the store this was
+  built against, replay checkpoints were half a gigabyte of a three gigabyte file, which storage
+  optimization rebuilds and nothing had ever reported.
+- Measure that composition on a worker. It reads the header of every stored event, which is ten
+  seconds on a large store, and `node:sqlite` is synchronous: on the daemon's own loop that would be
+  ten seconds of hooks going unanswered and spooling to disk. The daemon spawns that worker through
+  the same command surface everything else uses, which is why no private worker entrypoint clears a
+  pause: without that, asking what was using the disk would have quietly restarted a deliberate one.
 
 ## 0.4.1 - 2026-09-07
 
