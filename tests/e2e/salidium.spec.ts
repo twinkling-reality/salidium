@@ -666,6 +666,77 @@ test('ingest and storage reports local cost and controls collection', async ({ p
   await expect(ingestTrigger).toBeFocused();
 });
 
+/*
+ * The measurement, from never having run to a bar whose parts add up to the file.
+ *
+ * It is the one panel section that is not a reading of something already on the wire: it starts a
+ * worker, polls, and then draws. All three of those had only a static harness behind them, so this
+ * is the part of the release that had been verified by looking at it once.
+ */
+test('what is using this space measures on request and accounts for the whole file', async ({
+  page,
+  daemon,
+}) => {
+  await openSalidium(page, daemon);
+  if (page.viewportSize()?.width === 390) {
+    await page.getByRole('button', { name: 'Hide the session list' }).click();
+  }
+  await page.getByRole('button', { name: 'Ingest & Storage', exact: true }).click();
+  const ingest = page.getByRole('complementary', { name: 'Ingest & Storage' });
+  const composition = ingest.locator('.is-composition');
+  await expect(composition).toBeVisible();
+
+  // Never measured is a state it says out loud, rather than a store of no size.
+  await expect(composition).toContainText('Not measured');
+  await expect(composition).toContainText('Nothing has been measured yet');
+  const measure = composition.getByRole('button', { name: 'Analyze storage' });
+  await expect(measure).toBeEnabled();
+
+  await measure.click();
+  await expect(composition.getByRole('button', { name: 'Measure again' })).toBeEnabled({
+    timeout: 20_000,
+  });
+  await expect(composition).toContainText('Measured');
+
+  for (const part of [
+    'Recorded sessions',
+    'Replay checkpoints',
+    'Provenance records',
+    'Indexes and internal structure',
+    'Reusable space',
+  ]) {
+    await expect(composition.getByText(part, { exact: true })).toBeVisible();
+  }
+  // The two that are not obvious from their names say what they are.
+  await expect(composition).toContainText('Storage optimization rebuilds it');
+  await expect(composition).toContainText('measured by difference rather than counted');
+  // Never presented as live.
+  await expect(composition).toContainText('A measurement, not a live reading');
+
+  /*
+   * The bar is the claim that the parts are the whole, so it is checked as geometry rather than as
+   * text: the segments have to fill it, not merely exist.
+   */
+  const filled = await composition
+    .locator('.composition-part')
+    .evaluateAll((nodes) =>
+      nodes.reduce(
+        (total, node) => total + Number.parseFloat((node as HTMLElement).style.width),
+        0,
+      ),
+    );
+  expect(filled).toBeGreaterThan(99.5);
+  expect(filled).toBeLessThanOrEqual(100.5);
+
+  // The fixture records one project, and a truncated list would have to say it was truncated.
+  await expect(composition.getByRole('heading', { name: 'Projects' })).toBeVisible();
+  await expect(composition.locator('.composition-projects li').first()).toBeVisible();
+
+  const layout = await ingest.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+  expect(layout).toBe(0);
+  await expectNoA11yViolations(page);
+});
+
 test('rare operations failures remain legible and actionable', async ({
   page,
   daemon,

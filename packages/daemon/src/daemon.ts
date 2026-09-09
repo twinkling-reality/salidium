@@ -507,18 +507,35 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
   let compositionWorker: Worker | undefined;
   const analyzeStorage = (): StorageComposition => {
     if (compositionWorker) return composition;
-    const runtime = process.argv[1];
-    if (!runtime) {
+    /*
+     * Prefer the worker that belongs to this package, and fall back to the CLI's private
+     * subcommand when it is not on disk.
+     *
+     * Its absence is precisely the packaged case: the published CLI is one bundled file, so a
+     * sibling module cannot be there and the only entry point that exists is the CLI itself. Its
+     * presence is the embedded case, where `process.argv[1]` is whatever started the host process
+     * and spawning that would run the host's own entry point again. The end-to-end fixture calls
+     * `startDaemon` in the Playwright worker, which is exactly that, and it reported "the
+     * measurement produced no result" until this looked for its own worker first.
+     */
+    const sibling = new URL('./storage/compositionWorker.js', import.meta.url);
+    const worker = existsSync(fileURLToPath(sibling))
+      ? new Worker(sibling, { workerData: paths.db })
+      : (() => {
+          const runtime = process.argv[1];
+          if (!runtime) return undefined;
+          return new Worker(resolve(runtime), {
+            argv: ['__storage-composition', paths.db],
+          });
+        })();
+    if (!worker) {
       composition = {
         ...composition,
         state: 'failed',
-        failure: 'Salidium could not locate its own runtime.',
+        failure: 'Salidium could not locate a runtime to measure the store with.',
       };
       return composition;
     }
-    const worker = new Worker(resolve(runtime), {
-      argv: ['__storage-composition', paths.db],
-    });
     compositionWorker = worker;
     worker.unref();
     composition = { ...composition, state: 'running', failure: null };
