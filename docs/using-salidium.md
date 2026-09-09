@@ -93,10 +93,12 @@ and the active explanation mode.
 queue stays there and the command prints its exact observed file count and bytes. The pause is a
 24-hour lease. A later ordinary Salidium command resumes collection, and `salidium resume` does so
 explicitly. Lifecycle commands whose purpose is to preserve state (`pause`, `stop`, and every
-`service` command) and coordinated `storage optimize` do not implicitly resume it. If the daemon
-crashes while paused and no ordinary command runs, the marker cannot clear itself. The next ordinary
-command resumes collection and preserves that interval in the collection-gap ledger instead of
-silently forgetting it.
+`service` command) and coordinated `storage optimize` do not implicitly resume it. Any command can
+be told to leave a pause alone with `--no-resume`, which is for a caller that has already seen the
+daemon answer: the marker it would clear can only be stale if the process that clears leases has
+died, and a live daemon expires its own. If the daemon crashes while paused and no ordinary command
+runs, the marker cannot clear itself. The next ordinary command resumes collection and preserves
+that interval in the collection-gap ledger instead of silently forgetting it.
 
 Use `salidium pause` to stop new hook and transcript observations without stopping the interface.
 Use **Ingest & Storage** in the interface for the same control and its **Local operations** view:

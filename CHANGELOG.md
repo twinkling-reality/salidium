@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Add `--no-resume`, so a caller can run a command without clearing a pause the reader asked for.
+  Implicit resume exists to clear a marker whose owner has died: a pause is a lease that the running
+  daemon expires, so a daemon that crashed while paused leaves collection stopped with nothing able
+  to restart it, and ADR 0003 makes the next ordinary command that recovery step. The flag is for a
+  caller that has already seen the daemon answer, and so cannot be in that case, and whose surface
+  cannot show the reader that recovery happened.
+- Never resume collection from a private worker entrypoint. The daemon schedules that work itself,
+  so it must not be a way to begin recording again on a Salidium that was deliberately paused.
+
 ## 0.4.1 - 2026-09-07
 
 - State a recovered alert in its own words. Every alert now carries wording for both of its edges,

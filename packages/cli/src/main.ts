@@ -83,6 +83,7 @@ import {
   uninstallMacOSService,
 } from './macosService.ts';
 import { runFirstRunOnboarding } from './onboarding.ts';
+import { clearsPauseOnRun } from './pauseOnRun.ts';
 import { renderReport } from './render.ts';
 import { resolveBrowserLaunch, validateSalidiumPort } from './runtime.ts';
 import { providerDisplayName, sessionSearchQuery } from './showSession.ts';
@@ -160,7 +161,9 @@ Environment:
 
 Native Windows imports transcript history but does not install the POSIX live-hook relay.
 Ordinary commands resume an expired or manual pause. pause, stop, service commands, and coordinated
-storage optimize do not; resume changes collection state explicitly.
+storage optimize do not; resume changes collection state explicitly. Add --no-resume to any command
+to leave a pause in place, for a caller that has already seen the daemon answer and so cannot be
+recovering a marker its dead owner left behind.
 `;
 
 const require = createRequire(import.meta.url);
@@ -184,14 +187,10 @@ async function main(argv: string[]): Promise<number> {
   const jsonOutput = argv.includes('--json');
   const quiet = argv.includes('--quiet');
   const positional = argv.filter(
-    (value) => !['--yes', '-y', '--no-open', '--json', '--quiet'].includes(value),
+    (value) => !['--yes', '-y', '--no-open', '--json', '--quiet', '--no-resume'].includes(value),
   );
   const [cmd = 'up', arg, ...args] = positional;
-  if (
-    !['pause', 'resume', 'stop', 'service', '__usage-backfill'].includes(cmd) &&
-    !(cmd === 'storage' && arg === 'optimize')
-  )
-    await implicitlyResumeCollection();
+  if (clearsPauseOnRun(cmd, arg, argv)) await implicitlyResumeCollection();
   switch (cmd) {
     case 'help':
     case '--help':
