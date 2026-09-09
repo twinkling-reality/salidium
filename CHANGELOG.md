@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 - 2026-09-09
 
 - Add `--no-resume`, so a caller can run a command without clearing a pause the reader asked for.
   Implicit resume exists to clear a marker whose owner has died: a pause is a lease that the running
@@ -54,6 +54,12 @@
   ten seconds of hooks going unanswered and spooling to disk. The daemon spawns that worker through
   the same command surface everything else uses, which is why no private worker entrypoint clears a
   pause: without that, asking what was using the disk would have quietly restarted a deliberate one.
+- Measure the store from a worker this package owns when the daemon is embedded. Reaching the
+  measurement through the CLI works for the published single file, where the CLI is the only entry
+  point that exists, and fails for anything that calls `startDaemon` directly: there
+  `process.argv[1]` is the host's own entry point, so the daemon spawned that instead and reported
+  that the measurement produced no result. It now prefers a worker beside the compiled daemon and
+  falls back to the CLI when that file is absent, which is exactly the packaged case.
 - Say why the daemon would not start. A refused start reported only the name of the log file that
   held the reason, so the whole message was an instruction to go and read something; it now carries
   the reason itself, such as `listen EADDRINUSE: address already in use`, and keeps the path.
