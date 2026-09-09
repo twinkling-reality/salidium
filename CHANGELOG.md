@@ -10,6 +10,37 @@
   cannot show the reader that recovery happened.
 - Never resume collection from a private worker entrypoint. The daemon schedules that work itself,
   so it must not be a way to begin recording again on a Salidium that was deliberately paused.
+- Stop the menu bar from resuming a pause you asked for. It only offers actions after a live health
+  response, so it can never be in the crashed-daemon case implicit resume recovers from, and it
+  sends command output to the null device, so choosing **Open Salidium** on a paused Salidium
+  started recording again with nothing anywhere saying so. It now passes `--no-resume`. **Store One
+  Batch Now** no longer appears while paused either, where draining is a no-op and only appeared to
+  work because running the command resumed collection first.
+- Say what is happening in the menu bar instead of reporting readings. It led with a row naming the
+  application, which the icon it was opened from had already established, and then six equal rows of
+  internal state, one of which was the daemon's own process id and another of which was a queue
+  depth whose normal value is zero. It now leads with one sentence in the words the alert already
+  uses, followed by the action that answers it. A finished maintenance operation is no longer shown
+  as though it were still running, the queue row appears only when work is actually waiting, and the
+  alert count is replaced by what the alert says.
+- Tell the truth about whether work is being recorded. `Recording · On` meant only that the pause
+  marker was absent, so it stayed on while a provider's hooks were invalid or no longer trusted. The
+  menu now reads per-provider hook state and names what is wrong in the words the interface already
+  uses, so hooks that need repair are not reported as a provider that is not connected. A provider
+  that is not installed, or that you disconnected on purpose, is not a fault and is not mentioned.
+- Draw the menu-bar icon as the Salidium mark, as a template image, so macOS renders it on light and
+  dark menu bars and while the menu is open. It was a generic filled checkmark with template mode
+  turned off and a colour applied by hand, which identified no application and opted out of that
+  rendering. State is now a change of shape, not of colour alone, which is also the only option a
+  template image leaves: the system paints it one colour, so an amber badge and a red one would
+  arrive identical.
+- Show what local storage is doing in the menu rather than only how large it is, with a bar against
+  the configured warning size and the growth per day at the current rate, which the interface
+  already computed and the menu did not.
+- Show that a menu action is running. Choosing an item closes the menu, so **Store Waiting Files
+  Now** ran the CLI for up to thirty seconds with nothing on screen to say so. The mark now fades
+  slowly while a command runs, and reopening the menu leads with what is happening. Reduce Motion
+  turns off the fade and keeps the line.
 
 ## 0.4.1 - 2026-09-07
 

@@ -37,13 +37,36 @@ to cover those cases:
 salidium service install
 ```
 
-The menu-bar icon shows healthy, needs-attention, critical, or stopped state. Its menu shows the
-daemon PID, collection state, queue and storage readings, retention, active-alert count, and
-maintenance state. Readings are exact when they can be observed within the safety ceiling and say
-unavailable rather than displaying a partial count as fact. The menu can open Salidium, start or
-stop it, pause or resume collection, drain the queue toward empty for a bounded interval, refresh,
-and open the local data folder. Native alert notifications remain a separate opt-in setting;
-always-on mode does not enable lock-screen notifications.
+The menu-bar icon is the Salidium mark, drawn as a template image so macOS renders it correctly on
+a light or dark menu bar and while its menu is open. State is a change of shape rather than of
+colour alone: the bare mark while recording, a pause glyph while paused, a dot when something needs
+you, a slash when Salidium is running but not recording, and a dimmed mark when it is not running.
+
+The menu leads with one sentence saying whether your agent work is being captured, and it uses the
+same words the alert would: "Recording your agent work", "Salidium is falling behind", "Claude Code
+needs repair", "Paused, recording resumes at 4:30 PM". Below that are the actions that answer
+it, then one storage row showing what Salidium is using on this Mac against its warning size, with
+the growth per day at the current rate. Readings are exact when they can be observed within the
+safety ceiling and say unavailable rather than displaying a partial count as fact.
+
+Choosing an item closes the menu, so an action that takes time says so in two places: the mark
+fades slowly while it runs, and the next time you open the menu its first line is what is
+happening, such as "Storing waiting work". The fade is skipped when Reduce Motion is on; the line
+is not, because it is the part that carries the information.
+
+Rows appear only when they mean something. The queue row and its **Store Waiting Files Now** action
+are shown when work is actually waiting, because an empty queue is the steady state rather than a
+stage work passes through. Maintenance is shown while a phase is running, not after it finished.
+**Local Operations…** opens the panel that holds storage, retention, alert thresholds and provider
+settings, so the menu does not carry a second copy of them. Native alert notifications remain a
+separate opt-in setting; always-on mode does not enable lock-screen notifications.
+
+A provider is reported only when Salidium can see it and something is actually wrong with its
+hooks: malformed, or changed since the agent approved them. A provider you disconnected on purpose,
+or never installed, is not a fault and is not mentioned.
+
+The menu shows aggregate operational state only. It does not list sessions, projects or paths, and
+it does not read events or transcript payloads.
 
 The service starts at login and macOS relaunches it after an unsuccessful exit. A deliberate
 `salidium stop` is a successful exit and stays stopped; **Start Salidium** in the menu or
