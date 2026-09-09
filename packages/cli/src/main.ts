@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdirSync,
   openSync,
+  readFileSync,
   statfsSync,
   statSync,
 } from 'node:fs';
@@ -2245,11 +2246,37 @@ async function ensureDaemon(): Promise<DaemonJson> {
   for (let i = 0; i < 100; i++) {
     await sleep(100);
     if (childFailure)
-      throw new Error(`daemon ${childFailure} before it became ready; see ${paths.startupLogFile}`);
+      throw new Error(
+        `daemon ${childFailure} before it became ready: ${startupFailureReason(paths.startupLogFile)}`,
+      );
     const d = readDaemonJson(salidiumHome);
     if (d && d.pid === child.pid && (await alive(d))) return d;
   }
-  throw new Error(`daemon did not start; see ${paths.startupLogFile}`);
+  throw new Error(`daemon did not start: ${startupFailureReason(paths.startupLogFile)}`);
+}
+
+/*
+ * Why the daemon would not start, in the words it used, rather than the path to where it said them.
+ *
+ * A start that fails writes the reason to the startup log and then this reported only the file
+ * name, so the whole message was an instruction to go and read something. In the menu bar that is
+ * worse than useless: the alert cannot be copied out easily and the reader is holding a modal that
+ * names an absolute path in a state directory. The last line of that log is the reason, and it is
+ * one line, so it belongs in the sentence. The path stays for the cases the last line does not
+ * settle.
+ */
+function startupFailureReason(logFile: string): string {
+  try {
+    const lines = readFileSync(logFile, 'utf8')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const last = lines.at(-1);
+    if (last) return `${last.slice(0, 200)} (see ${logFile})`;
+  } catch {
+    /* An unreadable or absent log is itself unremarkable; the path is still worth naming. */
+  }
+  return `see ${logFile}`;
 }
 
 /** Compares ordinary semver versions without adding a runtime dependency to the bundled CLI. */

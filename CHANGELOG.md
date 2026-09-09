@@ -54,6 +54,14 @@
   ten seconds of hooks going unanswered and spooling to disk. The daemon spawns that worker through
   the same command surface everything else uses, which is why no private worker entrypoint clears a
   pause: without that, asking what was using the disk would have quietly restarted a deliberate one.
+- Say why the daemon would not start. A refused start reported only the name of the log file that
+  held the reason, so the whole message was an instruction to go and read something; it now carries
+  the reason itself, such as `listen EADDRINUSE: address already in use`, and keeps the path.
+- Handle a failed menu action as a state rather than a moment. The alert said "Salidium could not
+  complete that command" over a sentence ending in an absolute path, named neither what you had
+  asked for nor what to do next, and left nothing behind once dismissed: the menu went back to
+  "Not running" with no sign that a start had just been refused. It now names the action, offers
+  **Show Log**, and keeps the reason in the menu until the next attempt or until the daemon starts.
 
 ## 0.4.1 - 2026-09-07
 

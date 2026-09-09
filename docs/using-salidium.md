@@ -61,6 +61,10 @@ stage work passes through. Maintenance is shown while a phase is running, not af
 settings, so the menu does not carry a second copy of them. Native alert notifications remain a
 separate opt-in setting; always-on mode does not enable lock-screen notifications.
 
+When a menu action fails, the alert names what you asked for, gives the reason the command
+reported, and offers **Show Log**. The reason stays in the menu after you dismiss it, until you try
+again or the daemon starts, so a refused start does not disappear the moment you press OK.
+
 A provider is reported only when Salidium can see it and something is actually wrong with its
 hooks: malformed, or changed since the agent approved them. A provider you disconnected on purpose,
 or never installed, is not a fault and is not mentioned.

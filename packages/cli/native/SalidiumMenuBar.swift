@@ -194,6 +194,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     private var runningAction: String?
     private var pulseTimer: Timer?
     private var pulsePhase = 0
+    /*
+     * The last command that failed, kept after its alert is dismissed.
+     *
+     * An alert is a moment and a failure is a state. Pressing OK on "Salidium could not start" put
+     * the menu back to "Not running" with nothing to say a start had just been refused, so the only
+     * remaining evidence of it was that the reader remembered. It is cleared by the next attempt or
+     * by the daemon turning up, both of which make it no longer true.
+     */
+    private var lastFailure: String?
 
     init(configuration: Configuration) {
         self.configuration = configuration
@@ -229,6 +238,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.snapshot = next
+                if next.pid != nil { self.lastFailure = nil }
                 self.refreshInProgress = false
                 self.rebuildMenu()
             }
@@ -433,9 +443,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
          * drains it. What a reader wants to know here is whether they have lost anything.
          */
         if snapshot.pid == nil {
-            return Situation(headline: "Not running",
-                             detail: "New work waits to be stored until you start it.",
-                             tone: .offline)
+            return Situation(
+                headline: "Not running",
+                // The refusal outranks the reassurance: a reader who just tried to start it is not
+                // asking what happens to new work, they are asking why nothing happened.
+                detail: lastFailure ?? "New work waits to be stored until you start it.",
+                tone: lastFailure == nil ? .offline : .critical,
+                explain: lastFailure != nil)
         }
         if let critical = snapshot.alerts.first(where: { $0.severity == "critical" }) {
             return Situation(headline: critical.title, detail: Self.leadSentence(critical.detail),
@@ -830,7 +844,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         menu.addItem(item)
     }
 
-    private func runCLI(_ arguments: [String], label: String? = nil, refreshAfter: Bool = true) {
+    private func runCLI(_ arguments: [String],
+                        label: String? = nil,
+                        failed: String? = nil,
+                        refreshAfter: Bool = true) {
+        lastFailure = nil
         if let label = label {
             runningAction = label
             startPulse()
@@ -856,8 +874,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
                     self.runningAction = nil
                     self.stopPulse()
                     if finished.terminationStatus != 0 {
-                        self.showError("Salidium could not complete that command",
-                                       detail: detail?.isEmpty == false ? detail! : "The command exited with status \(finished.terminationStatus).")
+                        let reason = detail?.isEmpty == false
+                            ? detail!
+                            : "The command exited with status \(finished.terminationStatus)."
+                        self.lastFailure = Self.shortLabel(reason)
+                        self.showError("Salidium could not \(failed ?? "complete that command")",
+                                       detail: reason)
                     }
                     self.refresh()
                 }
@@ -872,13 +894,34 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         }
     }
 
+    /*
+     * Names the thing that failed, says why in the daemon's own words, and offers the log rather
+     * than printing a path into the body. The old text was "Salidium could not complete that
+     * command" over a sentence ending in an absolute path inside a state directory, which told a
+     * reader neither what they had asked for nor what to do next.
+     */
     private func showError(_ message: String, detail: String) {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = message
         alert.informativeText = detail
-        alert.runModal()
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Show Log")
+        if alert.runModal() == .alertSecondButtonReturn { revealLog() }
+    }
+
+    /// The startup log when there is one, because a refused start is what writes it, else the daemon log.
+    private func revealLog() {
+        let home = URL(fileURLWithPath: configuration.home, isDirectory: true)
+        for name in ["daemon-startup.log", "daemon.log"] {
+            let candidate = home.appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                NSWorkspace.shared.activateFileViewerSelecting([candidate])
+                return
+            }
+        }
+        NSWorkspace.shared.open(home)
     }
 
     /*
@@ -888,11 +931,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
      * Opening the interface is not a request to start recording again.
      */
     @objc private func openSalidium() { runCLI(["open", "--no-resume"]) }
-    @objc private func startSalidium() { runCLI(["start"], label: "Starting") }
-    @objc private func pauseCollection() { runCLI(["pause", "--quiet"], label: "Pausing") }
-    @objc private func resumeCollection() { runCLI(["resume", "--quiet"], label: "Resuming") }
-    @objc private func drainQueue() { runCLI(["maintenance", "drain", "--quiet"], label: "Storing waiting work") }
-    @objc private func stopSalidium() { runCLI(["stop", "--quiet"], label: "Stopping") }
+    @objc private func startSalidium() { runCLI(["start"], label: "Starting", failed: "start") }
+    @objc private func pauseCollection() { runCLI(["pause", "--quiet"], label: "Pausing", failed: "pause recording") }
+    @objc private func resumeCollection() { runCLI(["resume", "--quiet"], label: "Resuming", failed: "resume recording") }
+    @objc private func drainQueue() { runCLI(["maintenance", "drain", "--quiet"], label: "Storing waiting work", failed: "store the waiting work") }
+    @objc private func stopSalidium() { runCLI(["stop", "--quiet"], label: "Stopping", failed: "stop") }
 
     @objc private func turnOffAlwaysOn() {
         NSApp.activate(ignoringOtherApps: true)
