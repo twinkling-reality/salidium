@@ -1,0 +1,14 @@
+{
+  "format": "salidium.session-feed",
+  "version": 1,
+  "type": "session.changed",
+  "at": "2026-09-20T16:20:00.000Z",
+  "sessionId": "claude-code:6f1c2a90-3b7e-4d15-9a2c-0e8b5d7f4c11",
+  "native": {
+    "provider": "claude-code",
+    "sessionId": "6f1c2a90-3b7e-4d15-9a2c-0e8b5d7f4c11"
+  },
+  "evidenceSeq": 22,
+  "status": "ended",
+  "explanation": "generated"
+}

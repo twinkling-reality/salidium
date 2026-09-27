@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.0 - 2026-09-26
+
+- Add a read-only consumer contract, so a tool on the same machine can read Salidium's session
+  reports without the owner token. It lives under `/consumer/v1` with its own credential, created
+  with `salidium consumer create <label>`, listed with `salidium consumer list`, and revoked with
+  `salidium consumer revoke <id>`. The credential survives restarts and cannot write, delete,
+  configure, ingest hook events, or cause a model call. A report carries findings with their
+  provenance and no prompts, full messages, command lines, or output. Discovery is
+  `~/.salidium/consumer.json`, which holds no secret. See ADR 0005.
+- Add `@salidium/consumer-contract` with the contract's types, runtime schemas, generated JSON
+  Schema, and retained fixtures, published separately from the CLI as a `1.0.0` release candidate.
+- Say how Salidium knows a session is waiting. A permission request, a notification, or a question
+  tool call is observed; a question Salidium only read in the agent's final message is the agent's
+  word, and the verdict now labels it reported instead of observed.
+
 ## 0.5.0 - 2026-09-09
 
 - Add `--no-resume`, so a caller can run a command without clearing a pause the reader asked for.

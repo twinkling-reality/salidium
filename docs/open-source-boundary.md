@@ -14,6 +14,8 @@ Everything needed for local use stays public:
 - the local daemon, SQLite storage, recovery paths, and loopback API
 - the interface, site, documentation, and local explanations
 - local personalization, retention, session export, and deletion controls
+- the read-only consumer contract that lets other local tools read reports, and the credential
+  controls that grant and revoke that access
 
 The minimized sync contract and the local outbox are public too, but they are groundwork rather
 than a local capability: nothing in the CLI, daemon, or interface reaches them, they are not part of
@@ -47,6 +49,13 @@ one way: hosted service to released public contract.
 Reusable events, adapter contracts, storage boundaries, schemas, and local user controls land here
 first. Hosted credentials, account data, billing, organization policy, and service operations stay
 private.
+
+`@salidium/consumer-contract` is the second. It describes the read-only local interface other tools
+use to read session reports: runtime schemas, generated JSON Schema, and retained fixtures. It
+exports no canonical event, reducer state, protocol type, or daemon code, and no network code. The
+implementation behind it is the local daemon in this repository. It is a local integration surface,
+not a hosted one: it binds to loopback only, and any tool that uses it, open or proprietary, depends
+on the released contract rather than on this workspace.
 
 `@salidium/sync-contract` is the first deliberately publishable library. It contains strict runtime
 schemas, digest and batch rules, compatibility fixtures, acknowledgements, deletion receipts, and

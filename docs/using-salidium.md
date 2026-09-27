@@ -303,6 +303,36 @@ daemon starts. `SALIDIUM_EXPLAIN_MODEL` similarly enforces a model override. Env
 lock the matching controls in the interface until the override is removed. With explanations off,
 nothing is sent to an agent and the deterministic report remains available.
 
+## Let another local tool read reports
+
+A tool on the same machine, such as one that launches agent sessions for you, can read Salidium's
+reports through the read-only consumer contract. It needs your consent first, as a credential you
+create for that tool:
+
+```bash
+salidium consumer create "my launcher"
+```
+
+The command prints a token once. Give it to the tool; Salidium keeps only a digest and cannot show it
+again. The credential reads session lists, reports, and change notifications. It cannot change
+settings, delete sessions, send hook events, or ask a model for an explanation, and the token that
+opens the Salidium interface is unaffected. It keeps working across restarts until you revoke it:
+
+```bash
+salidium consumer list
+salidium consumer revoke <id>
+```
+
+Revoking takes effect on the tool's next request and closes an open change feed within seconds.
+
+A report read this way carries Salidium's findings: the verdict, changed files, checks, review items,
+what remains, and the optional generated Why and How, each labelled with how Salidium knows it. It
+does not carry your prompts, the agent's full messages, command lines, command output, or raw
+records. While Salidium runs, the tool finds it through `~/.salidium/consumer.json`, which contains
+no secret. The contract itself is described in
+[ADR 0005](decisions/0005-read-only-consumer-contract.md) and in the
+`@salidium/consumer-contract` package.
+
 ## Commands
 
 | Command | Purpose |
@@ -336,6 +366,7 @@ nothing is sent to an agent and the deterministic report remains available.
 | `salidium service enable` / `disable` | Turn installed macOS always-on mode on or off without deleting data. |
 | `salidium service uninstall` | Remove only the macOS service runtime and LaunchAgents; keep local data. |
 | `salidium explanations` | Show or change model-call frequency. |
+| `salidium consumer create <label>` / `list` / `revoke <id>` | Manage read-only credentials for local tools. |
 | `salidium restart` | Restart Salidium and reopen the interface. |
 | `salidium stop` | Pause collection, account for the queue, and stop the local daemon. |
 | `salidium --version` | Print the installed version. |

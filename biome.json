@@ -13,7 +13,9 @@
       "!**/dist-types",
       "!**/node_modules",
       "!fixtures/**/*.jsonl",
-      "!packages/sync-contract/fixtures"
+      "!packages/sync-contract/fixtures",
+      "!packages/consumer-contract/fixtures",
+      "!packages/consumer-contract/schema"
     ]
   },
   "formatter": {

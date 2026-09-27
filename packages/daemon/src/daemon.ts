@@ -36,6 +36,13 @@ import {
   readPersonalization,
   writePersonalization,
 } from './config/personalization.ts';
+import { ConsumerCredentialVerifier } from './consumer/credentials.ts';
+import {
+  consumerDiscovery,
+  removeConsumerDiscovery,
+  writeConsumerDiscovery,
+} from './consumer/discovery.ts';
+import { createConsumerRoutes } from './consumer/routes.ts';
 import { explainWithStatus } from './enrich/explainer.ts';
 import { explainedConfiguration } from './enrich/explainerBackends.ts';
 import { personalizeExplanation } from './enrich/personalizeExplanation.ts';
@@ -566,7 +573,25 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
   };
 
   let port = config.port;
+  const instanceId = randomBytes(16).toString('hex');
+  const discovery = () =>
+    consumerDiscovery({
+      port,
+      pid: process.pid,
+      instanceId,
+      startedAt,
+      version: runtimeVersion,
+      now: (overrides.now ?? Date.now)(),
+    });
+  const consumer = createConsumerRoutes({
+    registry,
+    credentials: new ConsumerCredentialVerifier(config.home, (reason) => log.warn(reason)),
+    discovery,
+    ...(overrides.now ? { now: overrides.now } : {}),
+    log,
+  });
   const server = createHttpServer({
+    consumer,
     registry,
     hooks,
     token,
@@ -707,6 +732,9 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     tailer.stop();
     hooks.stop();
     git.stop();
+    // Tell open consumer feeds why they are ending before the connections are cut below.
+    consumer.close();
+    removeConsumerDiscovery(config.home, process.pid);
     const closed = new Promise<void>((resolve) => server.close(() => resolve()));
     // The UI keeps long-lived SSE connections open. `server.close()` stops new requests but waits
     // for those streams forever, which made `salidium stop` hang whenever its browser tab was
@@ -750,6 +778,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     // retry that opens a second writer on the store.
     hooks.startSpoolWatcher();
     writePrivateJsonAtomic(paths.daemonJson, daemonJson);
+    writeConsumerDiscovery(config.home, discovery());
     const initialBackfill = tailer.start(config.userHome, config.historyDays);
     log.info('salidium daemon listening', {
       port,

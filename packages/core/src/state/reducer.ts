@@ -112,6 +112,7 @@ export function applyEvent(state: RunState, event: StoredEvent): SemanticChange[
         since: event.ts,
         summary: event.summary,
         seq: event.seq,
+        epistemic: 'observed',
       };
       // The review rules emit the review-facet history entry once.
       break;
@@ -120,7 +121,13 @@ export function applyEvent(state: RunState, event: StoredEvent): SemanticChange[
         event.notificationType === 'idle_prompt' ||
         event.notificationType === 'agent_needs_input'
       ) {
-        state.waiting = { kind: 'input', since: event.ts, summary: event.message, seq: event.seq };
+        state.waiting = {
+          kind: 'input',
+          since: event.ts,
+          summary: event.message,
+          seq: event.seq,
+          epistemic: 'observed',
+        };
       }
       break;
     case 'git.snapshot':
@@ -412,7 +419,13 @@ function recordClaim(
         break;
       case 'question':
         if (phase === 'final') {
-          state.waiting = { kind: 'question', since: e.ts, summary: claim.text, seq: e.seq };
+          state.waiting = {
+            kind: 'question',
+            since: e.ts,
+            summary: claim.text,
+            seq: e.seq,
+            epistemic: 'reported',
+          };
           log.add('review', `Agent asks: ${claim.text}`, 'reported', {
             claim: claim.kind,
             rule: claim.rule,
@@ -571,7 +584,13 @@ function onToolCalled(state: RunState, e: StoredEventOf<'tool.called'>, log: Cha
   if (e.input.kind === 'question') {
     // The review rules emit the history entry and open the review item.
     const q = e.input.questions[0] ?? 'question';
-    state.waiting = { kind: 'question', since: e.ts, summary: q, seq: e.seq };
+    state.waiting = {
+      kind: 'question',
+      since: e.ts,
+      summary: q,
+      seq: e.seq,
+      epistemic: 'observed',
+    };
   }
 }
 

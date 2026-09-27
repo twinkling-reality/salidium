@@ -35,10 +35,12 @@ import {
   OperationalConfigPatchSchema,
   PersonalizationSettingsRequestSchema,
 } from '@salidium/protocol';
+import type { createConsumerRoutes } from '../consumer/routes.ts';
 import type { HookIngress } from '../ingest/hookIngress.ts';
 import { MAX_INGEST_PAYLOAD_BYTES } from '../ingest/limits.ts';
 import type { Logger } from '../logging/logger.ts';
 import { isUserSession, type SessionRegistry } from '../sessions/sessionRegistry.ts';
+import { startSse } from './sse.ts';
 
 export interface HttpServerDeps {
   registry: SessionRegistry;
@@ -96,6 +98,11 @@ export interface HttpServerDeps {
       | { status: 'disabled' | 'unavailable' | 'failed' | 'not-found' | 'stale' }
     >;
   };
+  /**
+   * The read-only consumer contract under `/consumer/v1`. Optional for the same reason as
+   * `settings`; without it those paths are simply not found.
+   */
+  consumer?: ReturnType<typeof createConsumerRoutes>;
   log: Logger;
 }
 
@@ -154,12 +161,34 @@ export function createHttpServer(deps: HttpServerDeps): Server {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     const hosts = allowedHosts();
-    if (!hosts.has(req.headers.host ?? '')) return json(res, 421, { error: 'unexpected host' });
+    // The guard is identical for every path; only the body a consumer route refuses with differs,
+    // so that everything under /consumer answers in the contract's error envelope.
+    const consumer =
+      (url.pathname === '/consumer' || url.pathname.startsWith('/consumer/')) && deps.consumer;
+    if (!hosts.has(req.headers.host ?? ''))
+      return consumer
+        ? consumer.refuse(res, 421, 'host-not-allowed', 'only a loopback Host is accepted')
+        : json(res, 421, { error: 'unexpected host' });
     const origin = req.headers.origin;
     if (origin && !hosts.has(origin.replace(/^https?:\/\//, '')))
-      return json(res, 403, { error: 'origin not allowed' });
+      return consumer
+        ? consumer.refuse(res, 403, 'origin-not-allowed', 'cross-origin requests are refused')
+        : json(res, 403, { error: 'origin not allowed' });
     if (req.headers['sec-fetch-site'] === 'cross-site')
-      return json(res, 403, { error: 'cross-site request' });
+      return consumer
+        ? consumer.refuse(res, 403, 'origin-not-allowed', 'cross-site requests are refused')
+        : json(res, 403, { error: 'cross-site request' });
+
+    /*
+     * The consumer contract has its own credential and never accepts the owner token, and the owner
+     * routes below never accept a consumer credential. It is dispatched before the owner check so
+     * that the two cannot be confused by a shared prefix.
+     */
+    if (url.pathname === '/consumer' || url.pathname.startsWith('/consumer/')) {
+      if (deps.consumer) return deps.consumer.handle(req, res, url);
+      res.setHeader('Cache-Control', 'no-store');
+      return json(res, 404, { error: 'not found' });
+    }
 
     if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/hooks/')) {
       res.setHeader('Cache-Control', 'no-store');
@@ -451,6 +480,7 @@ export function createHttpServer(deps: HttpServerDeps): Server {
     if (req.method === 'GET' && deps.uiDist) return serveStatic(res, deps.uiDist, url.pathname);
     return json(res, 404, { error: 'not found' });
   }
+  server.on('close', () => deps.consumer?.close());
 
   function authorized(req: IncomingMessage): boolean {
     const header = req.headers.authorization;
@@ -539,21 +569,6 @@ export function createHttpServer(deps: HttpServerDeps): Server {
       unsub();
       clearInterval(hb);
     });
-  }
-
-  function startSse(res: ServerResponse): void {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-store',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    });
-    res.socket?.setNoDelay(true);
-    res.flushHeaders();
-    // WebKit can hold a tiny chunked response until its network buffer fills. Prime that buffer
-    // with one legal SSE comment so a later single event reaches Safari immediately rather than
-    // waiting for the 15-second heartbeat (or enough unrelated events to accumulate).
-    res.write(`: salidium ${' '.repeat(2048)}\n\n`);
   }
 
   async function rawRecord(res: ServerResponse, sessionId: string, eventId: string): Promise<void> {

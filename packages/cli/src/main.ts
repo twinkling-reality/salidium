@@ -72,6 +72,7 @@ import {
   type QueueInspection,
 } from '@salidium/protocol';
 import { auditClaims, renderAudit } from './auditClaims.ts';
+import { runConsumerCommand } from './consumerCommand.ts';
 import { explanationMode, parseExplanationMode } from './explanationMode.ts';
 import type { IntegrationContext, IntegrationValidation } from './integrations.ts';
 import { integrationById, providerIntegrations } from './integrations.ts';
@@ -147,6 +148,11 @@ Usage:
   salidium pin [session]        Exempt a session from automatic retention
   salidium unpin [session]      Remove the retention exemption
   salidium forget [session]     Immediately forget one whole session (--yes)
+  salidium consumer create LABEL
+                                Create a read-only credential a local tool uses to read reports;
+                                the token is printed once
+  salidium consumer list        Show consumer credentials (never their secrets)
+  salidium consumer revoke ID   Revoke one consumer credential immediately
   salidium audit-claims         Measure the claim classifier against every session in your store
                                 --sample=N (default 8), --only=rule, --seed=N, --limit=N, --json
 
@@ -1041,6 +1047,17 @@ async function main(argv: string[]): Promise<number> {
       process.stdout.write(`Forgot ${arg}; its source cursor remains tombstoned.\n`);
       return 0;
     }
+    case 'consumer':
+      return runConsumerCommand(
+        salidiumHome,
+        arg,
+        args,
+        { json: jsonOutput },
+        {
+          out: (text) => process.stdout.write(text),
+          err: (text) => process.stderr.write(text),
+        },
+      );
     case 'doctor':
       return doctor({
         json: jsonOutput,

@@ -1,0 +1,1601 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:salidium:consumer:1:session-report",
+  "title": "salidium.session-report",
+  "type": "object",
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "salidium.session-report"
+    },
+    "version": {
+      "type": "number",
+      "const": 2
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+      "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+    },
+    "session": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 1100,
+          "description": "Salidium's session id. Opaque: use it only to build report URLs, percent-encoded as one path segment."
+        },
+        "native": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "pattern": "^(?:claude-code|codex|[a-z][a-z0-9-]{0,62}\\/[a-z][a-z0-9-]{0,62})$",
+              "description": "claude-code, codex, or a namespaced owner/name extension provider."
+            },
+            "sessionId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+              "description": "The provider's own session id, exactly as the provider wrote it."
+            }
+          },
+          "required": [
+            "provider",
+            "sessionId"
+          ],
+          "description": "The key any tool that launched a session already has. Look a session up by it with the lookup endpoint."
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The provider's own session title. Null when the provider gave none: Salidium's interface falls back to the first line of the prompt, and prompts are not part of this contract."
+        },
+        "cwd": {
+          "type": "string",
+          "maxLength": 4096,
+          "description": "Working directory the provider recorded for the session."
+        },
+        "repositoryRoot": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 4096
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Git repository root, when Salidium observed one. Null is not \"not a repository\"."
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "working",
+            "idle",
+            "waiting",
+            "ended",
+            "unknown"
+          ],
+          "description": "As of generatedAt. A working session silent for fifteen minutes reads idle, so status can change with time alone."
+        },
+        "startedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+              "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastEventAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+              "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "endedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+              "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidenceSeq": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Sequence of the newest evidence this entry reflects. It only grows for a given session; a larger value means the report changed."
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "turns": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "toolCalls": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "filesChanged": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "linesAdded": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "linesRemoved": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "reviewOpen": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "description": "Open review items above informational severity."
+            },
+            "remaining": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "description": "Plan steps still pending or in progress."
+            }
+          },
+          "required": [
+            "turns",
+            "toolCalls",
+            "filesChanged",
+            "linesAdded",
+            "linesRemoved",
+            "reviewOpen",
+            "remaining"
+          ]
+        },
+        "lastVerification": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "outcome": {
+                  "type": "string",
+                  "enum": [
+                    "pass",
+                    "fail",
+                    "partial",
+                    "unknown"
+                  ]
+                },
+                "at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+                  "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+                },
+                "provenance": {
+                  "type": "string",
+                  "enum": [
+                    "observed",
+                    "reported",
+                    "inferred",
+                    "planned",
+                    "explained"
+                  ],
+                  "description": "How Salidium knows this value. Render the classes differently; never merge them."
+                }
+              },
+              "required": [
+                "outcome",
+                "at",
+                "provenance"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The most recent check Salidium recognized, in run order. Null when none ran."
+        },
+        "explanation": {
+          "type": "string",
+          "enum": [
+            "generated",
+            "generating",
+            "disabled",
+            "unavailable",
+            "failed",
+            "none"
+          ],
+          "description": "Outcome of the most recent explanation attempt; none when there has been no attempt. Whether an explanation covers the newest evidence is the report field explanation.current."
+        }
+      },
+      "required": [
+        "id",
+        "native",
+        "title",
+        "cwd",
+        "repositoryRoot",
+        "model",
+        "status",
+        "startedAt",
+        "lastEventAt",
+        "endedAt",
+        "evidenceSeq",
+        "counts",
+        "lastVerification",
+        "explanation"
+      ]
+    },
+    "verdict": {
+      "type": "object",
+      "properties": {
+        "headline": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "tone": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "fail",
+            "attention",
+            "working",
+            "neutral"
+          ]
+        },
+        "provenance": {
+          "type": "string",
+          "enum": [
+            "observed",
+            "reported",
+            "inferred",
+            "planned",
+            "explained"
+          ],
+          "description": "How Salidium knows this value. Render the classes differently; never merge them."
+        },
+        "because": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 600
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+              "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "headline",
+        "tone",
+        "provenance",
+        "because",
+        "at"
+      ]
+    },
+    "latestStatement": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "maxLength": 600
+            },
+            "provenance": {
+              "type": "string",
+              "const": "reported",
+              "description": "A statement is always something the agent said. Findings are elsewhere."
+            },
+            "author": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "agent",
+                    "subagent"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Who said it. Nothing the user wrote crosses this contract."
+            },
+            "at": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+                  "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "text",
+            "provenance",
+            "author",
+            "at"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The agent's latest statement about its work, quoted and attributed."
+    },
+    "waiting": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "permission",
+                "question",
+                "input"
+              ]
+            },
+            "summary": {
+              "type": "string",
+              "maxLength": 300
+            },
+            "since": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+              "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+            },
+            "provenance": {
+              "type": "string",
+              "enum": [
+                "observed",
+                "reported",
+                "inferred",
+                "planned",
+                "explained"
+              ],
+              "description": "observed for a permission request, a provider notification, or a question tool call; reported when Salidium read the question in the agent message. The verdict follows it."
+            }
+          },
+          "required": [
+            "kind",
+            "summary",
+            "since",
+            "provenance"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "changes": {
+      "type": "object",
+      "properties": {
+        "glance": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "maxLength": 4096
+              },
+              "changeCount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "linesAdded": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "linesRemoved": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "kinds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "add",
+                    "update",
+                    "delete",
+                    "move"
+                  ]
+                }
+              },
+              "lastChangedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+                "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+              },
+              "coverage": {
+                "type": "object",
+                "properties": {
+                  "verifiedAfter": {
+                    "type": "boolean"
+                  },
+                  "by": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 300
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Label of the covering check, when there is one."
+                  },
+                  "provenance": {
+                    "type": "string",
+                    "const": "inferred"
+                  }
+                },
+                "required": [
+                  "verifiedAfter",
+                  "by",
+                  "provenance"
+                ],
+                "description": "Whether a full-scope passing test, build, or typecheck ran after the last change. Always inferred: a run covering a file is a heuristic."
+              },
+              "reason": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "text": {
+                        "type": "string",
+                        "maxLength": 600
+                      },
+                      "provenance": {
+                        "type": "string",
+                        "const": "reported",
+                        "description": "A statement is always something the agent said. Findings are elsewhere."
+                      },
+                      "author": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "agent",
+                              "subagent"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "Who said it. Nothing the user wrote crosses this contract."
+                      },
+                      "at": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+                            "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "text",
+                      "provenance",
+                      "author",
+                      "at"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Nearest rationale the agent gave before the change, bound to the file by time. Always reported, and the binding itself is a heuristic."
+              }
+            },
+            "required": [
+              "path",
+              "changeCount",
+              "linesAdded",
+              "linesRemoved",
+              "kinds",
+              "lastChangedAt",
+              "coverage",
+              "reason"
+            ]
+          },
+          "description": "Most recently changed first."
+        },
+        "commits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "sha": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+                "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+              }
+            },
+            "required": [
+              "sha",
+              "at"
+            ]
+          }
+        }
+      },
+      "required": [
+        "glance",
+        "files",
+        "commits"
+      ]
+    },
+    "verification": {
+      "type": "object",
+      "properties": {
+        "glance": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "runs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+                "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 300,
+                "description": "Salidium-written, e.g. \"45/45 tests passed (vitest)\"."
+              },
+              "method": {
+                "type": "string",
+                "enum": [
+                  "test",
+                  "typecheck",
+                  "lint",
+                  "build",
+                  "other"
+                ]
+              },
+              "runner": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "pass",
+                  "fail",
+                  "partial",
+                  "unknown"
+                ]
+              },
+              "counts": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "passed": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "failed": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "skipped": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "total": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "passed",
+                      "failed",
+                      "skipped",
+                      "total"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "full",
+                  "partial",
+                  "unknown"
+                ]
+              },
+              "exit": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "observation": {
+                    "type": "string",
+                    "enum": [
+                      "explicit",
+                      "inferred-success",
+                      "inferred-failure",
+                      "unknown"
+                    ],
+                    "description": "Claude Code records no exit code for a successful command and Codex can hide nested codes; unknown is a result, not zero."
+                  }
+                },
+                "required": [
+                  "code",
+                  "observation"
+                ]
+              },
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "observed",
+                  "reported",
+                  "inferred",
+                  "planned",
+                  "explained"
+                ],
+                "description": "How Salidium knows this value. Render the classes differently; never merge them."
+              },
+              "caveats": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 120
+                }
+              },
+              "stale": {
+                "type": "boolean",
+                "description": "Files changed after this run, so it no longer covers them."
+              }
+            },
+            "required": [
+              "id",
+              "at",
+              "label",
+              "method",
+              "runner",
+              "outcome",
+              "counts",
+              "scope",
+              "exit",
+              "provenance",
+              "caveats",
+              "stale"
+            ]
+          },
+          "description": "Newest first."
+        },
+        "latestByMethod": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+                "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 300,
+                "description": "Salidium-written, e.g. \"45/45 tests passed (vitest)\"."
+              },
+              "method": {
+                "type": "string",
+                "enum": [
+                  "test",
+                  "typecheck",
+                  "lint",
+                  "build",
+                  "other"
+                ]
+              },
+              "runner": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "pass",
+                  "fail",
+                  "partial",
+                  "unknown"
+                ]
+              },
+              "counts": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "passed": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "failed": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "skipped": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "total": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "passed",
+                      "failed",
+                      "skipped",
+                      "total"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "full",
+                  "partial",
+                  "unknown"
+                ]
+              },
+              "exit": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "observation": {
+                    "type": "string",
+                    "enum": [
+                      "explicit",
+                      "inferred-success",
+                      "inferred-failure",
+                      "unknown"
+                    ],
+                    "description": "Claude Code records no exit code for a successful command and Codex can hide nested codes; unknown is a result, not zero."
+                  }
+                },
+                "required": [
+                  "code",
+                  "observation"
+                ]
+              },
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "observed",
+                  "reported",
+                  "inferred",
+                  "planned",
+                  "explained"
+                ],
+                "description": "How Salidium knows this value. Render the classes differently; never merge them."
+              },
+              "caveats": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 120
+                }
+              },
+              "stale": {
+                "type": "boolean",
+                "description": "Files changed after this run, so it no longer covers them."
+              },
+              "laterUnreadable": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "id",
+              "at",
+              "label",
+              "method",
+              "runner",
+              "outcome",
+              "counts",
+              "scope",
+              "exit",
+              "provenance",
+              "caveats",
+              "stale",
+              "laterUnreadable"
+            ]
+          },
+          "description": "The latest run of each method whose outcome could be read, and how many later runs could not."
+        },
+        "unverifiedFiles": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        },
+        "statements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string",
+                "maxLength": 600
+              },
+              "provenance": {
+                "type": "string",
+                "const": "reported",
+                "description": "A statement is always something the agent said. Findings are elsewhere."
+              },
+              "author": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "agent",
+                      "subagent"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Who said it. Nothing the user wrote crosses this contract."
+              },
+              "at": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+                    "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "text",
+              "provenance",
+              "author",
+              "at"
+            ]
+          },
+          "description": "What the agent said about verification. Reported, not observed."
+        }
+      },
+      "required": [
+        "glance",
+        "runs",
+        "latestByMethod",
+        "unverifiedFiles",
+        "statements"
+      ]
+    },
+    "review": {
+      "type": "object",
+      "properties": {
+        "glance": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "open": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "resolved": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "rule": {
+                "type": "string",
+                "maxLength": 120,
+                "description": "Stable rule id, e.g. verification-failed or destructive:rm-rf."
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 300
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "info",
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              "occurrences": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "latestAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+                "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+              },
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "maxLength": 512
+                    },
+                    "label": {
+                      "type": "string",
+                      "maxLength": 300
+                    },
+                    "instance": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 200
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "The short fragment that is the finding itself, e.g. the destructive command segment. Clipped and redacted."
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+                      "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+                    },
+                    "provenance": {
+                      "type": "string",
+                      "enum": [
+                        "observed",
+                        "reported",
+                        "inferred",
+                        "planned",
+                        "explained"
+                      ],
+                      "description": "How Salidium knows this value. Render the classes differently; never merge them."
+                    },
+                    "repeats": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "label",
+                    "instance",
+                    "createdAt",
+                    "provenance",
+                    "repeats"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "rule",
+              "label",
+              "severity",
+              "occurrences",
+              "latestAt",
+              "items"
+            ]
+          },
+          "description": "Worst severity first, most recent within it."
+        }
+      },
+      "required": [
+        "glance",
+        "open",
+        "resolved",
+        "groups"
+      ]
+    },
+    "remaining": {
+      "type": "object",
+      "properties": {
+        "glance": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 600
+              },
+              "text": {
+                "type": "string",
+                "maxLength": 600
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "in_progress",
+                  "failing",
+                  "reported"
+                ]
+              },
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "observed",
+                  "reported",
+                  "inferred",
+                  "planned",
+                  "explained"
+                ],
+                "description": "How Salidium knows this value. Render the classes differently; never merge them."
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "plan",
+                  "verification",
+                  "agent"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "text",
+              "status",
+              "provenance",
+              "source"
+            ]
+          }
+        }
+      },
+      "required": [
+        "glance",
+        "items"
+      ]
+    },
+    "explanation": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "generated",
+            "generating",
+            "disabled",
+            "unavailable",
+            "failed",
+            "none"
+          ],
+          "description": "Outcome of the most recent explanation attempt; none when there has been no attempt. Whether an explanation covers the newest evidence is the report field explanation.current."
+        },
+        "provenance": {
+          "type": "string",
+          "const": "explained"
+        },
+        "current": {
+          "type": "boolean",
+          "description": "The content covers the newest evidence. False when content is null."
+        },
+        "basedOnSeq": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generatedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+              "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 120
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "content": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "what": {
+                  "type": "object",
+                  "properties": {
+                    "summary": {
+                      "type": "string",
+                      "maxLength": 600
+                    },
+                    "currently": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 600
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "summary",
+                    "currently"
+                  ]
+                },
+                "why": {
+                  "type": "object",
+                  "properties": {
+                    "summary": {
+                      "type": "string",
+                      "maxLength": 600
+                    },
+                    "lanes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "title": {
+                            "type": "string",
+                            "maxLength": 100
+                          },
+                          "steps": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "maxLength": 200
+                            }
+                          }
+                        },
+                        "required": [
+                          "title",
+                          "steps"
+                        ]
+                      }
+                    },
+                    "chain": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 200
+                      }
+                    }
+                  },
+                  "required": [
+                    "summary",
+                    "lanes",
+                    "chain"
+                  ]
+                },
+                "how": {
+                  "type": "object",
+                  "properties": {
+                    "summary": {
+                      "type": "string",
+                      "maxLength": 600
+                    },
+                    "root": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 200
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "steps": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 200
+                      }
+                    }
+                  },
+                  "required": [
+                    "summary",
+                    "root",
+                    "steps"
+                  ]
+                },
+                "approachChange": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "from": {
+                          "type": "string",
+                          "maxLength": 200
+                        },
+                        "fromSteps": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 200
+                          }
+                        },
+                        "why": {
+                          "type": "string",
+                          "maxLength": 600
+                        },
+                        "to": {
+                          "type": "string",
+                          "maxLength": 200
+                        },
+                        "toSteps": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 200
+                          }
+                        }
+                      },
+                      "required": [
+                        "from",
+                        "fromSteps",
+                        "why",
+                        "to",
+                        "toSteps"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "what",
+                "why",
+                "how",
+                "approachChange"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The newest generated Why and How. Present with status generating or failed when an older explanation exists."
+        }
+      },
+      "required": [
+        "status",
+        "provenance",
+        "current",
+        "basedOnSeq",
+        "generatedAt",
+        "model",
+        "content"
+      ],
+      "description": "Optional model-written narrative. Salidium never calls a model because a consumer read a report."
+    },
+    "usage": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "messages": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "inputTokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "outputTokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "cacheReadTokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "cacheWriteTokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "messages",
+            "inputTokens",
+            "outputTokens",
+            "cacheReadTokens",
+            "cacheWriteTokens"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Observed tokens only. Null, never zeroes, when none were observed."
+    },
+    "ingest": {
+      "type": "object",
+      "properties": {
+        "warnings": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "redactions": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Credential-shaped spans Salidium removed at ingest."
+        },
+        "compactions": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "warnings",
+        "redactions",
+        "compactions"
+      ]
+    }
+  },
+  "required": [
+    "format",
+    "version",
+    "generatedAt",
+    "session",
+    "verdict",
+    "latestStatement",
+    "waiting",
+    "changes",
+    "verification",
+    "review",
+    "remaining",
+    "explanation",
+    "usage",
+    "ingest"
+  ]
+}

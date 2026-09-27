@@ -11,7 +11,9 @@ import type {
   RunState,
   Turn,
   Verification,
+  WaitingState,
 } from '../state/runState.ts';
+import { waitingEpistemic } from '../state/runState.ts';
 import { effectiveStatus } from './summarizeSession.ts';
 
 /**
@@ -70,7 +72,12 @@ export interface StripView {
   latestVerification?: VerificationRow;
   reviewOpen: number;
   remaining: number;
-  waiting?: { kind: string; summary: string; since: string };
+  waiting?: {
+    kind: WaitingState['kind'];
+    summary: string;
+    since: string;
+    epistemic: 'observed' | 'reported';
+  };
 }
 
 export interface FileRow {
@@ -342,7 +349,12 @@ export function projectSession(state: RunState, now: number = Date.now()): Sessi
     reviewOpen: attention.length,
     remaining: left.items.length,
     waiting: state.waiting
-      ? { kind: state.waiting.kind, summary: state.waiting.summary, since: state.waiting.since }
+      ? {
+          kind: state.waiting.kind,
+          summary: state.waiting.summary,
+          since: state.waiting.since,
+          epistemic: waitingEpistemic(state.waiting),
+        }
       : undefined,
   };
 
@@ -479,7 +491,8 @@ function verdict(
     return {
       headline: 'Waiting for you',
       tone: 'attention',
-      epistemic: 'observed',
+      // A question the classifier read in the agent's message is the agent's word, not an event.
+      epistemic: waitingEpistemic(state.waiting),
       because: state.waiting.summary,
       at: state.waiting.since,
       refs: [],

@@ -1,0 +1,6 @@
+{
+  "format": "salidium.consumer-error",
+  "version": 1,
+  "error": "session-not-observed",
+  "message": "Salidium has not observed this session. A session launched moments ago may not have reported yet."
+}

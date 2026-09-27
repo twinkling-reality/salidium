@@ -22,6 +22,8 @@
     "@salidium/core": "workspace:*",
     "@salidium/adapter-kit": "workspace:*",
     "@salidium/adapter-claude-code": "workspace:*",
-    "@salidium/adapter-codex": "workspace:*"
+    "@salidium/adapter-codex": "workspace:*",
+    "@salidium/consumer-contract": "workspace:*",
+    "zod": "^4.4.3"
   }
 }
