@@ -85,6 +85,9 @@ importers:
       '@salidium/adapter-kit':
         specifier: workspace:*
         version: link:../adapter-kit
+      '@salidium/consumer-contract':
+        specifier: workspace:*
+        version: link:../consumer-contract
       '@salidium/core':
         specifier: workspace:*
         version: link:../core
@@ -94,6 +97,12 @@ importers:
       '@salidium/protocol':
         specifier: workspace:*
         version: link:../protocol
+
+  packages/consumer-contract:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/core:
     dependencies:
@@ -112,12 +121,18 @@ importers:
       '@salidium/adapter-kit':
         specifier: workspace:*
         version: link:../adapter-kit
+      '@salidium/consumer-contract':
+        specifier: workspace:*
+        version: link:../consumer-contract
       '@salidium/core':
         specifier: workspace:*
         version: link:../core
       '@salidium/protocol':
         specifier: workspace:*
         version: link:../protocol
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/protocol:
     dependencies:

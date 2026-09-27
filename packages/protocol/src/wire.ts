@@ -29,6 +29,12 @@ export const SessionSummarySchema = z.object({
   cwd: z.string(),
   repoRoot: z.string().optional(),
   title: z.string().optional(),
+  /**
+   * Where `title` came from: the provider's own session title, or Salidium's fallback to the first
+   * line of the first prompt. Absent on summaries written before the distinction existed, which a
+   * reader that must not show prompt text treats as the prompt.
+   */
+  titleSource: z.enum(['provider', 'prompt']).optional(),
   model: z.string().optional(),
   entrypoint: z.string().optional(),
   /** Salidium's own enrichment session; hidden from the list. */

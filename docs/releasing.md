@@ -1,7 +1,8 @@
 # Releasing and rollback
 
-The public npm artifacts are the bundled `salidium` CLI and the narrow
-`@salidium/sync-contract` interoperability package. All other workspace packages remain private.
+The public npm artifacts are the bundled `salidium` CLI and two narrow interoperability packages,
+`@salidium/sync-contract` and `@salidium/consumer-contract`. All other workspace packages remain
+private.
 The website is separate and neither release workflow deploys it.
 
 ## Prepare
@@ -96,6 +97,35 @@ for workflow `release-sync-contract.yml` and remove the token. Publishing, taggi
 promoting a distribution tag always requires explicit maintainer approval. Private consumers must
 pin a released version and digest and must never depend on a sibling path, tarball from an
 unreleased checkout, branch, or copied source.
+
+### Consumer contract
+
+The consumer contract's package version tracks its wire version: `1.x` is wire version 1, and the
+package stays at a `1.0.0-rc.N` prerelease until a real consumer has exercised the wire. Its tag is
+`consumer-contract-v<version>` and its workflow is **Release consumer contract**, dispatched from
+current `main` with the exact confirmation `publish @salidium/consumer-contract@<version>` (or
+`bootstrap ...` for the first version, with the same short-lived token process as above). The
+verification job packs the library, installs it outside the monorepo, checks that every `exports`
+target is shipped, that each shipped JSON Schema file equals what the shipped runtime generates, and
+that every retained fixture validates both under the runtime schemas and under the JSON Schema files
+alone, under both resolution conditions. CI runs the same check on every push.
+
+Before tagging:
+
+1. Run `node scripts/write-consumer-contract.mjs --schema` after `pnpm build` and confirm the diff to
+   `schema/v1/` is empty or only adds. Within a major version a release may add properties and feed
+   message types, and nothing else.
+2. For the first release of a minor version, fixtures under `fixtures/v1/` must describe that
+   version. They are write-once from publication. Before the first publication only, they may be
+   removed and regenerated with `--fixtures`, which boots a real daemon on a temporary home and
+   records what it serves from synthetic sessions.
+3. After publishing a minor version, copy its `schema/v1/*.schema.json` unchanged into
+   `schema/v1/released/<major.minor>/`. The contract tests then require every later document to
+   validate against every released copy, which is how "an older consumer keeps working" is
+   enforced rather than promised.
+
+A breaking change is a new major version at a new path, served alongside the old one under the
+deprecation policy in ADR 0005.
 
 ## Roll back
 

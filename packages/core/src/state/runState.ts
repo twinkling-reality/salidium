@@ -346,4 +346,20 @@ export interface WaitingState {
   since: string;
   summary: string;
   seq: number;
+  /**
+   * How Salidium knows the session is waiting. A permission request, a provider notification, or a
+   * question tool call is observed; a question the claim classifier read in the agent's final
+   * message is only reported. Absent on checkpoints written before the distinction, which readers
+   * resolve with `waitingEpistemic`.
+   */
+  epistemic?: 'observed' | 'reported';
+}
+
+/**
+ * The provenance of a waiting state, including one checkpointed before it was recorded. Permission
+ * and input waits have only ever come from provider events. An unlabelled question may have come
+ * from the classifier, so it is read as the weaker claim.
+ */
+export function waitingEpistemic(waiting: WaitingState): 'observed' | 'reported' {
+  return waiting.epistemic ?? (waiting.kind === 'question' ? 'reported' : 'observed');
 }

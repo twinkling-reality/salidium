@@ -6,6 +6,17 @@ export {
   resolveDaemonConfig,
   validateSalidiumHistoryDays,
 } from './config/daemonConfig.ts';
+export type { ConsumerCredential } from './consumer/credentials.ts';
+export {
+  CONSUMER_CREDENTIALS_FILE,
+  ConsumerCredentialVerifier,
+  consumerCredentialPath,
+  createConsumerCredential,
+  listConsumerCredentials,
+  MAX_CONSUMER_CREDENTIALS,
+  revokeConsumerCredential,
+} from './consumer/credentials.ts';
+export { CONSUMER_DISCOVERY_FILE, consumerDiscoveryPath } from './consumer/discovery.ts';
 export type { DaemonHandle, DaemonJson, StartDaemonOptions, StoredSettings } from './daemon.ts';
 export {
   defaultUiDist,

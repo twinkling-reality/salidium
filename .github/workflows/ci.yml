@@ -84,6 +84,19 @@ jobs:
           test "$open" = 401
           test "$auth" = 200
 
+          # The consumer contract ships in the bundle: discovery without a credential, reads with a
+          # consumer credential made by the installed CLI, and that credential refused everywhere else.
+          consumer=$(node "$RUNNER_TEMP/install/bundle/salidium.mjs" consumer create "ci smoke" --json \
+            | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).token))")
+          discovery=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/consumer/v1/discovery")
+          sessions=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $consumer" "http://127.0.0.1:$port/consumer/v1/sessions")
+          escalation=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $consumer" "http://127.0.0.1:$port/api/info")
+          echo "consumer discovery=$discovery sessions=$sessions owner-route=$escalation"
+          test -f "$SALIDIUM_HOME/consumer.json"
+          test "$discovery" = 200
+          test "$sessions" = 200
+          test "$escalation" = 401
+
           node "$RUNNER_TEMP/install/bundle/salidium.mjs" stop
 
       # The sync contract is the only separately published package, and its packed shape is a
@@ -99,6 +112,21 @@ jobs:
           echo '{"type":"module"}' > package.json
           npm install "$RUNNER_TEMP"/salidium-sync-contract-*.tgz --ignore-scripts --no-audit --no-fund
           cp "$GITHUB_WORKSPACE/scripts/verify-sync-contract-package.mjs" check.mjs
+          node check.mjs
+          node --conditions=development check.mjs
+
+      # The consumer contract is published for the same reason and checked the same way, plus one
+      # thing the sync contract does not have: its JSON Schema files must validate every retained
+      # fixture on their own, because that is all a consumer in another language gets.
+      - name: Pack and consume the consumer contract outside the monorepo
+        run: |
+          set -euo pipefail
+          pnpm --filter @salidium/consumer-contract exec npm pack --pack-destination "$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/consumer-contract-consumer"
+          cd "$RUNNER_TEMP/consumer-contract-consumer"
+          echo '{"type":"module"}' > package.json
+          npm install "$RUNNER_TEMP"/salidium-consumer-contract-*.tgz --ignore-scripts --no-audit --no-fund
+          cp "$GITHUB_WORKSPACE/scripts/verify-consumer-contract-package.mjs" check.mjs
           node check.mjs
           node --conditions=development check.mjs
 

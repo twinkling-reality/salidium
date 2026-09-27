@@ -15,13 +15,19 @@ export function effectiveStatus(state: RunState, now: number): SessionSummary['s
 /** Compact list-row summary derived from state. `now` only affects the staleness rule above. */
 export function summarizeSession(state: RunState, now: number = Date.now()): SessionSummary {
   const lastVerification = state.verifications[state.verifications.length - 1];
+  const promptTitle = state.title ? undefined : firstPromptTitle(state);
   return {
     id: state.sessionId,
     provider: state.provider,
     providerSessionId: state.providerSessionId,
     cwd: state.cwd,
     repoRoot: state.repoRoot,
-    title: state.title ?? firstPromptTitle(state),
+    title: state.title ?? promptTitle,
+    ...(state.title
+      ? { titleSource: 'provider' as const }
+      : promptTitle
+        ? { titleSource: 'prompt' as const }
+        : {}),
     model: state.model,
     entrypoint: state.entrypoint,
     internal: state.internal,

@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "packages/sync-contract" },
+    { "path": "packages/consumer-contract" },
     { "path": "packages/protocol" },
     { "path": "packages/core" },
     { "path": "packages/adapter-kit" },

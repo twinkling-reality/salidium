@@ -9,6 +9,9 @@
   "exclude": ["src/**/*.test.ts", "src/**/__fixtures__/**"],
   "references": [
     {
+      "path": "../consumer-contract"
+    },
+    {
       "path": "../protocol"
     },
     {

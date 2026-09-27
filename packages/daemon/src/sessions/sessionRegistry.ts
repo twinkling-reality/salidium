@@ -5,6 +5,7 @@ import {
   REDUCER_VERSION,
   type RunState,
   replayEvents,
+  summarizeSession,
 } from '@salidium/core';
 import {
   type CanonicalEvent,
@@ -20,7 +21,14 @@ import {
 } from '@salidium/protocol';
 import type { ExplanationAttempt } from '../enrich/explainer.ts';
 import type { RetentionPreview, SalidiumStore } from '../storage/salidiumStore.ts';
-import { type CoordinatorListener, SessionCoordinator } from './sessionCoordinator.ts';
+import {
+  type CoordinatorListener,
+  explanationIsCurrent,
+  SessionCoordinator,
+} from './sessionCoordinator.ts';
+
+/** States replayed for side-effect-free reads, most recently used last. */
+const READ_CACHE_SESSIONS = 8;
 
 export type EventSubscriber = (events: StoredEvent[], changes: SemanticChange[]) => void;
 export type SummarySubscriber = (summary: SessionSummary) => void;
@@ -56,6 +64,7 @@ export class SessionRegistry {
   private evictTimer: NodeJS.Timeout | undefined;
   /** Called when a coordinator fails to persist a batch (it will retry with backoff). */
   onPersistError: ((sessionId: string, err: unknown) => void) | undefined;
+  private readonly readCache = new Map<string, RunState>();
   private lastTimeState:
     | { sessionId: string; ts: string; latestSeq: number; state: RunState }
     | undefined;
@@ -140,6 +149,60 @@ export class SessionRegistry {
     }
     this.lastTouched.set(sessionId, Date.now());
     return c;
+  }
+
+  /**
+   * A session's current state and summary for a reader that must change nothing.
+   *
+   * `get` and `snapshot` load a coordinator, which writes a checkpoint on a cold load, keeps the
+   * session in memory, and counts it as loaded, and loaded sessions are exempt from retention. That
+   * is right for the interface a person is looking at. It is wrong for a tool polling reports: its
+   * reads would decide which sessions retention may remove. This path uses a live coordinator when
+   * one already exists and otherwise replays from the newest checkpoint into a small private cache,
+   * without loading, persisting, or touching anything the rest of the daemon can see.
+   */
+  readSession(sessionId: string): { state: RunState; summary: SessionSummary } | undefined {
+    const live = this.live.get(sessionId);
+    if (live) return { state: live.state, summary: live.summary };
+    const stored = this.store.getSession(sessionId);
+    if (!stored) return undefined;
+    const latest = this.store.latestSeq(sessionId);
+    let state = this.readCache.get(sessionId);
+    if (!state || state.latestSeq !== latest) {
+      const checkpoint = this.store.latestCheckpoint(sessionId, REDUCER_VERSION);
+      state =
+        checkpoint?.state ??
+        createInitialState({
+          sessionId,
+          provider: stored.provider,
+          providerSessionId: stored.providerSessionId,
+          cwd: stored.cwd,
+        });
+      const PAGE = 5000;
+      let cursor = checkpoint?.seq ?? -1;
+      while (cursor < latest) {
+        const page = this.store.eventsAfter(sessionId, cursor, latest, PAGE);
+        if (page.length === 0) break;
+        replayEvents(state, page);
+        cursor = page[page.length - 1]?.seq ?? latest;
+      }
+    }
+    this.readCache.delete(sessionId);
+    this.readCache.set(sessionId, state);
+    for (const oldest of this.readCache.keys()) {
+      if (this.readCache.size <= READ_CACHE_SESSIONS) break;
+      this.readCache.delete(oldest);
+    }
+    const summary = summarizeSession(state, (this.now ?? Date.now)());
+    summary.explanationStatus = explanationIsCurrent(state.latestSeq, state.explained?.basedOnSeq)
+      ? 'generated'
+      : stored.explanationStatus;
+    return { state, summary };
+  }
+
+  /** A session's list summary without loading it: the live one if loaded, else the stored row. */
+  summaryOf(sessionId: string): SessionSummary | undefined {
+    return this.live.get(sessionId)?.summary ?? this.store.getSession(sessionId);
   }
 
   peek(sessionId: string): SessionCoordinator | undefined {
@@ -379,6 +442,7 @@ export class SessionRegistry {
   }
 
   private notifyRemoved(sessionId: string): void {
+    this.readCache.delete(sessionId);
     for (const subscriber of this.removalSubscribers) {
       try {
         subscriber(sessionId);

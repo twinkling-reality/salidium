@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:salidium:consumer:1:consumer-error",
+  "title": "salidium.consumer-error",
+  "type": "object",
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "salidium.consumer-error"
+    },
+    "version": {
+      "type": "number",
+      "const": 1
+    },
+    "error": {
+      "type": "string",
+      "enum": [
+        "host-not-allowed",
+        "origin-not-allowed",
+        "unauthorized",
+        "not-found",
+        "session-not-observed",
+        "method-not-allowed",
+        "bad-request",
+        "internal"
+      ]
+    },
+    "message": {
+      "type": "string",
+      "maxLength": 300
+    }
+  },
+  "required": [
+    "format",
+    "version",
+    "error",
+    "message"
+  ]
+}

@@ -15,6 +15,10 @@ export default defineConfig({
       '@salidium/sync-contract': fileURLToPath(
         new URL('./packages/sync-contract/src/index.ts', import.meta.url),
       ),
+      // Published for the same reason and resolved to source the same way.
+      '@salidium/consumer-contract': fileURLToPath(
+        new URL('./packages/consumer-contract/src/index.ts', import.meta.url),
+      ),
     },
   },
   test: {

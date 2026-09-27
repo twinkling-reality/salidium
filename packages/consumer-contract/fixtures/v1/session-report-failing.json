@@ -1,0 +1,201 @@
+{
+  "format": "salidium.session-report",
+  "version": 2,
+  "generatedAt": "2026-09-20T16:20:00.000Z",
+  "session": {
+    "id": "codex:0199a3f2-7c4e-7b10-8d2a-5e6f9c1b3a47",
+    "native": {
+      "provider": "codex",
+      "sessionId": "0199a3f2-7c4e-7b10-8d2a-5e6f9c1b3a47"
+    },
+    "title": null,
+    "cwd": "/Users/dev/acme/images",
+    "repositoryRoot": null,
+    "model": "gpt-5.5-codex",
+    "status": "waiting",
+    "startedAt": "2026-09-20T16:05:00.000Z",
+    "lastEventAt": "2026-09-20T16:05:25.000Z",
+    "endedAt": null,
+    "evidenceSeq": 7,
+    "counts": {
+      "turns": 1,
+      "toolCalls": 2,
+      "filesChanged": 1,
+      "linesAdded": 12,
+      "linesRemoved": 4,
+      "reviewOpen": 2,
+      "remaining": 0
+    },
+    "lastVerification": {
+      "outcome": "fail",
+      "at": "2026-09-20T16:05:20.000Z",
+      "provenance": "observed"
+    },
+    "explanation": "disabled"
+  },
+  "verdict": {
+    "headline": "Waiting for you",
+    "tone": "attention",
+    "provenance": "observed",
+    "because": "Run: git push origin fix/cdn-prefix",
+    "at": "2026-09-20T16:05:25.000Z"
+  },
+  "latestStatement": {
+    "text": "The resolver drops the CDN prefix when the path is already absolute.",
+    "provenance": "reported",
+    "author": "agent",
+    "at": "2026-09-20T16:05:05.000Z"
+  },
+  "waiting": {
+    "kind": "permission",
+    "summary": "Run: git push origin fix/cdn-prefix",
+    "since": "2026-09-20T16:05:25.000Z",
+    "provenance": "observed"
+  },
+  "changes": {
+    "glance": "1 file changed (+12 −4) · 1 command",
+    "files": [
+      {
+        "path": "src/images/resolveUrl.ts",
+        "changeCount": 1,
+        "linesAdded": 12,
+        "linesRemoved": 4,
+        "kinds": [
+          "update"
+        ],
+        "lastChangedAt": "2026-09-20T16:05:15.000Z",
+        "coverage": {
+          "verifiedAfter": false,
+          "by": null,
+          "provenance": "inferred"
+        },
+        "reason": null
+      }
+    ],
+    "commits": []
+  },
+  "verification": {
+    "glance": "3 of 118 tests failed (vitest)",
+    "runs": [
+      {
+        "id": "k2",
+        "at": "2026-09-20T16:05:20.000Z",
+        "label": "3 of 118 tests failed (vitest)",
+        "method": "test",
+        "runner": "vitest",
+        "outcome": "fail",
+        "counts": {
+          "passed": 115,
+          "failed": 3,
+          "skipped": null,
+          "total": 118
+        },
+        "scope": "full",
+        "exit": {
+          "code": 1,
+          "observation": "explicit"
+        },
+        "provenance": "observed",
+        "caveats": [],
+        "stale": false
+      }
+    ],
+    "latestByMethod": [
+      {
+        "id": "k2",
+        "at": "2026-09-20T16:05:20.000Z",
+        "label": "3 of 118 tests failed (vitest)",
+        "method": "test",
+        "runner": "vitest",
+        "outcome": "fail",
+        "counts": {
+          "passed": 115,
+          "failed": 3,
+          "skipped": null,
+          "total": 118
+        },
+        "scope": "full",
+        "exit": {
+          "code": 1,
+          "observation": "explicit"
+        },
+        "provenance": "observed",
+        "caveats": [],
+        "stale": false,
+        "laterUnreadable": 0
+      }
+    ],
+    "unverifiedFiles": [
+      "src/images/resolveUrl.ts"
+    ],
+    "statements": []
+  },
+  "review": {
+    "glance": "2 items need attention",
+    "open": 2,
+    "resolved": 0,
+    "groups": [
+      {
+        "rule": "waiting-permission",
+        "label": "Waiting for your permission",
+        "severity": "high",
+        "occurrences": 1,
+        "latestAt": "2026-09-20T16:05:25.000Z",
+        "items": [
+          {
+            "id": "waiting:permission:7",
+            "label": "Waiting for your permission",
+            "instance": "Run: git push origin fix/cdn-prefix",
+            "createdAt": "2026-09-20T16:05:25.000Z",
+            "provenance": "observed",
+            "repeats": 1
+          }
+        ]
+      },
+      {
+        "rule": "verification-failed",
+        "label": "3 tests failing (vitest)",
+        "severity": "high",
+        "occurrences": 1,
+        "latestAt": "2026-09-20T16:05:20.000Z",
+        "items": [
+          {
+            "id": "verification-failed:test",
+            "label": "3 tests failing (vitest)",
+            "instance": null,
+            "createdAt": "2026-09-20T16:05:20.000Z",
+            "provenance": "observed",
+            "repeats": 1
+          }
+        ]
+      }
+    ]
+  },
+  "remaining": {
+    "glance": "1 failing check",
+    "items": [
+      {
+        "id": "verification:k2",
+        "text": "3 of 118 tests failed (vitest)",
+        "status": "failing",
+        "provenance": "observed",
+        "source": "verification"
+      }
+    ]
+  },
+  "explanation": {
+    "status": "disabled",
+    "provenance": "explained",
+    "current": false,
+    "basedOnSeq": null,
+    "generatedAt": null,
+    "model": null,
+    "content": null
+  },
+  "usage": null,
+  "ingest": {
+    "warnings": 0,
+    "redactions": 0,
+    "compactions": 0
+  }
+}

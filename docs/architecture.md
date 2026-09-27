@@ -36,6 +36,8 @@ than treating arrival order as truth.
 ## Package boundaries
 
 - `packages/protocol` owns runtime-validated events, provenance, semantic changes, and wire shapes.
+- `packages/consumer-contract` owns the versioned read-only contract for other local tools. It
+  depends on nothing else in the workspace; see [Consumer contract](#consumer-contract).
 - `packages/core` owns pure reduction, projections, verification parsing, review rules, replay, and
   redaction.
 - `packages/adapter-kit` defines adapter-facing contracts.
@@ -46,8 +48,9 @@ than treating arrival order as truth.
 - `packages/cli` owns setup, recovery commands, text output, and the single published bundle.
 - `apps/site` contains the public website and documentation surface.
 
-Workspace packages are not published independently. The npm CLI bundle includes the runtime pieces
-and built interface it needs.
+Workspace packages are not published independently, apart from the two contract packages
+(`@salidium/sync-contract` and `@salidium/consumer-contract`), which exist to be depended on. The npm
+CLI bundle includes the runtime pieces and built interface it needs.
 
 ## Canonical events and state
 
@@ -263,6 +266,13 @@ Hook installation invokes an absolute relay path. The relay uses a trusted shell
 environment and path, bounds request time, and sends authentication through curl configuration on
 standard input instead of process arguments.
 
+A second, narrower credential exists for other local tools. A consumer credential is created by the
+person for one named tool, stored only as a SHA-256 digest in the owner-only
+`consumer-credentials.json`, and revoked from the CLI. It opens the read-only `/consumer/v1` routes
+and nothing else, and the owner token does not open those routes. The consumer routes are
+dispatched before the owner check with their own authentication, so the default for a consumer
+credential anywhere else is deny. See [Consumer contract](#consumer-contract).
+
 This protects the local service from ordinary cross-origin access and accidental disclosure. It is
 not a sandbox against another process already running with the same operating-system user account.
 
@@ -297,6 +307,44 @@ implement the versioned backend contract and preserve explicit source and revisi
 future alert destination receives already-minimized transition records through `AlertSink`; it does
 not receive events, transcripts, prompts, or store access. Neither seam is active in the shipped
 local product.
+
+### Consumer contract
+
+Other tools on the same machine read Salidium through a versioned, read-only contract rather than
+the private `/api` protocol or the owner token. [ADR 0005](decisions/0005-read-only-consumer-contract.md)
+records the decision; this is the durable shape.
+
+- **Surface.** `GET /consumer/v1/discovery` without a credential; with a consumer credential,
+  `/sessions`, `/sessions/lookup?provider=&sessionId=`, `/sessions/{id}/report`, and `/feed`
+  (server-sent events). Every other method is refused. Loopback, Host, Origin, and cross-site checks
+  run first and are unchanged.
+- **Identity.** Sessions are addressed by native identity, the provider id plus the provider's own
+  session id, which a tool that launched a session already has.
+- **Documents.** `salidium.session-list` v1, `salidium.session-lookup` v1,
+  `salidium.session-report` v2, `salidium.session-feed` v1, `salidium.consumer-discovery` v1, and
+  `salidium.consumer-error` v1. Every property is always present; unknown values are `null`.
+- **Minimization.** The report is a field-by-field projection of the interface's `SessionView` that
+  carries findings, not content: Salidium's own wording, observed identifiers and counts, short
+  attributed statements, review finding fragments, and the optional generated explanation, each with
+  its provenance class. Prompts, full messages, command lines, output, tool inputs, event ids, and
+  provider file references have no field; a working session is described by the kind of work, not
+  its command. Text is redacted again at the boundary.
+- **No side effects.** Consumer reads never load a session coordinator, write a checkpoint, count a
+  session as loaded for retention, or schedule an explanation.
+- **Discovery.** The daemon writes `consumer.json` beside `daemon.json`, listing every major
+  version it serves with its base URL, plus a per-start instance id, and removes it on a clean stop.
+  It holds no secret. Everything under `/consumer`, refusals included, answers with contract
+  documents.
+- **Feed.** Notifications, not state: `resync` on every connection, then `session.changed` with the
+  new evidence sequence, `session.removed`, `heartbeat`, and `closing`. No replay; a reader more than
+  1 MiB behind is disconnected.
+- **Compatibility.** The zod schemas in `@salidium/consumer-contract` are the source of truth; the
+  committed JSON Schema is generated from them and checked in tests. Within a major version changes
+  are additive only, consumers ignore what they do not know, and the producer is held to the exact
+  declared shape.
+
+The consumer credential file is the authority, not the daemon. The CLI edits it under a lock whether
+or not the daemon is running, and the daemon re-reads it when its metadata changes.
 
 ### Intelligence sync foundation
 
@@ -348,6 +396,9 @@ do not.
 - The installed CLI does not yet load third-party provider packages. The descriptor and store
   factory surfaces are internal and embedding contracts, not an executable plug-in marketplace.
 - Large per-session change histories are served as a whole rather than cursor-paged.
+- The consumer feed does not announce a status that changes through time alone, such as a silent
+  session turning from working to idle, and consumer credentials cannot yet be limited to particular
+  repositories or managed in the interface.
 - The schema-6 outbox has no destination UI or network sender yet and syncs nothing by default.
 - Raw evidence is local. A second device may receive the confirmed decision and an explicit
   source-unavailable state, never a claim that an opaque evidence reference is remote proof.

@@ -1,0 +1,345 @@
+import type {
+  ExplanationStatus,
+  Provenance,
+  SessionEntry,
+  SessionReport,
+  SessionStatus,
+  Statement,
+  VerificationRun,
+} from '@salidium/consumer-contract';
+import type {
+  Line,
+  Redactor,
+  RunState,
+  SessionView,
+  VerificationRow,
+  WaitingState,
+} from '@salidium/core';
+import { clip, WORKING_STALE_MS } from '@salidium/core';
+import type { Epistemic, SessionSummary, ToolKind } from '@salidium/protocol';
+import { explanationIsCurrent } from '../sessions/sessionCoordinator.ts';
+
+/**
+ * Salidium's private projection, minimized into the consumer contract.
+ *
+ * The report carries findings, not content. What crosses is Salidium's own wording (headlines,
+ * labels, glances), observed identifiers and counts (paths, SHAs, line counts, exit codes), short
+ * attributed statements the claim classifier already isolated, the fragment that is a review
+ * finding, and the optional generated explanation. What does not cross, by construction rather than
+ * by filtering: prompts, full agent messages, command lines, command output, tool inputs, turn and
+ * activity lists, event ids, and provider file references. There is no field for any of them.
+ *
+ * Text that does cross passes the redactor again. Events were redacted at ingest; running it at the
+ * boundary covers records ingested before a rule existed, and costs little.
+ *
+ * The mappings below are exhaustive over Salidium's internal vocabularies, so a new internal value
+ * fails the type check here instead of leaking an unlisted value into a closed contract enum.
+ */
+
+const PROVENANCE: Record<Epistemic, Provenance> = {
+  observed: 'observed',
+  reported: 'reported',
+  inferred: 'inferred',
+  planned: 'planned',
+  explained: 'explained',
+};
+
+const STATUS: Record<SessionSummary['status'], SessionStatus> = {
+  working: 'working',
+  idle: 'idle',
+  waiting: 'waiting',
+  ended: 'ended',
+  unknown: 'unknown',
+};
+
+const EXPLANATION: Record<NonNullable<SessionSummary['explanationStatus']>, ExplanationStatus> = {
+  generated: 'generated',
+  generating: 'generating',
+  disabled: 'disabled',
+  unavailable: 'unavailable',
+  failed: 'failed',
+};
+
+const WAITING: Record<WaitingState['kind'], NonNullable<SessionReport['waiting']>['kind']> = {
+  permission: 'permission',
+  question: 'question',
+  input: 'input',
+};
+
+/**
+ * What a working session is doing, in Salidium's words. The interface shows the current tool
+ * call's title, which for a command is the command line; the contract names the kind of work and,
+ * for a file, its path, which is an observed identifier.
+ */
+const ACTIVITY: Record<ToolKind, string> = {
+  command: 'Running a command',
+  fileEdit: 'Editing a file',
+  fileWrite: 'Writing a file',
+  fileRead: 'Reading files',
+  search: 'Searching the code',
+  webFetch: 'Fetching a web page',
+  webSearch: 'Searching the web',
+  subagent: 'Delegating to a subagent',
+  plan: 'Updating its plan',
+  question: 'Asking you a question',
+  mcp: 'Using a tool',
+  other: 'Working',
+};
+
+function workingHeadline(state: RunState, callId: string | undefined): string {
+  const activity = callId ? state.activities[callId] : undefined;
+  if (!activity) return 'Working';
+  const input = activity.input;
+  if (input.kind === 'fileEdit' || input.kind === 'fileWrite')
+    return `${input.kind === 'fileEdit' ? 'Editing' : 'Writing'} ${input.path}`;
+  return ACTIVITY[activity.kind];
+}
+
+export interface ConsumerText {
+  (value: string, max: number): string;
+  (value: string | undefined, max: number): string | null;
+}
+
+/** Redact, then clip: clipping first could cut a secret in half and hide it from the redactor. */
+export function consumerText(redactor: Redactor): ConsumerText {
+  return ((value: string | undefined, max: number) =>
+    value === undefined ? null : clip(redactor.redact(value).text, max)) as ConsumerText;
+}
+
+/**
+ * The same staleness rule the reducer's projection applies, for summaries read from the store
+ * without replaying their state: a session that stopped reporting mid-turn is not still working.
+ */
+function currentStatus(summary: SessionSummary, now: number): SessionStatus {
+  if (summary.status === 'working' && summary.lastEventAt) {
+    const age = now - Date.parse(summary.lastEventAt);
+    if (Number.isFinite(age) && age > WORKING_STALE_MS) return 'idle';
+  }
+  return STATUS[summary.status];
+}
+
+export function toSessionEntry(
+  summary: SessionSummary,
+  now: number,
+  text: ConsumerText,
+): SessionEntry {
+  return {
+    id: summary.id,
+    native: { provider: summary.provider, sessionId: summary.providerSessionId },
+    // A provider's own title only. Salidium's fallback is the first line of the prompt, and prompts
+    // do not cross this boundary; a summary that does not say which it holds is treated as a prompt.
+    title: summary.titleSource === 'provider' ? text(summary.title, 200) : null,
+    cwd: summary.cwd,
+    repositoryRoot: summary.repoRoot ?? null,
+    model: summary.model ?? null,
+    status: currentStatus(summary, now),
+    startedAt: summary.startedAt ?? null,
+    lastEventAt: summary.lastEventAt ?? null,
+    endedAt: summary.endedAt ?? null,
+    evidenceSeq: summary.latestSeq,
+    counts: {
+      turns: summary.counts.turns,
+      toolCalls: summary.counts.toolCalls,
+      filesChanged: summary.counts.filesChanged,
+      linesAdded: summary.counts.linesAdded,
+      linesRemoved: summary.counts.linesRemoved,
+      reviewOpen: summary.counts.reviewOpen,
+      remaining: summary.counts.remaining,
+    },
+    lastVerification: summary.lastVerification
+      ? {
+          outcome: summary.lastVerification.outcome,
+          at: summary.lastVerification.at,
+          provenance: PROVENANCE[summary.lastVerification.epistemic],
+        }
+      : null,
+    explanation: summary.explanationStatus ? EXPLANATION[summary.explanationStatus] : 'none',
+  };
+}
+
+/**
+ * An attributed sentence, or null when the line is not one this contract carries.
+ *
+ * Only statements the agent made cross. A line authored by the user is prompt text (the interface
+ * says "Working on: <prompt>" before the agent has narrated), and a line that is not reported is
+ * not a statement at all: a file's reason can be a subagent's delegation brief, which is a tool
+ * input.
+ */
+function statement(line: Line | undefined, text: ConsumerText): Statement | null {
+  if (line?.epistemic !== 'reported' || line.author === 'user') return null;
+  return {
+    text: text(line.text, 600),
+    provenance: 'reported',
+    author: line.author ?? null,
+    at: line.at ?? null,
+  };
+}
+
+function run(row: VerificationRow, text: ConsumerText): VerificationRun {
+  return {
+    id: row.id,
+    at: row.at,
+    label: text(row.label, 300),
+    method: row.method,
+    runner: text(row.runner, 120),
+    outcome: row.outcome,
+    counts: row.counts
+      ? {
+          passed: row.counts.passed ?? null,
+          failed: row.counts.failed ?? null,
+          skipped: row.counts.skipped ?? null,
+          total: row.counts.total ?? null,
+        }
+      : null,
+    scope: row.scope,
+    exit: { code: row.exit.code ?? null, observation: row.exit.observation },
+    provenance: PROVENANCE[row.epistemic],
+    caveats: row.caveats.map((caveat) => text(caveat, 120)),
+    stale: row.stale,
+  };
+}
+
+export function toSessionReport(
+  state: RunState,
+  view: SessionView,
+  summary: SessionSummary,
+  now: number,
+  text: ConsumerText,
+): SessionReport {
+  const session = toSessionEntry(summary, now, text);
+  const explained = view.explained;
+  const current = explained ? explanationIsCurrent(summary.latestSeq, explained.basedOnSeq) : false;
+  return {
+    format: 'salidium.session-report',
+    version: 2,
+    generatedAt: new Date(now).toISOString(),
+    session,
+    verdict: {
+      headline: text(
+        view.verdict.tone === 'working'
+          ? workingHeadline(state, view.verdict.refs[0])
+          : view.verdict.headline,
+        300,
+      ),
+      tone: view.verdict.tone,
+      provenance: PROVENANCE[view.verdict.epistemic],
+      because: text(view.verdict.because, 600),
+      at: view.verdict.at ?? null,
+    },
+    latestStatement: statement(view.report.whatNow, text),
+    waiting: view.strip.waiting
+      ? {
+          kind: WAITING[view.strip.waiting.kind],
+          summary: text(view.strip.waiting.summary, 300),
+          since: view.strip.waiting.since,
+          provenance: PROVENANCE[view.strip.waiting.epistemic],
+        }
+      : null,
+    changes: {
+      glance: text(view.changes.glance, 300),
+      files: view.changes.files.map((file) => ({
+        path: file.path,
+        changeCount: file.changeCount,
+        linesAdded: file.linesAdded,
+        linesRemoved: file.linesRemoved,
+        kinds: [...file.kinds],
+        lastChangedAt: file.lastChangedAt,
+        coverage: {
+          verifiedAfter: file.verifiedAfter,
+          by: text(file.verifiedBy, 300),
+          provenance: 'inferred',
+        },
+        reason: statement(file.reason, text),
+      })),
+      commits: view.changes.commits.map((commit) => ({ sha: commit.sha, at: commit.at })),
+    },
+    verification: {
+      glance: text(view.verified.glance, 300),
+      runs: view.verified.runs.map((row) => run(row, text)),
+      latestByMethod: view.verified.summary.map((row) => ({
+        ...run(row, text),
+        laterUnreadable: row.laterUnreadable,
+      })),
+      unverifiedFiles: [...view.verified.unverifiedFiles],
+      statements: view.verified.claims.flatMap((line) => statement(line, text) ?? []),
+    },
+    review: {
+      glance: text(view.review.glance, 300),
+      open: view.review.items.length,
+      resolved: view.review.resolvedCount,
+      groups: view.review.groups.map((group) => ({
+        rule: group.rule,
+        label: text(group.label, 300),
+        severity: group.severity,
+        occurrences: group.occurrences,
+        latestAt: group.createdAt,
+        items: group.items.map((item) => ({
+          id: item.id,
+          label: text(item.label, 300),
+          instance: text(item.instance, 200),
+          createdAt: item.createdAt,
+          provenance: PROVENANCE[item.epistemic],
+          repeats: item.repeats,
+        })),
+      })),
+    },
+    remaining: {
+      glance: text(view.left.glance, 300),
+      // Remaining is built from pending and in-progress plan steps, failing checks, and reported
+      // leftovers; a completed or cancelled step is not remaining, whatever the row type allows.
+      items: view.left.items.flatMap((item) =>
+        item.status === 'completed' || item.status === 'cancelled'
+          ? []
+          : [
+              {
+                id: item.id,
+                text: text(item.text, 600),
+                status: item.status,
+                provenance: PROVENANCE[item.epistemic],
+                source: item.source,
+              },
+            ],
+      ),
+    },
+    explanation: {
+      status: session.explanation,
+      provenance: 'explained',
+      current,
+      basedOnSeq: explained?.basedOnSeq ?? null,
+      generatedAt: explained?.at ?? null,
+      model: text(explained?.model, 120),
+      content: explained
+        ? {
+            what: {
+              summary: text(explained.what.summary, 600),
+              currently: text(explained.what.currently ?? undefined, 600),
+            },
+            why: {
+              summary: text(explained.why.summary, 600),
+              lanes: explained.why.lanes.map((lane) => ({
+                title: text(lane.title, 100),
+                steps: lane.steps.map((step) => text(step, 200)),
+              })),
+              chain: explained.why.chain.map((step) => text(step, 200)),
+            },
+            how: {
+              summary: text(explained.how.summary, 600),
+              root: text(explained.how.root ?? undefined, 200),
+              steps: explained.how.steps.map((step) => text(step, 200)),
+            },
+            approachChange: explained.approachChange
+              ? {
+                  from: text(explained.approachChange.from, 200),
+                  fromSteps: explained.approachChange.fromSteps.map((step) => text(step, 200)),
+                  why: text(explained.approachChange.why, 600),
+                  to: text(explained.approachChange.to, 200),
+                  toSteps: explained.approachChange.toSteps.map((step) => text(step, 200)),
+                }
+              : null,
+          }
+        : null,
+    },
+    usage: view.usage ? { ...view.usage } : null,
+    ingest: { ...view.ingest },
+  };
+}
