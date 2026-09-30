@@ -232,7 +232,9 @@ export function parseShellFunctionArgs(args: Record<string, unknown>): string {
 }
 
 const EXEC_CALL = /tools\.exec_command\s*\(\s*\{([\s\S]*?)\}\s*\)/g;
-const CMD_LITERAL = /\bcmd\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/;
+// The key is written bare (`cmd:`) or, as in a fifth of real cells, quoted like JSON (`"cmd":`).
+const CMD_LITERAL =
+  /(?:\bcmd|"cmd"|'cmd')\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/;
 
 /** Best-effort extraction of shell commands from a code-mode JS cell. */
 export function extractCodeCellCommands(script: string): string[] {

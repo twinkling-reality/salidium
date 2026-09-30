@@ -630,3 +630,243 @@ describe('CodexRolloutParser: item-based rollouts', () => {
     expect(reduce(events).counters.filesChanged).toBe(0);
   });
 });
+
+/*
+ * `CommandExecution` items record each process a command tool started, with its exit code. The
+ * fixture is a real sequence cut from a 0.155 rollout, every value replaced: `npm test` starts in a
+ * code cell and yields a running session, a second cell polls it, the item arrives, and the poll
+ * returns the result. The first run fails, the second passes.
+ */
+describe('CodexRolloutParser: command exit codes from items', () => {
+  const THREAD = '01a00001-0000-7000-8000-000000000001';
+  const sessionId = makeSessionId('codex', THREAD);
+  const read = (name: string) =>
+    readFileSync(new URL(`./testing/fixtures/${name}`, import.meta.url), 'utf8')
+      .split('\n')
+      .filter(Boolean);
+  const lines = read('codex-0.155-yielded-test-runs.jsonl');
+  const isItem = (l: string) => l.includes('"CommandExecution"');
+  const reduce = (events: CanonicalEvent[]) => {
+    const state = createInitialState({ sessionId, provider: 'codex', providerSessionId: THREAD });
+    let seq = 0;
+    for (const e of events) applyEvent(state, { ...e, seq: seq++ } as StoredEvent);
+    return state;
+  };
+  const exits = (events: CanonicalEvent[]) =>
+    events.flatMap((e) =>
+      e.kind === 'tool.completed' && e.result.kind === 'command'
+        ? [{ callId: e.callId, id: e.id, exit: e.result.exit, isError: e.isError }]
+        : [],
+    );
+  const finalExit = (events: CanonicalEvent[], callId: string) =>
+    exits(events)
+      .filter((e) => e.callId === callId)
+      .at(-1)?.exit;
+  const FIRST = 'call_Exit001xxxxxxxxxxxxxxxxx';
+  const SECOND = 'call_Exit003xxxxxxxxxxxxxxxxx';
+  const record = (predicate: (o: Record<string, unknown>) => boolean) => {
+    const found = lines.map((l) => JSON.parse(l)).find(predicate);
+    if (!found) throw new Error('fixture record missing');
+    return found;
+  };
+
+  it('observes the exit code of a yielded command, failing then passing', () => {
+    const events = parseAll(lines, sessionId, THREAD);
+    for (const e of events) expect(() => CanonicalEventSchema.parse(e)).not.toThrow();
+    expect(finalExit(events, FIRST)).toEqual({ code: 1, observation: 'explicit' });
+    expect(finalExit(events, SECOND)).toEqual({ code: 0, observation: 'explicit' });
+    const runs = reduce(events).verifications;
+    expect(runs.map((v) => [v.callId, v.method, v.outcome, v.exit?.observation])).toEqual([
+      [FIRST, 'test', 'fail', 'explicit'],
+      [SECOND, 'test', 'pass', 'explicit'],
+    ]);
+    // Without the items the same rollout says nothing about how either process exited.
+    const without = parseAll(
+      lines.filter((l) => !isItem(l)),
+      sessionId,
+      THREAD,
+    );
+    expect(finalExit(without, FIRST)).toEqual({ observation: 'unknown' });
+    expect(finalExit(without, SECOND)).toEqual({ observation: 'unknown' });
+  });
+
+  it('adds no activity of its own, so nothing is counted twice', () => {
+    const events = parseAll(lines, sessionId, THREAD);
+    const without = parseAll(
+      lines.filter((l) => !isItem(l)),
+      sessionId,
+      THREAD,
+    );
+    expect(events.map((e) => e.id)).toEqual(without.map((e) => e.id));
+    const state = reduce(events);
+    expect(state.counters.toolCalls).toBe(reduce(without).counters.toolCalls);
+    expect(Object.keys(state.activities).some((id) => id.startsWith('exec-'))).toBe(false);
+  });
+
+  it('keeps unknown when the item has no exit code', () => {
+    const stripped = lines.map((l) => {
+      if (!isItem(l)) return l;
+      const o = JSON.parse(l);
+      delete o.payload.item.exit_code;
+      return JSON.stringify(o);
+    });
+    const events = parseAll(stripped, sessionId, THREAD);
+    expect(finalExit(events, FIRST)).toEqual({ observation: 'unknown' });
+    expect(finalExit(events, SECOND)).toEqual({ observation: 'unknown' });
+  });
+
+  it('claims nothing for a command still running when the rollout ends', () => {
+    // The process exited and Codex recorded it, but the poll that returns the result never came.
+    const cut = lines.slice(0, lines.findIndex(isItem) + 1);
+    const events = parseAll(cut, sessionId, THREAD);
+    // Only the provisional result the yielding call returned, which knows nothing of the exit.
+    expect(exits(events).filter((e) => e.callId === FIRST)).toEqual([
+      expect.objectContaining({
+        exit: { observation: 'unknown' },
+        id: expect.not.stringMatching(/final$/),
+      }),
+    ]);
+    expect(reduce(events).activities[FIRST]?.exit).toEqual({ observation: 'unknown' });
+  });
+
+  describe('a cell that finishes in one call', () => {
+    const call = record(
+      (o) =>
+        (o.payload as { call_id?: string }).call_id === FIRST &&
+        (o.payload as { type?: string }).type === 'custom_tool_call',
+    );
+    const item = record((o) => JSON.stringify(o).includes('"CommandExecution"'));
+    const output = (text: string) =>
+      JSON.stringify({
+        ...call,
+        payload: {
+          type: 'custom_tool_call_output',
+          call_id: FIRST,
+          output: [{ type: 'input_text', text }],
+        },
+      });
+    const cell = (...commands: string[]) =>
+      JSON.stringify({
+        ...call,
+        payload: {
+          ...call.payload,
+          input: commands
+            .map((c) => `await tools.exec_command({"cmd":${JSON.stringify(c)},"workdir":"/repo"});`)
+            .join('\n'),
+        },
+      });
+    const ran = (command: string, code: number | undefined, n = 1) => {
+      const o = structuredClone(item);
+      o.payload.item.id = `exec-01a0000${n}-0000-7000-8000-00000000000${n}`;
+      o.payload.item.command = ['/bin/zsh', '-lc', command];
+      if (code === undefined) delete o.payload.item.exit_code;
+      else o.payload.item.exit_code = code;
+      return JSON.stringify(o);
+    };
+    const done = output('Script completed\nWall time 0.1 seconds\nOutput:\nok\n');
+    const exitOf = (records: string[]) => finalExit(parseAll(records, sessionId, THREAD), FIRST);
+
+    it('takes the code of the one command it ran', () => {
+      expect(exitOf([cell('npm test'), ran('npm test', 2), done])).toEqual({
+        code: 2,
+        observation: 'explicit',
+      });
+    });
+
+    it('takes 0 only when every command it names exited 0, and nothing when they disagree', () => {
+      expect(
+        exitOf([
+          cell('npm run lint', 'npm test'),
+          ran('npm run lint', 0, 1),
+          ran('npm test', 0, 2),
+          done,
+        ]),
+      ).toEqual({ code: 0, observation: 'explicit' });
+      expect(
+        exitOf([
+          cell('npm run lint', 'npm test'),
+          ran('npm run lint', 0, 1),
+          ran('npm test', 1, 2),
+          done,
+        ]),
+      ).toEqual({ observation: 'unknown' });
+      // One command never reported: a pass cannot be claimed for the cell.
+      expect(exitOf([cell('npm run lint', 'npm test'), ran('npm run lint', 0, 1), done])).toEqual({
+        observation: 'unknown',
+      });
+    });
+
+    it('does not match a command the script builds at run time, or one two open cells name', () => {
+      const dynamic = JSON.stringify({
+        ...call,
+        payload: {
+          ...call.payload,
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: the string is a script under test.
+          input: 'const t = "test";\nawait tools.exec_command({cmd: `npm ${t}`});',
+        },
+      });
+      expect(exitOf([dynamic, ran('npm test', 1), done])).toEqual({ observation: 'unknown' });
+      const other = cell('npm test').replace(FIRST, 'call_Other00xxxxxxxxxxxxxxxx');
+      expect(exitOf([cell('npm test'), other, ran('npm test', 1), done])).toEqual({
+        observation: 'unknown',
+      });
+    });
+
+    it('lets a code the output itself printed stand', () => {
+      const printed = output(
+        'Script completed\nWall time 0.1 seconds\nOutput:\n{"chunk_id":"000009","wall_time_seconds":0.1,"exit_code":0,"original_token_count":1,"output":"ok"}\n',
+      );
+      expect(exitOf([cell('npm test'), ran('npm test', 0), printed])).toEqual({
+        code: 0,
+        observation: 'explicit',
+      });
+    });
+  });
+
+  it('observes a function-tool command by its call id, and merges with its hook', () => {
+    const shell = read('codex-0.157-app-server-shell-write.jsonl');
+    const events = parseAll(shell, sessionId, THREAD);
+    const [command] = exits(events);
+    expect(command?.exit).toEqual({ code: 0, observation: 'explicit' });
+    expect(
+      exits(
+        parseAll(
+          shell.filter((l) => !isItem(l)),
+          sessionId,
+          THREAD,
+        ),
+      )[0]?.exit,
+    ).toEqual({ observation: 'unknown' });
+    const callId = command?.callId ?? '';
+    const receivedAt = '2026-01-01T00:02:41.300Z';
+    const hook = [
+      ...parseCodexHookPayload(
+        {
+          session_id: THREAD,
+          hook_event_name: 'PreToolUse',
+          tool_name: 'Bash',
+          tool_use_id: callId,
+          tool_input: { command: "printf 'done' > check.txt && cat check.txt" },
+          cwd: '/repo',
+        },
+        { receivedAt },
+      ),
+      ...parseCodexHookPayload(
+        {
+          session_id: THREAD,
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Bash',
+          tool_use_id: callId,
+          tool_input: { command: "printf 'done' > check.txt && cat check.txt" },
+          tool_response: 'done',
+        },
+        { receivedAt },
+      ),
+    ];
+    const state = createInitialState({ sessionId, provider: 'codex', providerSessionId: THREAD });
+    let seq = 0;
+    for (const e of [...hook, ...events]) applyEvent(state, { ...e, seq: seq++ } as StoredEvent);
+    expect(Object.keys(state.activities).filter((id) => id === callId)).toHaveLength(1);
+    expect(state.activities[callId]?.exit).toEqual({ code: 0, observation: 'explicit' });
+  });
+});

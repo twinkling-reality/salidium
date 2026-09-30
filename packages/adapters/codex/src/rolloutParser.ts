@@ -91,6 +91,16 @@ export class CodexRolloutParser implements RecordParser {
    * that did the work stays "running" forever with no result against it.
    */
   private readonly agentThreadByPath = new Map<string, string>();
+  /**
+   * Code cells whose result has not arrived, with the commands their script names and the exit
+   * codes Codex recorded for each (see `commandExecution`).
+   */
+  private readonly openCells = new Map<
+    string,
+    { commands: string[]; exits: Map<string, number[]> }
+  >();
+  /** Exit codes Codex recorded for function-tool commands, by call id. */
+  private readonly callExits = new Map<string, number[]>();
 
   constructor(ctx: RecordParserContext) {
     this.ctx = ctx;
@@ -520,6 +530,7 @@ export class CodexRolloutParser implements RecordParser {
                   : undefined,
           };
           this.calls.set(callId, { toolName: 'exec', input: call, turnId: this.currentTurnId });
+          if (cmds.length) this.openCells.set(callId, { commands: cmds, exits: new Map() });
           const title = cmds.length
             ? `Run: ${excerpt(cmds[0] ?? '', 120, 0).text}${cmds.length > 1 ? ` (+${cmds.length - 1} more)` : ''}`
             : 'Code cell';
@@ -596,11 +607,16 @@ export class CodexRolloutParser implements RecordParser {
    */
   private itemCompleted(p: Record<string, unknown>, base: BaseFn): CanonicalEvent[] {
     const item = asObject(p.item);
-    if (asString(item?.type) !== 'FileChange') return [];
+    const type = asString(item?.type);
+    if (!item || (type !== 'FileChange' && type !== 'CommandExecution')) return [];
     // Every observed item names this rollout's own thread. One from another thread belongs to that
     // thread's rollout, which is its own session, and counting it here would count it twice.
     const thread = asString(p.thread_id);
     if (thread && thread !== this.ctx.providerSessionId) return [];
+    if (type === 'CommandExecution') {
+      this.commandExecution(item);
+      return [];
+    }
     const callId = asString(item?.id);
     if (!callId) return [];
     const status = asString(item?.status);
@@ -610,6 +626,61 @@ export class CodexRolloutParser implements RecordParser {
     const turnId = asString(p.turn_id);
     const withTurn: BaseFn = turnId ? (id) => ({ ...base(id), turnId }) : base;
     return this.patchApplied(callId, changes, !applied, withTurn);
+  }
+
+  /**
+   * The exit code Codex recorded for one process, held until the command it belongs to completes.
+   *
+   * Item-based rollouts record every process a command tool started as a `CommandExecution` item
+   * with its `exit_code`, which is the process's own status rather than a reading of its output.
+   * The item produces no event of its own. For a function tool its id is the call's, so the code
+   * waits for that call's result. Inside a code-mode cell the id is `exec-<uuid>`, which only a
+   * hook reports; an event under it would open a second activity beside the cell whenever no hook
+   * ran. So the code is filed under the one open cell whose script names exactly this command, and
+   * nowhere when none or several do. A missing `exit_code` is not a result.
+   */
+  private commandExecution(item: Record<string, unknown>): void {
+    const code = item.exit_code;
+    if (typeof code !== 'number' || !Number.isInteger(code)) return;
+    const id = asString(item.id);
+    if (id && (this.calls.get(id)?.input.kind === 'command' || this.isPending(id))) {
+      this.callExits.set(id, [...(this.callExits.get(id) ?? []), code]);
+      return;
+    }
+    const command = shellCommand(item.command);
+    if (!command) return;
+    const cells = [...this.openCells.values()].filter((cell) => {
+      const named = cell.commands.filter((c) => c === command).length;
+      return named > (cell.exits.get(command)?.length ?? 0);
+    });
+    const [cell] = cells;
+    if (!cell || cells.length > 1) return;
+    cell.exits.set(command, [...(cell.exits.get(command) ?? []), code]);
+  }
+
+  private isPending(callId: string): boolean {
+    for (const command of this.pending.values()) if (command.callId === callId) return true;
+    return false;
+  }
+
+  /**
+   * The exit code the items recorded for a command, under the rule the printed result objects
+   * follow: one process is its own result, and several that all exited 0 passed. A cell counts
+   * only when every command its script names has reported, so a check that never finished is not
+   * passed for it. Mixed codes say something failed without saying which, and so say nothing.
+   */
+  private recordedExit(callId: string): number | undefined {
+    let codes = this.callExits.get(callId);
+    const cell = this.openCells.get(callId);
+    if (cell) {
+      const complete = cell.commands.every(
+        (c) => (cell.exits.get(c)?.length ?? 0) >= cell.commands.filter((d) => d === c).length,
+      );
+      codes = complete ? [...cell.exits.values()].flat() : undefined;
+    }
+    if (!codes?.length) return undefined;
+    if (codes.length === 1 || codes.every((c) => c === 0)) return codes[0];
+    return undefined;
   }
 
   /** The call (unless the rollout already announced it) and result for one applied patch. */
@@ -847,6 +918,14 @@ export class CodexRolloutParser implements RecordParser {
     base: BaseFn,
     final = false,
   ): CanonicalEvent {
+    if (!parsed.running) {
+      // The output's own explicit code stands; the items fill in only what it left unknown.
+      const recorded = this.recordedExit(callId);
+      if (recorded !== undefined && parsed.exit.observation !== 'explicit')
+        parsed = { ...parsed, exit: { code: recorded, observation: 'explicit' } };
+      this.openCells.delete(callId);
+      this.callExits.delete(callId);
+    }
     const ex = excerpt(parsed.body);
     const id = final
       ? makeEventId(this.ctx.sessionId, 'tool', callId, 'result', 'final')
@@ -956,6 +1035,18 @@ function fileChangesFrom(raw: unknown, applied: boolean): FileChange[] {
     });
   }
   return changes;
+}
+
+/**
+ * The command a `CommandExecution` item ran, in the form a code cell's script names it: the
+ * argument of a `sh -c` or `sh -lc` wrapper, otherwise the argument vector joined by spaces.
+ */
+function shellCommand(argv: unknown): string | undefined {
+  if (!Array.isArray(argv) || !argv.every((a) => typeof a === 'string')) return undefined;
+  const [shell, flag, script] = argv as string[];
+  if (argv.length === 3 && /(^|\/)(ba|z|da|k)?sh$/.test(shell ?? '') && /^-l?c$/.test(flag ?? ''))
+    return script;
+  return argv.length ? argv.join(' ') : undefined;
 }
 
 function recordHash(line: string): string {
