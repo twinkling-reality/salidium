@@ -57,9 +57,11 @@ type BaseFn = (id: string) => Omit<CanonicalEvent, 'kind'> & { turnId?: string }
  * Parses Codex rollout JSONL (`~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<threadId>.jsonl`).
  * Every line is `{timestamp, type, payload}`. The format is Codex-internal (types live in
  * codex-rs/protocol); this parser handles the legacy history mode observed locally and ignores
- * unknown records. Command exit codes are frequently unavailable in rollouts (exec_command_end
- * is not persisted; code-mode `exec` prints script status, not shell exit) — the parser records
- * exactly what it can observe and marks the rest unknown.
+ * unknown records. Builds since 0.144 persist `item_completed` items instead of some legacy
+ * events; of those, only `FileChange` is read, because nothing else records an applied patch.
+ * Command exit codes are frequently unavailable in rollouts (exec_command_end is not persisted;
+ * code-mode `exec` prints script status, not shell exit) — the parser records exactly what it can
+ * observe and marks the rest unknown.
  *
  * Long-running commands: when an `exec` cell or `exec_command` yields with "running with cell ID
  * N" / "session ID N", the real result arrives in a later `wait` / `write_stdin` output. The
@@ -298,75 +300,11 @@ export class CodexRolloutParser implements RecordParser {
       }
       case 'patch_apply_end': {
         const callId = asString(p.call_id) ?? `patch-${lineNo}`;
-        const success = p.success !== false;
-        const changesObj = asObject(p.changes) ?? {};
-        const changes: FileChange[] = [];
-        for (const [path, raw] of Object.entries(changesObj)) {
-          const c = asObject(raw);
-          if (!c) continue;
-          const kind = asString(c.type);
-          if (kind === 'add') {
-            const content = asString(c.content) ?? '';
-            changes.push({
-              path,
-              change: 'add',
-              linesAdded: content ? content.split('\n').length : 0,
-              linesRemoved: 0,
-              applied: success,
-            });
-          } else if (kind === 'delete') {
-            const content = asString(c.content) ?? '';
-            changes.push({
-              path,
-              change: 'delete',
-              linesAdded: 0,
-              linesRemoved: content ? content.split('\n').length : 0,
-              applied: success,
-            });
-          } else {
-            const diff = asString(c.unified_diff) ?? '';
-            const hunks = hunksFromUnifiedDiff(diff);
-            let added = 0;
-            let removed = 0;
-            for (const h of hunks)
-              for (const l of h.lines)
-                if (l.startsWith('+')) added++;
-                else if (l.startsWith('-')) removed++;
-            const movedTo = asString(c.move_path);
-            changes.push({
-              path: movedTo ?? path,
-              change: movedTo ? 'move' : 'update',
-              movedFrom: movedTo ? path : undefined,
-              hunks: hunks.length ? hunks : undefined,
-              linesAdded: added,
-              linesRemoved: removed,
-              applied: success,
-            });
-          }
-        }
-        const events: CanonicalEvent[] = [];
-        if (!this.calls.has(callId)) {
-          const first = changes[0]?.path ?? 'files';
-          events.push({
-            ...base(makeEventId(sid, 'tool', callId, 'call')),
-            kind: 'tool.called',
-            callId,
-            toolName: 'apply_patch',
-            input: { kind: 'fileEdit', path: first },
-            title: `Edit ${changes.length === 1 ? first : `${changes.length} files`}`,
-          });
-        }
-        events.push({
-          ...base(makeEventId(sid, 'tool', callId, 'result')),
-          kind: 'tool.completed',
-          callId,
-          toolName: 'apply_patch',
-          result: { kind: 'fileChanges', changes },
-          isError: !success,
-        });
-        this.calls.delete(callId);
-        return events;
+        const changes = fileChangesFrom(p.changes, p.success !== false);
+        return this.patchApplied(callId, changes, p.success === false, base);
       }
+      case 'item_completed':
+        return this.itemCompleted(p, base);
       case 'mcp_tool_call_end': {
         const callId = asString(p.call_id) ?? `mcp-${lineNo}`;
         const inv = asObject(p.invocation);
@@ -645,6 +583,68 @@ export class CodexRolloutParser implements RecordParser {
   }
 
   /**
+   * An item Codex finished, in the item-based rollouts every build since 0.144 writes.
+   *
+   * Only `FileChange` is read here. Those builds no longer persist `patch_apply_end`, so without it
+   * a rollout says nothing about the files a session changed; only a hook, when one ran, reported
+   * the paths, with no lines. The item is the applied result, one per patch, carrying the same
+   * `changes` map `patch_apply_end` did. Its id is the call id of a direct `apply_patch`, and for a
+   * patch applied inside a code-mode `exec` cell it is the `exec-<uuid>` id that Codex's hook
+   * reports for the nested call, so the hook's zero-line placeholder and this record reduce to one
+   * activity. The patch text inside the cell's script is what the agent meant to apply, not what
+   * was applied, and is deliberately not read as a change.
+   */
+  private itemCompleted(p: Record<string, unknown>, base: BaseFn): CanonicalEvent[] {
+    const item = asObject(p.item);
+    if (asString(item?.type) !== 'FileChange') return [];
+    // Every observed item names this rollout's own thread. One from another thread belongs to that
+    // thread's rollout, which is its own session, and counting it here would count it twice.
+    const thread = asString(p.thread_id);
+    if (thread && thread !== this.ctx.providerSessionId) return [];
+    const callId = asString(item?.id);
+    if (!callId) return [];
+    const status = asString(item?.status);
+    const applied = status === undefined || status === 'completed';
+    const changes = fileChangesFrom(item?.changes, applied);
+    if (changes.length === 0) return [];
+    const turnId = asString(p.turn_id);
+    const withTurn: BaseFn = turnId ? (id) => ({ ...base(id), turnId }) : base;
+    return this.patchApplied(callId, changes, !applied, withTurn);
+  }
+
+  /** The call (unless the rollout already announced it) and result for one applied patch. */
+  private patchApplied(
+    callId: string,
+    changes: FileChange[],
+    failed: boolean,
+    base: BaseFn,
+  ): CanonicalEvent[] {
+    const sid = this.ctx.sessionId;
+    const events: CanonicalEvent[] = [];
+    if (!this.calls.has(callId)) {
+      const first = changes[0]?.path ?? 'files';
+      events.push({
+        ...base(makeEventId(sid, 'tool', callId, 'call')),
+        kind: 'tool.called',
+        callId,
+        toolName: 'apply_patch',
+        input: { kind: 'fileEdit', path: first },
+        title: `Edit ${changes.length === 1 ? first : `${changes.length} files`}`,
+      });
+    }
+    events.push({
+      ...base(makeEventId(sid, 'tool', callId, 'result')),
+      kind: 'tool.completed',
+      callId,
+      toolName: 'apply_patch',
+      result: { kind: 'fileChanges', changes },
+      isError: failed,
+    });
+    this.calls.delete(callId);
+    return events;
+  }
+
+  /**
    * A message from one agent to another, in Codex's multi-agent mode.
    *
    * These were dropped by the `default` above, on the reasoning that `agent_message` arrives on
@@ -912,6 +912,50 @@ export class CodexRolloutParser implements RecordParser {
     const whole: ParsedExecOutput = { ...parsed, body: target.chunks.join('') };
     return [this.commandCompleted(target.callId, target.toolName, whole, base, true)];
   }
+}
+
+/**
+ * Codex's `changes` map, shared by `patch_apply_end` and `FileChange` items: path to
+ * `{type: 'add' | 'delete', content}` or `{type: 'update', unified_diff, move_path}`, where a move
+ * is keyed by its source path.
+ */
+function fileChangesFrom(raw: unknown, applied: boolean): FileChange[] {
+  const changes: FileChange[] = [];
+  for (const [path, value] of Object.entries(asObject(raw) ?? {})) {
+    const c = asObject(value);
+    if (!c) continue;
+    const kind = asString(c.type);
+    if (kind === 'add' || kind === 'delete') {
+      const content = asString(c.content) ?? '';
+      const lines = content ? content.split('\n').length : 0;
+      changes.push({
+        path,
+        change: kind,
+        linesAdded: kind === 'add' ? lines : 0,
+        linesRemoved: kind === 'delete' ? lines : 0,
+        applied,
+      });
+      continue;
+    }
+    const hunks = hunksFromUnifiedDiff(asString(c.unified_diff) ?? '');
+    let added = 0;
+    let removed = 0;
+    for (const h of hunks)
+      for (const l of h.lines)
+        if (l.startsWith('+')) added++;
+        else if (l.startsWith('-')) removed++;
+    const movedTo = asString(c.move_path);
+    changes.push({
+      path: movedTo ?? path,
+      change: movedTo ? 'move' : 'update',
+      movedFrom: movedTo ? path : undefined,
+      hunks: hunks.length ? hunks : undefined,
+      linesAdded: added,
+      linesRemoved: removed,
+      applied,
+    });
+  }
+  return changes;
 }
 
 function recordHash(line: string): string {

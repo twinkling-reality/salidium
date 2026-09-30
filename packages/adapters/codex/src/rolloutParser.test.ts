@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { applyEvent, createInitialState, projectSession } from '@salidium/core';
 import {
   type CanonicalEvent,
@@ -466,5 +467,166 @@ describe('code cells that only poll', () => {
       result?: { outputExcerpt?: string };
     };
     expect(done?.result?.outputExcerpt).toContain('work nobody saw start');
+  });
+});
+
+/*
+ * Every Codex build since 0.144 writes item-based rollouts and no longer persists
+ * `patch_apply_end`; an applied patch appears only as an `item_completed` FileChange item. The
+ * fixtures are cut from real rollouts: each record keeps its keys, nesting and order, while ids,
+ * paths, times, diffs and every piece of text are synthetic.
+ */
+describe('CodexRolloutParser: item-based rollouts', () => {
+  const THREAD = '01a00001-0000-7000-8000-000000000001';
+  const fixture = (name: string) =>
+    readFileSync(new URL(`./testing/fixtures/${name}`, import.meta.url), 'utf8')
+      .split('\n')
+      .filter(Boolean);
+  const sessionId = makeSessionId('codex', THREAD);
+  const reduce = (events: CanonicalEvent[]) => {
+    const state = createInitialState({ sessionId, provider: 'codex', providerSessionId: THREAD });
+    let seq = 0;
+    for (const e of events) applyEvent(state, { ...e, seq: seq++ } as StoredEvent);
+    return state;
+  };
+  const changesOf = (events: CanonicalEvent[]) =>
+    events.flatMap((e) =>
+      e.kind === 'tool.completed' && e.result.kind === 'fileChanges'
+        ? e.result.changes.map((c) => ({ callId: e.callId, turnId: e.turnId, ...c }))
+        : [],
+    );
+
+  describe('code mode (0.158 desktop)', () => {
+    const lines = fixture('codex-0.158-code-mode.jsonl');
+    const events = parseAll(lines, sessionId, THREAD);
+    const changes = changesOf(events);
+
+    it('records each applied patch from its FileChange item, not from the script', () => {
+      for (const e of events) expect(() => CanonicalEventSchema.parse(e)).not.toThrow();
+      expect(parseAll(lines, sessionId, THREAD).map((e) => e.id)).toEqual(events.map((e) => e.id));
+      // Whole-file counts follow the convention both adapters share: the content split on
+      // newlines, so a file of 62 lines ending in a newline counts 63.
+      expect(changes.map((c) => [c.path, c.change, c.linesAdded, c.linesRemoved])).toEqual([
+        ['/repo/src/file1.mjs', 'add', 63, 0],
+        ['/repo/src/file2.swift', 'update', 1, 1],
+        ['/repo/src/file2.swift', 'delete', 0, 36],
+      ]);
+      expect(changes.every((c) => c.applied && c.callId.startsWith('exec-'))).toBe(true);
+      // The cell that carried the patch stays a command of its own; nothing is read from its text.
+      const cells = events.filter((e) => e.kind === 'tool.called' && e.toolName === 'exec');
+      expect(cells).toHaveLength(3);
+    });
+
+    it('files each change under the turn the item names', () => {
+      expect(new Set(changes.map((c) => c.turnId))).toEqual(
+        new Set(['01a00003-0000-7000-8000-000000000003']),
+      );
+    });
+
+    it('reduces to the files the session changed', () => {
+      const state = reduce(events);
+      expect(Object.keys(state.files).sort()).toEqual([
+        '/repo/src/file1.mjs',
+        '/repo/src/file2.swift',
+      ]);
+      expect(state.counters.filesChanged).toBe(2);
+      expect(state.files['/repo/src/file2.swift']?.kinds).toEqual(['update', 'delete']);
+    });
+
+    it('merges with the hook that reported the same nested call, without counting it twice', () => {
+      const item = changes[1];
+      if (!item) throw new Error('fixture has an update');
+      const receivedAt = '2026-01-01T00:14:50.830Z';
+      const hookInput = {
+        command:
+          '*** Begin Patch\n*** Update File: /repo/src/file2.swift\n@@\n-line\n+line\n*** End Patch',
+      };
+      const hook = [
+        ...parseCodexHookPayload(
+          {
+            session_id: THREAD,
+            hook_event_name: 'PreToolUse',
+            turn_id: item.turnId,
+            tool_name: 'apply_patch',
+            tool_use_id: item.callId,
+            tool_input: hookInput,
+            cwd: '/repo',
+          },
+          { receivedAt },
+        ),
+        ...parseCodexHookPayload(
+          {
+            session_id: THREAD,
+            hook_event_name: 'PostToolUse',
+            turn_id: item.turnId,
+            tool_name: 'apply_patch',
+            tool_use_id: item.callId,
+            tool_input: hookInput,
+            tool_response: 'Success. Updated the following files:\nM /repo/src/file2.swift\n',
+          },
+          { receivedAt },
+        ),
+      ];
+      const rollout = events.filter((e) => 'callId' in e && e.callId === item.callId);
+      // The hook's call and the rollout's call are one event; the results are two observations.
+      expect(hook[0]?.id).toBe(rollout.find((e) => e.kind === 'tool.called')?.id);
+      const state = reduce([...hook, ...rollout]);
+      expect(Object.keys(state.activities).filter((id) => id === item.callId)).toHaveLength(1);
+      expect(state.files['/repo/src/file2.swift']).toMatchObject({
+        changeCount: 1,
+        linesAdded: 1,
+        linesRemoved: 1,
+      });
+      expect(state.counters.filesChanged).toBe(1);
+    });
+  });
+
+  it('completes a direct apply_patch call with the item that carries its id', () => {
+    const events = parseAll(fixture('codex-direct-apply-patch.jsonl'), sessionId, THREAD);
+    const calls = events.filter((e) => e.kind === 'tool.called' && e.toolName === 'apply_patch');
+    expect(calls.map((e) => 'callId' in e && e.callId)).toEqual([
+      'call_Synthetic001xxxxxxxxxxxx',
+      'call_Synthetic002xxxxxxxxxxxx',
+    ]);
+    const changes = changesOf(events);
+    expect(changes.map((c) => [c.callId.slice(0, 17), c.path, c.change])).toEqual([
+      ['call_Synthetic001', '/repo/src/file2.swift', 'update'],
+      ['call_Synthetic001', '/repo/src/file1.swift', 'update'],
+      ['call_Synthetic002', '/repo/src/file4.swift', 'update'],
+      ['call_Synthetic002', '/repo/src/file3.swift', 'add'],
+    ]);
+    expect(reduce(events).counters.filesChanged).toBe(4);
+  });
+
+  it('keeps a move as a move, from its source path', () => {
+    const events = parseAll(fixture('codex-code-mode-move.jsonl'), sessionId, THREAD);
+    expect(changesOf(events)).toMatchObject([
+      { path: '/repo/src/file2.ts', movedFrom: '/repo/src/file1.ts', change: 'move' },
+    ]);
+  });
+
+  it('ignores an item from another thread, and marks a patch that did not apply', () => {
+    const [line] = fixture('codex-0.158-code-mode.jsonl').filter((l) => l.includes('"FileChange"'));
+    const record = JSON.parse(line ?? '{}');
+    const other = {
+      ...record,
+      payload: { ...record.payload, thread_id: '01a0ffff-0000-7000-8000-00000000ffff' },
+    };
+    expect(changesOf(parseAll([JSON.stringify(other)], sessionId, THREAD))).toEqual([]);
+    const failed = {
+      ...record,
+      payload: { ...record.payload, item: { ...record.payload.item, status: 'failed' } },
+    };
+    const events = parseAll([JSON.stringify(failed)], sessionId, THREAD);
+    expect(changesOf(events).every((c) => !c.applied)).toBe(true);
+    expect(events.find((e) => e.kind === 'tool.completed')).toMatchObject({ isError: true });
+  });
+
+  it('does not invent a change for a file written through the shell (0.157 app server)', () => {
+    const events = parseAll(fixture('codex-0.157-app-server-shell-write.jsonl'), sessionId, THREAD);
+    expect(changesOf(events)).toEqual([]);
+    const command = events.find((e) => e.kind === 'tool.called');
+    expect(command).toMatchObject({ toolName: 'exec_command', input: { kind: 'command' } });
+    expect(reduce(events).counters.filesChanged).toBe(0);
   });
 });
