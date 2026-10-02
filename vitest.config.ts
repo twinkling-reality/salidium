@@ -25,6 +25,8 @@ export default defineConfig({
     include: ['packages/**/src/**/*.test.ts', 'packages/**/src/**/*.test.tsx'],
     exclude: ['**/node_modules/**', '**/dist/**'],
     environment: 'node',
+    // Provider isolation: see `packages/adapter-kit/src/testing/providerIsolation.ts`.
+    setupFiles: ['./vitest.setup.ts'],
     passWithNoTests: false,
     /*
      * Above the budget the suite's own helpers already take, rather than below it.
