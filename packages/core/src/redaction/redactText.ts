@@ -63,10 +63,13 @@ const TERM = '(?![A-Za-z0-9._~+/=-])';
  */
 const KEY_START = String.raw`(?<=^|[\s"'${'`'}{(\[,;]|\\[nrt])`;
 /**
- * A header name may follow anything but a letter or digit. The header rule never had a left anchor,
- * and `HTTP_AUTHORIZATION=`, `X-Authorization:` and `http.extraheader=Authorization:` are headers.
+ * A header name starts where a name starts: after anything that cannot be part of one, or after an
+ * escaped line break or tab. It may carry a prefix (`HTTP_AUTHORIZATION`, `X-Authorization`,
+ * `requestAuthorization`), because the header rule never had a left anchor. Allowing a prefix but
+ * no start inside a name keeps the match linear: each name has one start, from which the prefix is
+ * read once. A boundary that let every `-` or `_` start a match made it quadratic.
  */
-const HEADER_START = String.raw`(?:(?<![A-Za-z0-9])|(?<=\\[nrt]))`;
+const HEADER_START = String.raw`(?:(?<![\w.-])|(?<=\\[nrt]))`;
 
 /**
  * A key, bare or quoted, then its separator. The quote may be escaped to any depth, since a JSON
@@ -96,9 +99,11 @@ const GENERIC_VALUE = /[A-Za-z0-9_+/=.~!#$%^&*-]*/y;
 /**
  * An environment variable's unquoted value runs to whitespace, so `@` or `?` in a password does not
  * cut it short. It stops at a quote or backslash, which in a raw record ends or escapes the JSON
- * string around it, and at shell punctuation that ends a word.
+ * string around it, at shell punctuation that ends a word, and at the `,`, `}` or unopened `]`
+ * that ends a pair in a list or an object. A bracketed part is read whole, so one of our own
+ * placeholders is read as one.
  */
-const ENV_VALUE = /[^\s"'`\\;|()<>]*/y;
+const ENV_VALUE = /(?:[^\s"'`\\;|()<>,}[\]]|\[[^\s"'`\\[\]]*\])*/y;
 /** A placeholder already in the text, whose number a fresh redactor must not hand out again. */
 const PLACEHOLDER_NUMBER = /\[[A-Z_]+#(\d+)\]/g;
 
@@ -247,7 +252,7 @@ const RULES: Rule[] = [
   {
     id: 'bearer-header',
     label: 'BEARER_TOKEN',
-    pattern: keyPattern(HEADER_START, String.raw`(?:[\w.-]*[-_.])?(?:${CREDENTIAL_HEADER})`),
+    pattern: keyPattern(HEADER_START, String.raw`[\w.-]*?(?:${CREDENTIAL_HEADER})`),
     group: 0,
     keywords: ['authorization', 'api-key', '-token'],
     keyed: 'header',
@@ -324,13 +329,11 @@ function quotedValueEnd(text: string, from: number, quote: string, depth: number
   let i = from;
   while (i < text.length) {
     const c = text[i];
-    // Inside a raw record, a single-quoted or backtick value is itself inside a JSON string, and a
-    // double quote ends that string; reading past it would redact across a JSON boundary.
-    if (c === '"' && quote !== '"') return -1;
+    if (c === '"' && quote !== '"' && closesJsonString(text, i + 1)) return -1;
     if (c === '\\') {
       let j = i;
       while (text[j] === '\\') j++;
-      if (text[j] === '"' && quote !== '"') return -1;
+      if (text[j] === '"' && quote !== '"' && closesJsonString(text, j + 1)) return -1;
       if (text[j] === quote) {
         const run = (j - i) % (2 * depth + 2);
         if (run === depth) return j - depth;
@@ -344,6 +347,17 @@ function quotedValueEnd(text: string, from: number, quote: string, depth: number
     i++;
   }
   return -1;
+}
+
+/**
+ * Inside a raw record, a single-quoted or backtick value sits inside a JSON string, and a double
+ * quote followed by JSON punctuation ends that string; reading past it would redact across a JSON
+ * boundary. Any other double quote is part of the value, as in `PGPASSWORD='ab"cd'`.
+ */
+function closesJsonString(text: string, after: number): boolean {
+  let i = after;
+  while (text[i] === ' ') i++;
+  return i >= text.length || /[,:}\]]/.test(text[i] ?? '');
 }
 
 /**
@@ -405,9 +419,6 @@ function keyedValue(
   const quoted = quote === '"' || quote === "'" || quote === '`';
   if (!quoted && depth > 0) return undefined;
   const start = quoted ? i + depth + 1 : i;
-  // A "quote" followed by JSON punctuation closed the string the key sat in (`"token: "}`); reading
-  // it as an opening quote would redact across that string's end.
-  if (quoted && /[,:}\]]/.test(text[start] ?? '')) return undefined;
   const end = quoted ? quotedValueEnd(text, start, quote, depth) : -1;
   let raw = end >= 0 ? text.slice(start, end) : undefined;
   let weak = false;

@@ -9,19 +9,20 @@
   it; quoted values with escaped quotes, replaced whole so a redacted JSON document still parses;
   `Authorization` with a Bearer, Basic or Token scheme, `Proxy-Authorization`, `X-Api-Key`,
   `X-Auth-Token`, `X-Access-Token`, `Private-Token` and `X-Goog-Api-Key` headers, also after a
-  prefix such as `HTTP_AUTHORIZATION=` or `http.extraheader=`, in curl commands and logs; and
+  prefix such as `HTTP_AUTHORIZATION=`, `requestAuthorization:` or `http.extraheader=`, in curl commands and logs; and
   `NAME=value`, `export NAME="value"` and compose `NAME: value` forms, read to the end of the
   value. A key that names a credential with a quoted value, or an environment variable's name, is
   enough evidence for a value of six characters, so `{"password":"hunter2"}` and
   `DB_PASSWORD=hunter2` are redacted. Other values keep the earlier bar. A repeated secret keeps
   one placeholder whether it is bare, quoted, or escaped, though a header and a key-value pair
-  still get separate placeholders. A placeholder already in the text keeps its number, so text
-  redacted again at the consumer boundary cannot give two secrets one placeholder. Not covered:
-  an unquoted lowercase key with a short value (`password: hunter2` in YAML, `password=hunter2`
-  in an ini file); a quoted value containing whitespace beyond the leading run the earlier rules
-  read; values made only of letters, `.`, `_` and `-` other than a Basic credential; keys after
-  a colon, as in an `.npmrc` `//host/:_authToken=`; YAML block scalars; URL query parameters;
-  command-line flags such as `--password value`; and cookies.
+  still get separate placeholders. A placeholder already in a text keeps its number when that text
+  is redacted again. The consumer boundary redacts a document's fields one at a time, though, so a
+  secret it finds first can still share a number with a placeholder stored in a later field.
+  Not covered: an unquoted lowercase key with a short value (`password: hunter2` in YAML,
+  `password=hunter2` in an ini file); a quoted value containing whitespace beyond the leading run
+  the earlier rules read; values made only of letters, `.`, `_` and `-` other than a Basic
+  credential; keys after a colon, as in an `.npmrc` `//host/:_authToken=`; YAML block scalars;
+  URL query parameters; command-line flags such as `--password value`; and cookies.
 - Events stored before this release are not redacted again. Stored events are immutable, and
   `salidium reingest --all` re-reads provider files but never rewrites an event it already holds,
   so older rows keep their earlier redaction in the session view, search, the owner API, and what

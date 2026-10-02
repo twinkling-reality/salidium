@@ -301,6 +301,25 @@ describe('credentials in structured text', () => {
     // A template inside a value does not excuse the rest of it.
     // biome-ignore lint/suspicious/noTemplateCurlyInString: a template is the input under test.
     expect(redact('password: "a1B2c3D4e5F6g7H8i9J0${x}"')).not.toContain('a1B2c3D4');
+    // A camelCase header name, which the unanchored rule always caught.
+    expect(redact('requestAuthorization: Bearer Zq8rL0xStagingAB12')).toBe(
+      'requestAuthorization: Bearer [BEARER_TOKEN#1]',
+    );
+    expect(redact('proxyAuthorization=Bearer Zq8rL0xStagingAB12')).toBe(
+      'proxyAuthorization=Bearer [BEARER_TOKEN#1]',
+    );
+  });
+
+  it('reads a value whole whatever punctuation it holds', () => {
+    // A double quote inside a single-quoted value is part of it.
+    expect(redact(`PGPASSWORD='Zq8r"L0xStagingAB'`)).toBe("PGPASSWORD='[SECRET#1]'");
+    expect(redact(`password: 'Zq8rL0x"StagingAB12'`)).toBe("password: '[SECRET#1]'");
+    // So is JSON punctuation at its start.
+    expect(redact('{"password":":Zq8rL0xStagingAB12"}')).toBe('{"password":"[SECRET#1]"}');
+    expect(redact('token: "}Zq8rL0xStagingAB12"')).toBe('token: "[SECRET#1]"');
+    // ...but in a raw record, a double quote followed by JSON punctuation ends the string around it.
+    const raw = JSON.stringify({ cmd: "login --token='Zq8rL0x", next: 'abc' });
+    expect(JSON.parse(redact(raw))).toEqual({ cmd: "login --token='[SECRET#1]", next: 'abc' });
   });
 
   it('reads an environment value to its end and a long quoted value to its quote', () => {
@@ -308,6 +327,9 @@ describe('credentials in structured text', () => {
     expect(redact('DB_PASSWORD=Zq8r?L0xStaging npm start')).toBe(
       'DB_PASSWORD=[SECRET#1] npm start',
     );
+    // ...and no further than the pair it belongs to.
+    expect(redact('DB_PASSWORD=Zq8rL0xS,OTHER=1')).toBe('DB_PASSWORD=[SECRET#1],OTHER=1');
+    expect(redact('{env: DB_PASSWORD=Zq8rL0xS}')).toBe('{env: DB_PASSWORD=[SECRET#1]}');
     const long = `Zq8rL0x"${'a1B2c3D4'.repeat(600)}`;
     const out = redact(JSON.stringify({ password: long }));
     expect(out).toBe('{"password":"[SECRET#1]"}');
@@ -322,6 +344,33 @@ describe('credentials in structured text', () => {
     expect(r.redact('{"api_key":"Zq8r\\u004c0xS"}').text).toBe('{"api_key":"[SECRET#1]"}');
     expect(r.redact('{"api_key":"Zq8rL0xS"}').text).toBe('{"api_key":"[SECRET#1]"}');
     expect(r.redact('{"api_key": ["Zq8rL0xS"]}').text).toBe('{"api_key": ["[SECRET#1]"]}');
+  });
+
+  it('stays linear on input shaped to make a key match backtrack', () => {
+    // A header-name boundary that let every `-` or `_` start a match took 558 ms at 16 KB and grew
+    // fourfold with each doubling; base64url data has one of those every few characters. Linear
+    // time is a few milliseconds here and quadratic several seconds, so the budget sits between.
+    // The fastest of a few runs is what counts, because a busy machine can stall any single one.
+    const size = 64 * 1024;
+    const base64url = Array.from({ length: size }, (_, i) =>
+      'aZ09-_xQ'.charAt((i * 7 + (i >> 3)) % 8),
+    ).join('');
+    for (const text of [
+      `${'a-'.repeat(size / 2)} Authorization`,
+      `${'a_'.repeat(size / 2)} password`,
+      base64url,
+      `${base64url} Authorization: Bearer x`,
+      `${base64url}-api-key password token`,
+    ]) {
+      let fastest = Number.POSITIVE_INFINITY;
+      for (let attempt = 0; attempt < 5 && fastest >= 50; attempt++) {
+        const started = performance.now();
+        createRedactor().redact(text);
+        fastest = Math.min(fastest, performance.now() - started);
+        if (fastest > 1000) break;
+      }
+      expect(fastest, text.slice(-40)).toBeLessThan(50);
+    }
   });
 
   it('does not take prose, code, or non-secret JSON values for credentials', () => {
