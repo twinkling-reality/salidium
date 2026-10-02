@@ -24,9 +24,10 @@
   slices that let everything else run between them, pausing while collection is paused or
   maintenance runs. `salidium status` shows it as "Updating session history: n of m". A session
   you open before it is reached is updated on opening, as before. Checkpoints left by the older
-  release are removed as each session is updated, which returns their space to the store.
-  REPLAY COST: the coordinator fills in the measured background duration and first-open times
-  here before release.
+  release are removed as each session is updated. SQLite reuses that space inside the file; run
+  `salidium retention compact` if you want the file itself to shrink. On a large store the
+  background pass takes minutes, and Salidium answers throughout, more slowly than usual while it
+  runs. Once a session has been updated it opens as quickly as before the upgrade.
 - Salidium no longer runs `git status` in the repositories agents work in. A repository's own
   configuration can make `git status` run commands, so a repository an agent was working in could
   have run code as Salidium. Repository snapshots now read only the top-level directory, HEAD and
