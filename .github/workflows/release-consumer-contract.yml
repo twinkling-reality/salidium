@@ -36,6 +36,7 @@ jobs:
     timeout-minutes: 20
     outputs:
       package_sha256: ${{ steps.pack.outputs.package_sha256 }}
+      npm_cli_sha256: ${{ steps.npm_cli.outputs.npm_cli_sha256 }}
     steps:
       - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
         with:
@@ -99,10 +100,29 @@ jobs:
           node check.mjs
           node --conditions=development check.mjs
 
+      # The consumer contract's trusted publisher is staged-only, and `npm stage publish` first
+      # shipped in npm 12.0.0. The publish job holds the OIDC identity and must fetch and install
+      # nothing, so the npm CLI is fetched here, checked against the registry's integrity for that
+      # exact version, and handed over with the package. The pinned value is
+      # `npm view npm@12.2.0 dist.integrity`; npm 12.2.0 needs Node ^24.15.0.
+      - name: Fetch the npm that can stage a publish
+        id: npm_cli
+        env:
+          NPM_CLI_INTEGRITY: sha512-ZsJjKpTnlmSXOLLXiU1xDCzC4Wlok4IwZmh/aw2KUuXytU7q6qMv/cUT7MoeSf95Slwuw/lRXYefGzGCspHPNQ==
+        run: |
+          mkdir "$RUNNER_TEMP/npm-cli"
+          npm pack npm@12.2.0 --pack-destination "$RUNNER_TEMP/npm-cli"
+          cli="$RUNNER_TEMP/npm-cli/npm-12.2.0.tgz"
+          test "sha512-$(openssl dgst -sha512 -binary "$cli" | base64 -w 0)" = "$NPM_CLI_INTEGRITY"
+          echo "npm_cli=$cli" >> "$GITHUB_OUTPUT"
+          echo "npm_cli_sha256=$(sha256sum "$cli" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: salidium-consumer-contract-release-package
-          path: ${{ steps.pack.outputs.package }}
+          path: |
+            ${{ steps.pack.outputs.package }}
+            ${{ steps.npm_cli.outputs.npm_cli }}
           if-no-files-found: error
           retention-days: 1
 
@@ -125,17 +145,21 @@ jobs:
         with:
           name: salidium-consumer-contract-release-package
           path: ${{ runner.temp }}/release
-      - name: Verify package crossing the job boundary
+      - name: Verify files crossing the job boundary
         env:
           EXPECTED_SHA256: ${{ needs.verify.outputs.package_sha256 }}
+          EXPECTED_NPM_CLI_SHA256: ${{ needs.verify.outputs.npm_cli_sha256 }}
         run: |
           package=$(find "$RUNNER_TEMP/release" -name 'salidium-consumer-contract-*.tgz' -type f -print -quit)
           test "$(sha256sum "$package" | cut -d ' ' -f 1)" = "$EXPECTED_SHA256"
-      - name: Use an npm that can stage a publish
-        # `npm stage publish` first shipped in npm 12.0.0. Pinned to the version this workflow was
-        # checked against, which needs Node ^24.15.0.
+          cli="$RUNNER_TEMP/release/npm-cli/npm-12.2.0.tgz"
+          test "$(sha256sum "$cli" | cut -d ' ' -f 1)" = "$EXPECTED_NPM_CLI_SHA256"
+      - name: Unpack the npm that can stage a publish
+        # Run from the verified tarball, which bundles its dependencies: nothing is installed or
+        # fetched in this job, and the runner's own npm stays as it was.
         run: |
-          npm install --global npm@12.2.0
-          test "$(npm --version)" = 12.2.0
+          mkdir "$RUNNER_TEMP/npm-cli"
+          tar -xzf "$RUNNER_TEMP/release/npm-cli/npm-12.2.0.tgz" -C "$RUNNER_TEMP/npm-cli"
+          test "$(node "$RUNNER_TEMP/npm-cli/package/bin/npm-cli.js" --version)" = 12.2.0
       - name: Stage through the trusted publisher
-        run: npm stage publish "$RUNNER_TEMP"/release/salidium-consumer-contract-*.tgz --access public --provenance --tag "${{ inputs.npm_tag }}"
+        run: node "$RUNNER_TEMP/npm-cli/package/bin/npm-cli.js" stage publish "$RUNNER_TEMP"/release/salidium-consumer-contract-*.tgz --access public --provenance --tag "${{ inputs.npm_tag }}"
