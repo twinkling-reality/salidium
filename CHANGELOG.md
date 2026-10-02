@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.8.0 - 2026-10-02
+
+- Experimental: see where a session's work sits in its repository. A session's report gains
+  **Where it sits**, which places each changed file in its module, shows what it imports and what
+  imports it, and can widen to the modules that depend on them. Everything shown is read from
+  committed Git objects at the commit the session was observed at: the latest turn end, else the
+  start. Nothing is matched by name, no model is called, and a file that is not in the map at that
+  commit says so in plain words. JavaScript and TypeScript are mapped file by file; C# is placed
+  by assembly only.
+- Salidium reads a repository only after you allow it: `salidium map allow <repository>`,
+  `salidium map list`, `salidium map revoke <repository>`, and `salidium map show` to print a
+  map. A linked worktree is allowed through its main repository. Allowing records the repository's
+  Git directory and a later read is refused if it changed. Tools you have given a consumer
+  credential can read the committed structure of a repository you allow, at `/project-map/v0`,
+  listed under discovery's `experimental`. Maps are built on request only, never at startup,
+  bounded in size and time, and a repository Git could be tricked into reading elsewhere for
+  (alternates, a crafted `commondir`, symlinked object stores) is refused.
+- The experimental documents `salidium.project-map` v0 and `salidium.execution-links` v0 carry no
+  compatibility promise yet. Consumer contract 1.1 is unchanged.
+- Tests that wait for a canceled Ollama request now wait on what they observe, not fixed delays.
+
 ## 0.7.0 - 2026-10-02
 
 - Observe OpenCode 2.x sessions, read only, as the provider `salidium/opencode`. Experimental and
