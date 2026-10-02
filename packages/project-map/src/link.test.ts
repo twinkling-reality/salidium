@@ -12,6 +12,7 @@ import {
   type ProjectMapService,
   type RepositoryResolution,
   repositoriesOf,
+  representable,
   resolveRepository,
   type SessionAnchors,
 } from './index.ts';
@@ -653,5 +654,43 @@ describe('resolveRepository', () => {
     const doc = link(files, [...repositories]);
     expect(doc.files.map((f) => f.status)).toEqual(['linked', 'repository-not-mapped']);
     expect(doc.repositories.map((r) => r.status)).toEqual(['mapped', 'not-opted-in']);
+  });
+});
+
+describe('what the document can print', () => {
+  // From char codes, so no formatter turns the escapes into the characters themselves.
+  const unprintable = [
+    ['a C0 control', String.fromCharCode(7)],
+    ['DEL', String.fromCharCode(0x7f)],
+    ['a C1 control', String.fromCharCode(0x85)],
+    ['a bidirectional override', String.fromCharCode(0x202e)],
+    ['a bidirectional isolate', String.fromCharCode(0x2066)],
+    ['a line separator', String.fromCharCode(0x2028)],
+  ] as const;
+
+  test.each(unprintable)('a root with %s is never a repository', (_name, character) => {
+    const odd = `/work/odd${character}repo`;
+    const files: ChangedFile[] = [
+      { path: `${odd}/a.ts`, location: at(odd, 'a.ts') },
+      { path: `${WORKTREE}/b.ts`, location: at(WORKTREE, 'b.ts', odd) },
+      { path: `${REPO}/README.md`, location: at(REPO, 'README.md') },
+    ];
+    expect(files.map(representable)).toEqual([false, false, true]);
+    expect(repositoriesOf(files)).toEqual([REPO]);
+    const doc = link(files, [[REPO, mapped()]]);
+    expect(doc.filesOmitted).toBe(2);
+    expect(doc.files.map((f) => f.status)).toEqual(['linked']);
+  });
+
+  test.each(unprintable)('the schema refuses a root with %s', (_name, character) => {
+    const doc = link(
+      [{ path: `${REPO}/README.md`, location: at(REPO, 'README.md') }],
+      [[REPO, mapped()]],
+    );
+    const odd = {
+      ...doc,
+      repositories: [{ ...doc.repositories[0], root: `/work/a${character}b` }],
+    };
+    expect(ExecutionLinksSchema.safeParse(odd).success).toBe(false);
   });
 });

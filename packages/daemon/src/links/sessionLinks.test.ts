@@ -20,7 +20,7 @@ import type { HookIngress } from '../ingest/hookIngress.ts';
 import { createHttpServer } from '../server/httpServer.ts';
 import { SessionRegistry } from '../sessions/sessionRegistry.ts';
 import { SqliteStore } from '../storage/sqliteStore.ts';
-import { createSessionLinks, withholdAltered } from './sessionLinks.ts';
+import { createSessionLinks } from './sessionLinks.ts';
 
 /**
  * The document the interface and consumers read, derived from real ingested events through the
@@ -377,8 +377,9 @@ describe('execution links from ingested sessions', () => {
   });
 
   test('never reads a repository that is not opted in', async () => {
+    // A fresh instance, so the document is computed rather than served again.
     maps.touched.length = 0;
-    await links(LIVE);
+    await createSessionLinks({ registry, log }).document(maps, LIVE);
     expect(new Set(maps.touched)).toEqual(new Set([REPO]));
   });
 
@@ -506,59 +507,171 @@ describe('the owner route', () => {
   });
 });
 
+/** A map service that keeps each map as one object, as the daemon's memory cache does. */
+function steadyService(map: (commit: string) => ProjectMap = mapAt) {
+  const maps = new Map<string, ProjectMap>();
+  let grants = [{ root: REPO, allowedAt: '2026-10-02T09:00:00.000Z' }];
+  const calls: string[] = [];
+  const service: ProjectMapService = {
+    isOptedIn: (root) => grants.some((g) => g.root === root),
+    repositories: () => grants,
+    commitExists: async (root, commit) => {
+      calls.push('commitExists');
+      return { ok: true, exists: root === REPO && (commit === START || commit === END) };
+    },
+    getMap: async (root, commit) => {
+      calls.push('getMap');
+      let kept = maps.get(`${root} ${commit}`);
+      if (!kept) {
+        kept = map(commit);
+        maps.set(`${root} ${commit}`, kept);
+      }
+      return { ok: true, map: kept };
+    },
+  };
+  return {
+    service,
+    calls,
+    regrant: (allowedAt: string) => {
+      grants = [{ root: REPO, allowedAt }];
+    },
+  };
+}
+
+/** A redactor that records every string it is asked about. */
+function countingRedactor() {
+  const seen: string[] = [];
+  const factory = () => {
+    const inner = createRedactor();
+    return {
+      ...inner,
+      redact: (text: string) => {
+        seen.push(text);
+        return inner.redact(text);
+      },
+    } as ReturnType<typeof createRedactor>;
+  };
+  return { seen, factory };
+}
+
 describe('carried whole or withheld', () => {
-  test('map nodes and edges whose text the redactor would alter are left out and counted', () => {
-    const redactor = createRedactor();
-    const unchanged = (value: string) => redactor.redact(value).text === value;
-    const map = mapAt(END);
+  test('map text the redactor would alter is withheld from what the document carries', async () => {
     const secretPath = `src/${SECRET}.ts`;
-    map.nodes.push(fileNode(secretPath));
-    map.edges.push({
-      id: edgeId(`file:${secretPath}`, 'imports', 'file:src/pay.ts'),
-      from: `file:${secretPath}`,
-      to: 'file:src/pay.ts',
-      kind: 'imports',
-      provenance: 'observed',
-      rule: 'probe',
-      evidence: [],
-      count: 1,
-    });
-    const { map: carried, withheld } = withholdAltered(map, unchanged);
-    expect(withheld).toBe(2);
-    expect(JSON.stringify(carried)).not.toContain(SECRET);
-    expect(withholdAltered(mapAt(END), unchanged)).toEqual({ map: mapAt(END), withheld: 0 });
+    const withSecret = (commit: string) => {
+      const map = mapAt(commit);
+      map.nodes.push(fileNode(secretPath));
+      map.edges.push({
+        id: edgeId(`file:${secretPath}`, 'imports', 'file:src/pay.ts'),
+        from: `file:${secretPath}`,
+        to: 'file:src/pay.ts',
+        kind: 'imports',
+        provenance: 'observed',
+        rule: 'probe',
+        evidence: [{ path: secretPath, line: 1 }],
+        count: 1,
+      });
+      return map;
+    };
+    const { service } = steadyService(withSecret);
+    const doc = await createSessionLinks({ registry, log }).document(service, LIVE);
+    expect(JSON.stringify(doc)).not.toContain(SECRET);
+    expect(doc?.mapElementsWithheld).toBe(1);
+    const pay = doc?.files.find((f) => f.relativePath === 'src/pay.ts');
+    // Its other importer is still shown, and the total counts only what is carried.
+    expect(pay?.neighbours.map((n) => n.path)).toEqual(['src/retry.ts']);
+    expect(pay?.neighboursTotal).toBe(1);
   });
 
-  test('a commit found once is not asked about again, while the opt-in is still read', async () => {
-    const calls: string[] = [];
-    let allowed = true;
-    const counting: ProjectMapService = {
-      isOptedIn: () => {
-        calls.push('isOptedIn');
-        return allowed;
-      },
-      repositories: () => [],
-      commitExists: async () => {
-        calls.push('commitExists');
-        return { ok: true, exists: true };
-      },
-      getMap: async (_root, commit) => {
-        calls.push('getMap');
-        return { ok: true, map: mapAt(commit) };
-      },
-    };
-    const handler = createSessionLinks({ registry, log }).handler({ maps: counting });
-    await handler({ sessionId: LIVE, query: new URLSearchParams() });
-    await handler({ sessionId: LIVE, query: new URLSearchParams() });
-    expect(calls.filter((c) => c === 'commitExists')).toHaveLength(1);
-    expect(calls.filter((c) => c === 'getMap')).toHaveLength(2);
-    allowed = false;
+  test('a second request on an unchanged session does no redactor work over the map', async () => {
+    const { service, calls } = steadyService();
+    const { seen, factory } = countingRedactor();
+    const links = createSessionLinks({ registry, log, redactor: factory });
+    const first = await links.document(service, LIVE);
+    expect(seen.length).toBeGreaterThan(0);
+    // Map-derived text was checked: an importer's path, a module name, a rule.
+    expect(seen).toEqual(expect.arrayContaining(['src/retry.ts', 'acme', 'probe']));
+
+    seen.length = 0;
     calls.length = 0;
-    const refused = await handler({ sessionId: LIVE, query: new URLSearchParams() });
-    expect(calls).not.toContain('commitExists');
-    expect(calls).not.toContain('getMap');
-    expect(refused.status).toBe(200);
-    if (refused.status === 200)
-      expect((refused.body as ExecutionLinks).repositories[0]?.status).toBe('not-opted-in');
+    expect(await links.document(service, LIVE)).toBe(first);
+    expect(seen).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  test('when the session moves on, only its own identifiers are checked again', async () => {
+    const { service } = steadyService();
+    const { seen, factory } = countingRedactor();
+    const links = createSessionLinks({ registry, log, redactor: factory });
+    await links.document(service, LANE_ROOT);
+    const b = new EventBuilder(LANE_ROOT, '2026-10-02T10:30:00.000Z');
+    registry.ingest(LANE_ROOT, provider([b.message('Still here.')]), { cwd: REPO });
+    registry.flush(LANE_ROOT);
+    seen.length = 0;
+    const again = await links.document(service, LANE_ROOT);
+    expect(again?.files.map((f) => f.status)).toEqual(['linked', 'linked']);
+    // Same map object: its text answers are remembered, so no map-only string is asked about.
+    for (const mapOnly of ['acme', 'nearest package.json', 'probe', 'module:package.json:.'])
+      expect(seen, mapOnly).not.toContain(mapOnly);
+  });
+
+  test('a change to the opt-in file is a new document', async () => {
+    const { service, calls, regrant } = steadyService();
+    const links = createSessionLinks({ registry, log });
+    await links.document(service, LIVE);
+    calls.length = 0;
+    regrant('2026-10-02T11:00:00.000Z');
+    await links.document(service, LIVE);
+    expect(calls).toContain('getMap');
+  });
+
+  test('links never serves a session the consumer contract leaves out', async () => {
+    const { service } = steadyService();
+    const links = createSessionLinks({ registry, log, represents: () => false });
+    expect(await links.document(service, LIVE)).toBeUndefined();
+    const result = await links.handler({ maps: service })({
+      sessionId: LIVE,
+      query: new URLSearchParams(),
+    });
+    expect(result.status).toBe(404);
+  });
+
+  test('a changed file whose repository root cannot be printed is withheld, not a failure', async () => {
+    // Built from char codes so no formatter can turn the escapes into the characters themselves.
+    const bidi = String.fromCharCode(0x202e);
+    const bell = String.fromCharCode(7);
+    const id = 'claude-code:unprintable-root-session';
+    const b = new EventBuilder(id, '2026-10-02T10:00:00.000Z');
+    registry.ingest(
+      id,
+      provider([
+        b.sessionStarted(REPO, 'model'),
+        b.turnStarted('Odd roots'),
+        ...b.edit('c1', `${REPO}/src/pay.ts`, 1, 0),
+        ...b.edit('c2', `/work/odd${bidi}repo/a.ts`, 1, 0),
+        ...b.edit('c3', `/work/bell/a.ts`, 1, 0),
+        b.raw({
+          id: 'located:1',
+          kind: 'file.located',
+          files: [
+            { path: `${REPO}/src/pay.ts`, repository: { root: REPO, path: 'src/pay.ts' } },
+            {
+              path: `/work/odd${bidi}repo/a.ts`,
+              repository: { root: `/work/odd${bidi}repo`, path: 'a.ts' },
+            },
+            {
+              path: '/work/bell/a.ts',
+              repository: { root: '/work/bell', path: 'a.ts', mainRoot: `/work/be${bell}ll` },
+            },
+          ],
+        } as never),
+      ]),
+      { cwd: REPO },
+    );
+    registry.flush(id);
+    const { service } = steadyService();
+    const doc = await createSessionLinks({ registry, log }).document(service, id);
+    expect(doc?.filesTotal).toBe(3);
+    expect(doc?.filesOmitted).toBe(2);
+    expect(doc?.repositories.map((r) => r.root)).toEqual([REPO]);
   });
 });

@@ -5,8 +5,11 @@ import {
   EXECUTION_LINKS_LIMITS,
   type ExecutionLinks,
   ExecutionLinksSchema,
+  type FileLink,
+  hasUnprintable,
   linkExecution,
-  type MapNode,
+  type ModuleLink,
+  type ModuleRef,
   type ProjectMap,
   type ProjectMapService,
   type RepositoryResolution,
@@ -14,20 +17,30 @@ import {
   type RouteResult,
   repositoriesOf,
   repositoryOf,
+  representable,
   resolveRepository,
   type SessionAnchors,
   type SessionLinksHandlerFactory,
 } from '@salidium/project-map';
+import type { SessionSummary } from '@salidium/protocol';
 import type { Logger } from '../logging/logger.ts';
 import { isUserSession, type SessionRegistry } from '../sessions/sessionRegistry.ts';
 
 const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
-/** Commits remembered as existing, across repositories. */
-const KNOWN_COMMITS = 512;
+/** Documents kept, by session, and for how long one may be served again unchanged. */
+const DOCUMENTS = 64;
+const DOCUMENT_MS = 60_000;
 
 export interface SessionLinksDeps {
   registry: Pick<SessionRegistry, 'readSession'>;
+  /**
+   * Whether the consumer contract describes a stored session (its `entryOf` rule). Links never
+   * serves a session the contract leaves out. Without it, user sessions are served.
+   */
+  represents?: (summary: SessionSummary) => boolean;
   now?: () => number;
+  /** The redactor the carry-whole-or-withhold checks use. Tests count its calls. */
+  redactor?: () => Redactor;
   log: Logger;
 }
 
@@ -41,57 +54,55 @@ export interface SessionLinksDeps {
  * reading anything under it.
  *
  * Reading changes nothing. The session is read the way consumer reports are, without loading a
- * coordinator, and nothing here schedules work other than the map build the service performs on
- * request, serialized and rate limited by the service itself.
+ * coordinator, and nothing here schedules work other than what the map service does on request,
+ * serialized and rate limited by the service itself.
+ *
+ * What a request costs is bounded by what the document carries, not by the size of the map. The map
+ * is linked first and only the strings that cross are checked; each check is remembered for as long
+ * as the service keeps that map object in memory. A finished document is served again while the
+ * session and the opt-in file are unchanged, for up to a minute.
  */
 export function createSessionLinks(deps: SessionLinksDeps) {
   const now = deps.now ?? Date.now;
-  /*
-   * Commits already found in a repository's object store. A commit that exists stays readable for
-   * as long as anything references it, so a reader refetching at every turn end need not start a
-   * git process each time to ask again; a map that has meanwhile become unbuildable is still
-   * refused by `getMap`, and the opt-in is still read on every request before either.
-   */
-  const knownCommits = new Set<string>();
-  const remember = (key: string) => {
-    knownCommits.delete(key);
-    knownCommits.add(key);
-    for (const oldest of knownCommits) {
-      if (knownCommits.size <= KNOWN_COMMITS) break;
-      knownCommits.delete(oldest);
+  const redactorFor = deps.redactor ?? createRedactor;
+  const represents = deps.represents ?? isUserSession;
+  /** Per map object: each string's answer to "would the redactor leave it as it is?". */
+  const textChecks = new WeakMap<ProjectMap, Map<string, boolean>>();
+  const documents = new Map<string, { key: string; at: number; doc: ExecutionLinks }>();
+
+  function remember(sessionId: string, key: string, doc: ExecutionLinks): void {
+    documents.delete(sessionId);
+    documents.set(sessionId, { key, at: now(), doc });
+    for (const oldest of documents.keys()) {
+      if (documents.size <= DOCUMENTS) break;
+      documents.delete(oldest);
     }
-  };
-  const withKnownCommits = (maps: ProjectMapService): ProjectMapService => ({
-    isOptedIn: (root) => maps.isOptedIn(root),
-    repositories: () => maps.repositories(),
-    getMap: (root, commit) => maps.getMap(root, commit),
-    commitExists: async (root, commit) => {
-      const key = `${root}\0${commit}`;
-      if (knownCommits.has(key) && maps.isOptedIn(root)) return { ok: true, exists: true };
-      const answer = await maps.commitExists(root, commit);
-      if (answer.ok && answer.exists) remember(key);
-      return answer;
-    },
-  });
+  }
 
   async function document(
     maps: ProjectMapService,
     sessionId: string,
   ): Promise<ExecutionLinks | undefined> {
-    // An id the document cannot carry (over its bound, or with control characters) belongs to no
-    // session this view can describe: not found, as on every other session route.
+    // An id the document cannot carry (over its bound, or unprintable) belongs to no session this
+    // view can describe: not found, as on every other session route.
     if (!ExecutionLinksSchema.shape.sessionId.safeParse(sessionId).success) return undefined;
     const read = deps.registry.readSession(sessionId);
-    if (!read || !isUserSession(read.summary)) return undefined;
+    if (!read || !represents(read.summary)) return undefined;
     const { state } = read;
-    // One redactor per document, so numbering never depends on what earlier requests saw.
-    const redactor = createRedactor();
+    // The opt-in file's content as the service reads it: any grant, revocation or re-grant changes
+    // it, and with it every answer below.
+    const key = `${state.latestSeq}\0${JSON.stringify(maps.repositories())}`;
+    const kept = documents.get(sessionId);
+    if (kept && kept.key === key && now() - kept.at < DOCUMENT_MS) return kept.doc;
+
+    const redactor = redactorFor();
     const unchanged = (value: string) => redactor.redact(value).text === value;
     const all = changedFiles(state);
     // An identifier is carried whole or not at all: a changed path or root the redactor would
     // alter names something else, so the file is counted as withheld rather than half-shown.
     const files = all.filter(
       (file) =>
+        representable(file) &&
         unchanged(file.path) &&
         (!file.location ||
           (unchanged(file.location.root) &&
@@ -100,37 +111,43 @@ export function createSessionLinks(deps: SessionLinksDeps) {
     );
     const anchors = withheldAnchorText(sessionAnchors(state), unchanged);
     const repositories = new Map<string, RepositoryResolution>();
-    let mapElementsWithheld = 0;
-    for (const root of repositoriesOf(files).slice(0, EXECUTION_LINKS_LIMITS.repositories)) {
-      const resolved = await resolveRepository(maps, anchors, root);
-      if (resolved.status !== 'mapped') {
-        repositories.set(root, resolved);
-        continue;
-      }
-      // Map paths, names and rules follow the same rule as the session's own identifiers.
-      const carried = withholdAltered(resolved.map, unchanged);
-      mapElementsWithheld += carried.withheld;
-      repositories.set(root, { ...resolved, map: carried.map });
-    }
-    const doc = linkExecution({
+    for (const root of repositoriesOf(files).slice(0, EXECUTION_LINKS_LIMITS.repositories))
+      repositories.set(root, await resolveRepository(maps, anchors, root));
+    const linked = linkExecution({
       sessionId,
       generatedAt: new Date(now()).toISOString(),
       anchors,
       files,
       withheld: all.length - files.length,
-      mapElementsWithheld,
       repositories,
     });
-    // Everything above was carried whole or withheld, so this pass changes nothing it is given;
-    // it stays as defense in depth for any string added later without that check.
-    return ExecutionLinksSchema.parse(redactStrings(doc, redactor));
+    const doc = ExecutionLinksSchema.parse(
+      withholdMapText(linked, (repository, text) => {
+        const resolved = repositories.get(repository);
+        if (resolved?.status !== 'mapped') return unchanged(text);
+        let checks = textChecks.get(resolved.map);
+        if (!checks) {
+          checks = new Map();
+          textChecks.set(resolved.map, checks);
+        }
+        let answer = checks.get(text);
+        if (answer === undefined) {
+          answer = unchanged(text);
+          checks.set(text, answer);
+        }
+        return answer;
+      }),
+    );
+    // A refusal for now (busy, or a bound) is asked again next time rather than served from here.
+    if (![...repositories.values()].some((r) => r.status === 'map-unavailable'))
+      remember(sessionId, key, doc);
+    return doc;
   }
 
   const handler: SessionLinksHandlerFactory = ({ maps }) => {
-    const cached = withKnownCommits(maps);
     return async ({ sessionId }): Promise<RouteResult> => {
       try {
-        const doc = await document(cached, sessionId);
+        const doc = await document(maps, sessionId);
         if (!doc) return { status: 404, error: 'not-found', message: 'no such session' };
         return { status: 200, body: doc };
       } catch (error) {
@@ -215,55 +232,96 @@ export function sessionAnchors(state: RunState): SessionAnchors {
   };
 }
 
-// biome-ignore lint/suspicious/noControlCharactersInRegex: excluding control characters is the point.
-const CONTROL = /[\u0000-\u001f\u007f]/;
-
 function carriableRoot(root: string): boolean {
   return (
-    root.startsWith('/') && root.length <= EXECUTION_LINKS_LIMITS.pathLength && !CONTROL.test(root)
+    root.startsWith('/') &&
+    root.length <= EXECUTION_LINKS_LIMITS.pathLength &&
+    !hasUnprintable(root)
   );
 }
 
 /**
- * The map with every node and edge whose text the redactor would alter left out, and how many
- * were. A path or name that crosses altered names something else, and a placeholder longer than
- * what it replaced could push a value past its bound; leaving the element out is what the session's
- * own identifiers get too. Evidence whose path would be altered is dropped from its edge.
+ * The document with every map-derived element whose text the redactor would alter left out, and
+ * how many were. A path or name that crosses altered names something else, and a placeholder longer
+ * than what it replaced could push a value past its bound, so the element is withheld, as the
+ * session's own identifiers are. Only what the document carries is checked: the changed files'
+ * modules and neighbours, and the containing modules' dependents, never the rest of the map.
  */
-export function withholdAltered(
-  map: ProjectMap,
-  unchanged: (value: string) => boolean,
-): { map: ProjectMap; withheld: number } {
-  const text = (node: MapNode): string[] =>
-    node.kind === 'file'
-      ? [node.id, node.path]
-      : node.kind === 'module'
-        ? [node.id, node.manifest, ...(node.name === null ? [] : [node.name])]
-        : [node.id, node.name];
-  const nodes = map.nodes.filter((node) => text(node).every(unchanged));
-  const kept = new Set(nodes.map((node) => node.id));
-  const edges = map.edges
-    .filter((edge) => kept.has(edge.from) && kept.has(edge.to) && unchanged(edge.rule))
-    .map((edge) =>
-      edge.evidence.every((e) => unchanged(e.path))
-        ? edge
-        : { ...edge, evidence: edge.evidence.filter((e) => unchanged(e.path)) },
-    );
-  const withheld = map.nodes.length - nodes.length + (map.edges.length - edges.length);
-  return { map: withheld === 0 ? map : { ...map, nodes, edges }, withheld };
-}
-
-/**
- * Every string that crosses passes the redactor again, as the consumer report's do: paths and
- * names are identifiers and are never clipped, but a secret that reached a file name is not
- * repeated here. Object ids, timestamps and enumeration values hold nothing the rules match.
- */
-function redactStrings<T>(value: T, redactor: Redactor): T {
-  if (typeof value === 'string') return redactor.redact(value).text as T;
-  if (Array.isArray(value)) return value.map((item) => redactStrings(item, redactor)) as T;
-  if (value && typeof value === 'object')
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, redactStrings(item, redactor)]),
-    ) as T;
-  return value;
+export function withholdMapText(
+  doc: ExecutionLinks,
+  unchanged: (repository: string, text: string) => boolean,
+): ExecutionLinks {
+  let withheld = 0;
+  let omitted = 0;
+  const moduleOk = (ok: (text: string) => boolean, module: ModuleRef) =>
+    ok(module.id) && ok(module.manifest) && (module.name === null || ok(module.name));
+  const files: FileLink[] = [];
+  for (const file of doc.files) {
+    const repository = file.repository;
+    if (file.status !== 'linked' || repository === null) {
+      files.push(file);
+      continue;
+    }
+    const ok = (text: string) => unchanged(repository, text);
+    if (file.node !== null && !ok(file.node)) {
+      omitted += 1;
+      continue;
+    }
+    let role = file.role;
+    if (role && !ok(role.rule)) {
+      role = null;
+      withheld += 1;
+    }
+    const modules = file.modules.filter((m) => {
+      const keep = moduleOk(ok, m.module) && ok(m.rule);
+      if (!keep) withheld += 1;
+      return keep;
+    });
+    let dropped = 0;
+    const neighbours = file.neighbours.flatMap((n) => {
+      const keep =
+        ok(n.node) &&
+        (n.path === null || ok(n.path)) &&
+        (n.name === null || ok(n.name)) &&
+        ok(n.rule) &&
+        (n.role === null || ok(n.role.rule));
+      if (!keep) {
+        dropped += 1;
+        return [];
+      }
+      const evidence = n.evidence.filter((e) => ok(e.path));
+      return [evidence.length === n.evidence.length ? n : { ...n, evidence }];
+    });
+    withheld += dropped;
+    files.push({
+      ...file,
+      role,
+      modules,
+      neighbours,
+      neighboursTotal: file.neighboursTotal - dropped,
+    });
+  }
+  const modules: ModuleLink[] = [];
+  for (const entry of doc.modules) {
+    const ok = (text: string) => unchanged(entry.repository, text);
+    if (!moduleOk(ok, entry.module)) {
+      withheld += 1;
+      continue;
+    }
+    let dropped = 0;
+    const dependents = entry.dependents.filter((d) => {
+      const keep = moduleOk(ok, d.module) && ok(d.rule);
+      if (!keep) dropped += 1;
+      return keep;
+    });
+    withheld += dropped;
+    modules.push({ ...entry, dependents, dependentsTotal: entry.dependentsTotal - dropped });
+  }
+  return {
+    ...doc,
+    files,
+    modules,
+    filesOmitted: doc.filesOmitted + omitted,
+    mapElementsWithheld: doc.mapElementsWithheld + withheld,
+  };
 }

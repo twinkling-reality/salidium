@@ -695,6 +695,8 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
   // under the same opt-in, cache, build queue and rate limit.
   const sessionLinks = createSessionLinks({
     registry,
+    // Links never serves a session the consumer contract leaves out.
+    represents: (summary) => consumer.represents(summary),
     log,
     ...(overrides.now ? { now: overrides.now } : {}),
   }).handler({ maps });

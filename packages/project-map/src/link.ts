@@ -13,6 +13,7 @@ import {
   type EdgeKind,
   FILE_EDGE_KINDS,
   fileNodeId,
+  hasUnprintable,
   type MapEdge,
   type MapNode,
   type ModuleNode,
@@ -123,19 +124,40 @@ export async function resolveRepository(
   return { status: 'revision-gone' };
 }
 
-/** Repositories the changed files were found in, in order of first appearance. */
+/**
+ * Repositories the changed files were found in, in order of first appearance. A file this version
+ * cannot carry names no repository, so a root it cannot print never becomes one.
+ */
 export function repositoriesOf(files: readonly ChangedFile[]): string[] {
   const seen = new Set<string>();
-  for (const file of files) if (file.location) seen.add(repositoryOf(file.location));
+  for (const file of files)
+    if (file.location && representable(file)) seen.add(repositoryOf(file.location));
   return [...seen];
 }
 
-// biome-ignore lint/suspicious/noControlCharactersInRegex: excluding control characters is the point.
-const CONTROL = /[\u0000-\u001f\u007f]/;
-
-function carriable(path: string): boolean {
+function absolute(path: string): boolean {
   return (
-    path.startsWith('/') && path.length <= EXECUTION_LINKS_LIMITS.pathLength && !CONTROL.test(path)
+    path.startsWith('/') &&
+    path.length <= EXECUTION_LINKS_LIMITS.pathLength &&
+    !hasUnprintable(path)
+  );
+}
+
+/**
+ * Whether the document can carry a changed file whole: its path and, when it was located, its
+ * working tree, main repository and relative path, each absolute where it must be, within bounds,
+ * and printable by the map's rule. One that cannot is counted as omitted, never shown in part.
+ */
+export function representable(file: ChangedFile): boolean {
+  if (!absolute(file.path)) return false;
+  const location = file.location;
+  if (!location) return true;
+  return (
+    absolute(location.root) &&
+    (location.mainRoot === undefined || absolute(location.mainRoot)) &&
+    location.path.length > 0 &&
+    location.path.length <= EXECUTION_LINKS_LIMITS.pathLength &&
+    !hasUnprintable(location.path)
   );
 }
 
@@ -164,6 +186,21 @@ class MapIndex {
     const node = this.nodes.get(id);
     return node?.kind === 'module' ? node : undefined;
   }
+}
+
+/**
+ * Indexes by map object. A map the service keeps in memory is the same object on every request, so
+ * its index is built once and released with it.
+ */
+const INDEXES = new WeakMap<ProjectMap, MapIndex>();
+
+function indexOf(map: ProjectMap): MapIndex {
+  let index = INDEXES.get(map);
+  if (!index) {
+    index = new MapIndex(map);
+    INDEXES.set(map, index);
+  }
+  return index;
 }
 
 function push<K, V>(map: Map<K, V[]>, key: K, value: V): void {
@@ -201,9 +238,9 @@ export function linkExecution(input: {
 }): ExecutionLinks {
   const indexes = new Map<string, MapIndex>();
   for (const [root, resolution] of input.repositories)
-    if (resolution.status === 'mapped') indexes.set(root, new MapIndex(resolution.map));
+    if (resolution.status === 'mapped') indexes.set(root, indexOf(resolution.map));
 
-  const carried = input.files.filter((file) => carriable(file.path));
+  const carried = input.files.filter(representable);
   const kept = carried.slice(0, EXECUTION_LINKS_LIMITS.files);
 
   // Which repository paths the session changed, so a neighbour can say it was changed too.

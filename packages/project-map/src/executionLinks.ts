@@ -3,6 +3,7 @@ import {
   EdgeIdSchema,
   EdgeKindSchema,
   EvidenceSchema,
+  hasUnprintable,
   MapProvenanceSchema,
   ModuleEcosystemSchema,
   NodeIdSchema,
@@ -52,14 +53,19 @@ const Timestamp = z.iso
   .datetime({ offset: false, precision: 3 })
   .describe('UTC, millisecond precision, trailing Z.');
 const Count = z.number().int().nonnegative();
-// biome-ignore lint/suspicious/noControlCharactersInRegex: excluding control characters is the point.
-const NO_CONTROL = /^[^\u0000-\u001f\u007f]*$/;
+/**
+ * The map's own rule for text a reader may print: no C0 or C1 controls, no bidirectional marks,
+ * overrides or isolates, and no line or paragraph separators. A path shown in the panel, such as
+ * the one in the copyable opt-in command, then displays as exactly what is copied.
+ */
+const printable = (text: string) => !hasUnprintable(text);
+const UNPRINTABLE = 'no control, bidirectional or separator characters';
 
 const AbsolutePathSchema = z
   .string()
   .min(1)
   .max(EXECUTION_LINKS_LIMITS.pathLength)
-  .regex(NO_CONTROL)
+  .refine(printable, UNPRINTABLE)
   .refine((path) => path.startsWith('/'), 'an absolute path');
 
 const RootSchema = AbsolutePathSchema.describe(
@@ -80,7 +86,7 @@ export const RevisionAnchorSchema = z
     branch: z
       .string()
       .max(EXECUTION_LINKS_LIMITS.branchLength)
-      .regex(NO_CONTROL)
+      .refine(printable, UNPRINTABLE)
       .nullable()
       .describe('The branch HEAD named, or null when detached, unknown or withheld.'),
     at: Timestamp,
@@ -213,7 +219,7 @@ export const FileLinkSchema = z.object({
   relativePath: z
     .string()
     .max(EXECUTION_LINKS_LIMITS.pathLength)
-    .regex(NO_CONTROL)
+    .refine(printable, UNPRINTABLE)
     .nullable()
     .describe('The path relative to `worktree`, as Salidium observed it when the change was live.'),
   node: NodeIdSchema.nullable().describe('For linked, the file node in the map.'),
@@ -259,7 +265,7 @@ export const ExecutionLinksSchema = z.object({
   version: z.literal(0),
   experimental: z.literal(true),
   generatedAt: Timestamp,
-  sessionId: z.string().min(1).max(512).regex(NO_CONTROL),
+  sessionId: z.string().min(1).max(512).refine(printable, UNPRINTABLE),
   anchors: z.object({
     atStart: RevisionAnchorSchema.nullable(),
     atLatestTurnEnd: RevisionAnchorSchema.nullable(),

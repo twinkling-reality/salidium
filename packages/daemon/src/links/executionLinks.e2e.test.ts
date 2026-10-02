@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { EventBuilder } from '@salidium/core/testing';
 import {
   type ExecutionLinks,
   ExecutionLinksSchema,
@@ -166,6 +167,32 @@ describe('execution links end to end', () => {
         'not-found',
       );
     }
+  });
+
+  test('a session the consumer contract leaves out is not found on either route', async () => {
+    // A working directory past the contract's bound makes the session unrepresentable there.
+    const id = 'claude-code:links-unrepresentable';
+    const b = new EventBuilder(id, new Date(Date.now() - 10_000).toISOString());
+    daemon.registry.ingest(
+      id,
+      [b.sessionStarted(`/work/${'x'.repeat(5000)}`, 'test-model'), b.turnStarted('Long cwd')].map(
+        ({ seq: _seq, ...event }) => event,
+      ) as never,
+      { cwd: scenario.repo.dir },
+    );
+    daemon.registry.flush(id);
+    expect(daemon.registry.readSession(id)).toBeDefined();
+    const { token } = createConsumerCredential(daemon.config.home, 'links contract rule');
+    const owner = await fetch(
+      `http://127.0.0.1:${daemon.port}/api/sessions/${encodeURIComponent(id)}/links`,
+      { headers: { Authorization: `Bearer ${daemon.token}` } },
+    );
+    expect(owner.status).toBe(404);
+    const consumer = await fetch(
+      `http://127.0.0.1:${daemon.port}/project-map/v0/sessions/${encodeURIComponent(id)}/links`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    expect(consumer.status).toBe(404);
   });
 
   test('a revoked repository is not read again', async () => {

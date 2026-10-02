@@ -412,6 +412,14 @@ export function createConsumerRoutes(deps: ConsumerRouteDeps) {
 
   return {
     handle,
+    /**
+     * Whether the contract describes this stored session at all: a user session `entryOf` can
+     * represent. Sibling views built on the same credential, such as execution links, use it so
+     * they never serve a session the contract leaves out.
+     */
+    represents(summary: SessionSummary): boolean {
+      return isUserSession(summary) && entryOf(summary, now()) !== undefined;
+    },
     /** The loopback guard's refusals, in the contract's own error envelope. */
     refuse(
       res: ServerResponse,
