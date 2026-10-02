@@ -469,12 +469,12 @@ describe('the installed hook relay', () => {
       const lock = join(pending, HOOK_QUOTA_LOCK_FILE);
       const guard = join(pending, HOOK_QUOTA_REAPING_DIR);
       const deadOwner = () => `${spawnSync('/bin/sh', ['-c', 'exit 0']).pid}\n`;
-      const send = (relay: string, name: string) => {
+      const send = (relay: string, name: string, timeout = 15_000) => {
         const input = join(pending, name);
         writeFileSync(input, JSON.stringify({ synthetic: name }));
         return spawnSync('/bin/sh', [relay, '--send', 'claude-code', 'Stop', 'lifecycle', input], {
           env: isolation.environment({}, {}),
-          timeout: 15_000,
+          timeout,
         });
       };
 
@@ -490,8 +490,17 @@ describe('the installed hook relay', () => {
       expect(existsSync(join(pending, 'claude-code_1-1-a.ready.json'))).toBe(true);
       expect(existsSync(guard)).toBe(true);
 
-      // Another owner dies holding the lock. With the guard still there, nobody may reclaim it.
-      writeFileSync(lock, deadOwner());
+      // Another owner dies holding the lock. With the guard still there, nobody may reclaim it: a
+      // sender spins on its attempt budget instead of publishing.
+      const relay = writeRelayScript(join(home, 'hooks'), home, {
+        PATH: ['/usr/bin', '/bin'].join(delimiter),
+      });
+      const deadLock = deadOwner();
+      writeFileSync(lock, deadLock);
+      const spinning = send(relay, 'claude-code_2-1-spin.json', 1_500);
+      expect(spinning.signal).toBe('SIGTERM');
+      expect(existsSync(join(pending, 'claude-code_2-1-spin.ready.json'))).toBe(false);
+      expect(readFileSync(lock, 'utf8')).toBe(deadLock);
       const abandoned = new Date(Date.now() - STALE_HOOK_QUOTA_REAPING_MS - 1_000);
       utimesSync(guard, abandoned, abandoned);
       new HookIngress({
@@ -505,9 +514,6 @@ describe('the installed hook relay', () => {
       }).drainSpool();
       expect(existsSync(guard)).toBe(false);
 
-      const relay = writeRelayScript(join(home, 'hooks'), home, {
-        PATH: ['/usr/bin', '/bin'].join(delimiter),
-      });
       const started = Date.now();
       expect(send(relay, 'claude-code_2-2-b.json').status).toBe(0);
       expect(Date.now() - started).toBeLessThan(10_000);

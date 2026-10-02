@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import type { ProviderAdapter } from '@salidium/adapter-kit';
 import type { CanonicalEvent } from '@salidium/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createLogger } from '../logging/logger.ts';
+import { createLogger, type Logger } from '../logging/logger.ts';
 import type { SessionRegistry } from '../sessions/sessionRegistry.ts';
 import { readCollectionGapLedger } from './collectionGaps.ts';
 import { HookIngress } from './hookIngress.ts';
@@ -38,6 +38,7 @@ function fixture(
     maxPayloadBytes?: number;
     maxSpoolRecordBytes?: number;
     maxQuarantinedFiles?: number;
+    log?: Logger;
   } = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), 'salidium-hooks-'));
@@ -373,6 +374,55 @@ describe('HookIngress durability and recovery', () => {
     expect(existsSync(guard)).toBe(false);
     // Whether that owner is dead is the relay's question, asked under the guard it can now take.
     expect(readFileSync(lock, 'utf8')).toBe('999999\n');
+  });
+
+  it('treats a reaping guard dated far in the future as abandoned', () => {
+    const { dir, hooks } = fixture();
+    const pending = join(dir, 'pending');
+    mkdirSync(pending);
+    const guard = join(pending, HOOK_QUOTA_REAPING_DIR);
+    mkdirSync(guard);
+
+    // Ordinary skew between the relay's and the daemon's view of now is not abandonment.
+    const skewed = new Date(Date.now() + 30_000);
+    utimesSync(guard, skewed, skewed);
+    hooks.drainSpool();
+    expect(existsSync(guard)).toBe(true);
+
+    // A clock set back by more than the bound would otherwise keep the guard until it caught up.
+    const future = new Date(Date.now() + STALE_HOOK_QUOTA_REAPING_MS + 1_000);
+    utimesSync(guard, future, future);
+    hooks.drainSpool();
+    expect(existsSync(guard)).toBe(false);
+  });
+
+  it('warns once about a reaping guard it cannot clear, not on every pass', () => {
+    const warnings: string[] = [];
+    const log: Logger = { info() {}, debug() {}, warn: (message) => warnings.push(message) };
+    const { dir, hooks } = fixture(() => true, { log });
+    const pending = join(dir, 'pending');
+    mkdirSync(pending);
+    const guard = join(pending, HOOK_QUOTA_REAPING_DIR);
+    const abandoned = new Date(Date.now() - STALE_HOOK_QUOTA_REAPING_MS - 1_000);
+
+    // Not empty, so rmdir refuses it. The relay never puts anything inside its guard.
+    mkdirSync(guard);
+    writeFileSync(join(guard, 'unexpected'), '');
+    utimesSync(guard, abandoned, abandoned);
+    for (let pass = 0; pass < 3; pass++) hooks.drainSpool();
+    expect(warnings).toEqual(['abandoned relay reaping guard was not removed']);
+
+    rmSync(join(guard, 'unexpected'));
+    utimesSync(guard, abandoned, abandoned);
+    hooks.drainSpool();
+    expect(existsSync(guard)).toBe(false);
+    expect(warnings.at(-1)).toBe('abandoned relay reaping guard removed');
+
+    // A file in the guard's place blocks every mkdir just the same. It is reported, not removed.
+    writeFileSync(guard, '');
+    for (let pass = 0; pass < 3; pass++) hooks.drainSpool();
+    expect(existsSync(guard)).toBe(true);
+    expect(warnings.slice(2)).toEqual(['relay reaping guard name is taken by a non-directory']);
   });
 
   it('preserves processing and pending files when persistence is deferred', () => {

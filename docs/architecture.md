@@ -123,8 +123,13 @@ Concurrent senders serialize spool publication with a quota lock. Reclaiming a d
 reserved to one contender at a time by a reaping directory that the relay creates and removes with
 `mkdir` and `rmdir`. A reaper that dies between them, from a signal or because the shell exits when
 it cannot fork, leaves that directory behind, and no later sender could reclaim a dead owner's lock.
-The relay has no clock, so the drain removes a reaping directory older than five minutes. It leaves
-the lock itself to the relay, which re-reads the owner before unlinking.
+The relay has no clock, so the drain removes a reaping directory whose timestamp is more than five
+minutes from now in either direction, so a clock set back cannot keep it. It leaves the lock itself
+to the relay, which re-reads the owner before unlinking. Recovery needs the daemon running: while it
+is down, spooling senders that meet an abandoned guard still spend their whole attempt budget. The
+guard's exclusion holds for reapers that finish within five minutes, so one paused longer, by
+SIGSTOP or a sleeping laptop, could overlap another; the worst case is a few files over the pending
+ceiling, never lost data.
 
 Operational policy is a versioned sparse document in `operations-config.json`. Owner-only,
 same-directory atomic replacement retains `operations-config.previous.json` as a recovery copy.

@@ -65,6 +65,8 @@ export class HookIngress {
    * during one long episode records it once more; a durable marker would be the alternative.
    */
   private quarantineFullRecorded = false;
+  /** The reaping-guard problem already logged, so a guard the drain cannot clear warns once. */
+  private reapingWarning: string | undefined;
   private readonly collectionEnabled: () => boolean;
   private spoolTimer: NodeJS.Timeout | undefined;
   /** Set only while a capped drain pass has more of the same backlog still to read. */
@@ -508,21 +510,47 @@ export class HookIngress {
     let ageMs: number;
     try {
       const st = lstatSync(guard);
-      if (!st.isDirectory()) return;
+      if (!st.isDirectory()) {
+        // Not something the relay makes, so it is not removed here. It blocks reaping all the same.
+        this.warnReapingOnce(
+          'not-a-directory',
+          'relay reaping guard name is taken by a non-directory',
+          {
+            path: guard,
+          },
+        );
+        return;
+      }
       ageMs = Date.now() - st.mtimeMs;
     } catch {
+      this.reapingWarning = undefined;
       return;
     }
-    if (ageMs < STALE_HOOK_QUOTA_REAPING_MS) return;
+    // A guard dated in the future is as untrustworthy as an old one: after the clock is set back,
+    // waiting for it to come of age would bring back the very hang this recovery exists to end.
+    if (Math.abs(ageMs) < STALE_HOOK_QUOTA_REAPING_MS) {
+      this.reapingWarning = undefined;
+      return;
+    }
     try {
       rmdirSync(guard);
     } catch (err) {
-      this.log.warn('abandoned relay reaping guard was not removed', { err: String(err) });
+      this.warnReapingOnce('unremovable', 'abandoned relay reaping guard was not removed', {
+        path: guard,
+        err: String(err),
+      });
       return;
     }
+    this.reapingWarning = undefined;
     this.log.warn('abandoned relay reaping guard removed', {
       ageSeconds: Math.round(ageMs / 1000),
     });
+  }
+
+  private warnReapingOnce(kind: string, message: string, fields: Record<string, unknown>): void {
+    if (this.reapingWarning === kind) return;
+    this.reapingWarning = kind;
+    this.log.warn(message, fields);
   }
 
   /**

@@ -45,8 +45,11 @@
 - Recover the relay's quota lock after a sender dies while reclaiming it. A reaper that the shell
   abandoned mid-reclaim, for example when it could not fork under a full process table, left its
   reaping directory in the spool for good, and every later sender that met a dead owner's lock then
-  waited out its whole attempt budget. The daemon now removes a reaping directory older than five
-  minutes and leaves the lock itself to the relay's owner check.
+  waited out its whole attempt budget. The daemon now removes a reaping directory dated more than
+  five minutes from now in either direction and leaves the lock itself to the relay's owner check.
+  Recovery needs the daemon running; while it is down, spooling senders still spend their attempt
+  budget. A reaper paused for longer than five minutes, by SIGSTOP or a sleeping laptop, could
+  overlap another, which at worst puts a few files over the pending ceiling and never loses data.
 - Count quarantined files apart from waiting work in `salidium maintenance queue`, and measure queue
   age, the drain result, and the storage optimization precondition from waiting work only.
 

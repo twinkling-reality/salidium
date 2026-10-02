@@ -69,6 +69,7 @@ import {
   HOOK_BREAKER_FILE,
   HOOK_PAUSE_FILE,
   HOOK_QUOTA_LOCK_FILE,
+  HOOK_QUOTA_REAPING_DIR,
   HOOK_SHED_FIRST_FILE,
   HOOK_SHED_RETAIN_FILE,
   HOOK_SHED_SECOND_FILE,
@@ -1114,6 +1115,7 @@ if [ "$1" = "--send" ]; then
   # small filesystem lock, many senders can all observe one remaining slot and overrun the hard
   # physical ceiling. A timed-out contender leaves its plain .json input durable for orphan drain.
   QUOTA_LOCK="$PENDING/${HOOK_QUOTA_LOCK_FILE}"
+  QUOTA_REAPING="$PENDING/${HOOK_QUOTA_REAPING_DIR}"
   QUOTA_ATTEMPTS=0
   while :; do
     set -C
@@ -1125,7 +1127,7 @@ if [ "$1" = "--send" ]; then
     QUOTA_ATTEMPTS=$((QUOTA_ATTEMPTS + 1))
     # Only one contender may reclaim a dead owner's lock. Without this guard, a late
     # contender can unlink a replacement lock acquired after another reclaimed it.
-    if mkdir "$QUOTA_LOCK.reaping" 2>/dev/null; then
+    if mkdir "$QUOTA_REAPING" 2>/dev/null; then
       LOCK_OWNER=''
       CURRENT_OWNER=''
       if [ -r "$QUOTA_LOCK" ]; then
@@ -1143,7 +1145,7 @@ if [ "$1" = "--send" ]; then
           fi;;
       esac
       fi
-      rmdir "$QUOTA_LOCK.reaping" 2>/dev/null
+      rmdir "$QUOTA_REAPING" 2>/dev/null
     fi
     [ "$QUOTA_ATTEMPTS" -lt 5000 ] || exit 0
     sleep 0.01
