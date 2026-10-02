@@ -8,6 +8,11 @@
 - **Status:** an experiment, not a product feature. Nothing here is served by the daemon, and the
   consumer contract (`/consumer/v1`, [ADR 0005](decisions/0005-read-only-consumer-contract.md)) is
   unchanged. The read contract at the end is a proposal for review. No model was called.
+- **Since 2026-10-02:** proposal item 2 is implemented as the experimental `salidium.project-map`
+  version 0 document (`packages/project-map`), built by the daemon on request for repositories the
+  person opts in to and served at `/project-map/v0`; see
+  [Using Salidium](using-salidium.md#map-a-repository-experimental). The record below describes the
+  prototype as it was measured.
 - **Code:** [`scripts/project-map/`](../scripts/project-map/). Run its checks with
   `node --test scripts/project-map/project-map.test.mjs`.
 

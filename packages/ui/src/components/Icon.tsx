@@ -33,7 +33,8 @@ export type IconName =
   | 'edit'
   | 'trash'
   | 'outbound'
-  | 'storage';
+  | 'storage'
+  | 'where';
 
 const PATHS: Record<IconName, React.ReactNode> = {
   /* One sheet laid over another: take this text. */
@@ -176,6 +177,16 @@ const PATHS: Record<IconName, React.ReactNode> = {
       <path d="M8 2.5v7.5" />
       <path d="M4.8 7.2 8 10.4l3.2-3.2" />
       <path d="M3 12.5h10" />
+    </>
+  ),
+  /* One filled node joined to its neighbours: the changed file, placed among the files it touches. */
+  where: (
+    <>
+      <circle cx="8" cy="8" r="2" fill="currentColor" />
+      <circle cx="3" cy="3.5" r="1.3" />
+      <circle cx="13" cy="4.5" r="1.3" />
+      <circle cx="4.5" cy="13" r="1.3" />
+      <path d="M4 4.4 6.6 6.8M12 5.2 9.7 7M5.3 11.9 6.9 9.6" />
     </>
   ),
   /* Sits inside the review count, so the number reads as "flagged" rather than as "unread". */

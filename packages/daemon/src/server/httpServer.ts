@@ -10,6 +10,7 @@ import {
   isSensitivePath,
   projectSession,
 } from '@salidium/core';
+import type { SessionLinksHandler } from '@salidium/project-map';
 import type {
   CollectionControlRequest,
   CollectionStatus,
@@ -42,6 +43,7 @@ import type { createConsumerRoutes } from '../consumer/routes.ts';
 import type { HookIngress } from '../ingest/hookIngress.ts';
 import { MAX_INGEST_PAYLOAD_BYTES } from '../ingest/limits.ts';
 import type { Logger } from '../logging/logger.ts';
+import { type createProjectMapRoutes, isProjectMapPath } from '../projectMap/routes.ts';
 import { isUserSession, type SessionRegistry } from '../sessions/sessionRegistry.ts';
 import { startSse } from './sse.ts';
 
@@ -116,6 +118,17 @@ export interface HttpServerDeps {
     isStoreProvider: (provider: string) => boolean;
     read: (provider: string, ref: NonNullable<EventSource['ref']>) => StoreRawRecord | undefined;
   };
+  /**
+   * The experimental project map under `/project-map/v0`, read with a consumer credential.
+   * Optional for the same reason as `consumer`.
+   */
+  projectMap?: ReturnType<typeof createProjectMapRoutes>;
+  /**
+   * Where a session's changed files sit in the codebase, for the interface: the same
+   * `salidium.execution-links` document the map routes serve to consumers, under the same opt-in.
+   * Optional like `settings`; without it the path is simply not found.
+   */
+  sessionLinks?: SessionLinksHandler;
   log: Logger;
 }
 
@@ -178,19 +191,26 @@ export function createHttpServer(deps: HttpServerDeps): Server {
     // so that everything under /consumer answers in the contract's error envelope.
     const consumer =
       (url.pathname === '/consumer' || url.pathname.startsWith('/consumer/')) && deps.consumer;
+    const projectMap = isProjectMapPath(url.pathname) && deps.projectMap;
     if (!hosts.has(req.headers.host ?? ''))
       return consumer
         ? consumer.refuse(res, 421, 'host-not-allowed', 'only a loopback Host is accepted')
-        : json(res, 421, { error: 'unexpected host' });
+        : projectMap
+          ? projectMap.refuse(res, 'host-not-allowed', 'only a loopback Host is accepted')
+          : json(res, 421, { error: 'unexpected host' });
     const origin = req.headers.origin;
     if (origin && !hosts.has(origin.replace(/^https?:\/\//, '')))
       return consumer
         ? consumer.refuse(res, 403, 'origin-not-allowed', 'cross-origin requests are refused')
-        : json(res, 403, { error: 'origin not allowed' });
+        : projectMap
+          ? projectMap.refuse(res, 'origin-not-allowed', 'cross-origin requests are refused')
+          : json(res, 403, { error: 'origin not allowed' });
     if (req.headers['sec-fetch-site'] === 'cross-site')
       return consumer
         ? consumer.refuse(res, 403, 'origin-not-allowed', 'cross-site requests are refused')
-        : json(res, 403, { error: 'cross-site request' });
+        : projectMap
+          ? projectMap.refuse(res, 'origin-not-allowed', 'cross-site requests are refused')
+          : json(res, 403, { error: 'cross-site request' });
 
     /*
      * The consumer contract has its own credential and never accepts the owner token, and the owner
@@ -199,6 +219,12 @@ export function createHttpServer(deps: HttpServerDeps): Server {
      */
     if (url.pathname === '/consumer' || url.pathname.startsWith('/consumer/')) {
       if (deps.consumer) return deps.consumer.handle(req, res, url);
+      res.setHeader('Cache-Control', 'no-store');
+      return json(res, 404, { error: 'not found' });
+    }
+    // The project map is read with a consumer credential and dispatched here for the same reason.
+    if (isProjectMapPath(url.pathname)) {
+      if (deps.projectMap) return deps.projectMap.handle(req, res, url);
       res.setHeader('Cache-Control', 'no-store');
       return json(res, 404, { error: 'not found' });
     }
@@ -490,6 +516,14 @@ export function createHttpServer(deps: HttpServerDeps): Server {
           if (!Number.isInteger(after) || after < -1)
             return json(res, 400, { error: 'after must be an integer at least -1' });
           return streamSession(res, sessionId, after);
+        }
+        case rest === 'links' && deps.sessionLinks !== undefined: {
+          const result = await deps.sessionLinks({ sessionId, query: url.searchParams });
+          if ('body' in result) return json(res, 200, result.body);
+          // Not found reads as it does on every other session route.
+          return json(res, result.status, {
+            error: result.status === 404 ? 'unknown session' : result.message,
+          });
         }
         case rest.startsWith('raw/'): {
           const eventId = decodeSegment(rest.slice(4));

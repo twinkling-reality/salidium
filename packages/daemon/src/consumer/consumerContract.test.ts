@@ -203,12 +203,19 @@ describe('consumer discovery', () => {
     expect(restored.status).toBe(200);
   });
 
-  it('lists no experimental contract unless the embedder supplies one', async () => {
+  it('lists the project map, whose routes are always mounted, and nothing else by default', async () => {
     const served = exactly(
       ConsumerDiscoverySchema,
       (await get('/consumer/v1/discovery', null)).body,
     );
-    expect(served.experimental).toEqual([]);
+    expect(served.experimental).toEqual([
+      {
+        name: 'salidium.project-map',
+        major: 0,
+        minor: 0,
+        baseUrl: `http://127.0.0.1:${daemon.port}/project-map/v0`,
+      },
+    ]);
   });
 
   it('lists supplied experimental contracts once each, sorted, valid, and at most eight', () => {
@@ -282,10 +289,10 @@ describe('consumer discovery', () => {
         calls += 1;
         return [
           {
-            name: 'salidium.project-map',
+            name: 'salidium.example',
             major: 0,
             minor: 0,
-            baseUrl: `http://127.0.0.1:${port}/project-map/v0`,
+            baseUrl: `http://127.0.0.1:${port}/example/v0`,
           },
         ];
       },
@@ -297,6 +304,12 @@ describe('consumer discovery', () => {
       const response = await fetch(`http://127.0.0.1:${other.port}/consumer/v1/discovery`);
       const served = exactly(ConsumerDiscoverySchema, await response.json());
       expect(served.experimental).toEqual([
+        {
+          name: 'salidium.example',
+          major: 0,
+          minor: 0,
+          baseUrl: `http://127.0.0.1:${other.port}/example/v0`,
+        },
         {
           name: 'salidium.project-map',
           major: 0,

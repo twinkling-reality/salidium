@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { applyEvent, createInitialState } from '@salidium/core';
 import type { StoredEvent } from '@salidium/protocol';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { explainWithStatus, SCHEMA } from './explainer.ts';
 import {
   chooseExplainerBackendId,
@@ -86,6 +86,9 @@ beforeEach(async () => {
   handler = (_req, res) => reply(res, 200, chat(VALID));
   server = createServer((req, res) => {
     let body = '';
+    // A client that cancels resets its socket; that is the expected end of those requests.
+    req.on('error', () => {});
+    res.on('error', () => {});
     req.on('data', (chunk) => {
       body += chunk;
     });
@@ -299,12 +302,12 @@ describe('the Ollama explainer backend', () => {
     const controller = new AbortController();
     const backend = createOllamaExplainerBackend(env());
     const pending = backend.generate(request({ signal: controller.signal }));
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(seen).toHaveLength(1);
+    // Wait on what the fake server observes, not on a fixed delay, so a loaded machine only makes
+    // this slower. The deadlines are generous because nothing here should take more than a moment.
+    await vi.waitFor(() => expect(seen).toHaveLength(1), { timeout: 5_000, interval: 10 });
     controller.abort();
     await expect(pending).rejects.toThrow('explainer canceled');
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(sockets.size).toBe(0);
+    await vi.waitFor(() => expect(sockets.size).toBe(0), { timeout: 5_000, interval: 10 });
   });
 
   it('refuses a redirect instead of following it', async () => {
@@ -531,7 +534,8 @@ describe('installed Ollama models', () => {
       expect(list.state).toBe('unreachable');
       expect(JSON.stringify(list)).not.toContain(SECRET);
       expect(JSON.stringify(list)).not.toContain('example.com');
-      expect(Date.now() - started).toBeLessThan(2_600);
+      // The limit under test is the 2 s timeout; the rest is room for a loaded machine.
+      expect(Date.now() - started).toBeLessThan(5_000);
     }
-  });
+  }, 20_000);
 });

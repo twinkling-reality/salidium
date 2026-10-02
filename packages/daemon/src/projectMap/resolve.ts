@@ -1,0 +1,288 @@
+/*
+ * Resolves a module specifier to a file of the same Git tree, or classifies why it cannot.
+ *
+ * It reads only the tree: no node_modules, no build output, no network. Each resolution records the
+ * rule that produced it, so a consumer can see how strong the claim is:
+ *
+ *   exact              the specifier names a tracked file
+ *   ts-extension       a `.js`, `.mjs` or `.cjs` specifier whose TypeScript source is tracked, as
+ *                      TypeScript's own node16 and nodenext resolution maps it
+ *   probe              an extensionless or directory specifier completed by bundler-style probing;
+ *                      weaker, since Node itself would refuse it
+ *   exports:<cond>     a workspace package's `exports` entry, under the named condition, pointing at
+ *                      a tracked file
+ *   main               a workspace package's `main` field
+ *
+ * Conditional exports are read as Node reads them: the first key, in the package's own order, that
+ * is an active condition wins, and a target that is not tracked is not resolved rather than replaced
+ * by a later key. The active conditions are Node's (`node`, `import` or `require`, `default`) plus
+ * `development`, the custom condition this repository's TypeScript and test configuration use.
+ *
+ * Ported from the validation prototype, whose resolutions matched esbuild, enhanced-resolve and
+ * oxc-resolver exactly on Salidium and Halcyonic; the key order is the one change, which the
+ * research run asked for.
+ */
+
+import { builtinModules } from 'node:module';
+import { posix } from 'node:path';
+
+const BUILTINS = new Set(builtinModules);
+const TS_FOR_JS: Record<string, string[]> = {
+  '.js': ['.ts', '.tsx'],
+  '.mjs': ['.mts'],
+  '.cjs': ['.cts'],
+  '.jsx': ['.tsx'],
+};
+const PROBE = ['.ts', '.tsx', '.mts', '.js', '.mjs', '.cjs', '.jsx', '.json'];
+/** Exports maps beyond these sizes come only from crafted manifests and are not read. */
+export const MAX_EXPORTS_KEYS = 1000;
+const MAX_EXPORTS_PATTERNS = 64;
+const MAX_EXPORTS_VALUE_BYTES = 64 * 1024;
+/** A pattern target longer than any path, or with more stars than any real one, is not read. */
+const MAX_PATTERN_TARGET_LENGTH = 1024;
+const MAX_PATTERN_STARS = 8;
+const MAX_CONDITION_DEPTH = 8;
+const IMPORT_CONDITIONS = new Set(['development', 'node', 'import', 'default']);
+const REQUIRE_CONDITIONS = new Set(['development', 'node', 'require', 'default']);
+
+export interface WorkspacePackage {
+  name: string;
+  dir: string;
+  exports: unknown;
+  main: string | undefined;
+}
+
+export type Resolution =
+  | { class: 'file'; target: string; rule: string; package?: string }
+  | { class: 'external'; package: string }
+  | { class: 'builtin'; package: string }
+  | { class: 'unresolved'; reason: string; package?: string };
+
+/** The package name part of a bare specifier: `@scope/name` or `name`. */
+export function packageName(specifier: string): string {
+  const parts = specifier.split('/');
+  return specifier.startsWith('@') ? parts.slice(0, 2).join('/') : (parts[0] ?? specifier);
+}
+
+/** The first active condition's target, in the object's own key order, as Node resolves it. */
+function pickTarget(
+  value: unknown,
+  conditions: ReadonlySet<string>,
+  trail: string[] = [],
+): { target: string; conditions: string[] } | undefined {
+  if (typeof value === 'string') return { target: value, conditions: trail };
+  if (trail.length >= MAX_CONDITION_DEPTH) return undefined;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = pickTarget(item, conditions, trail);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  if (value && typeof value === 'object') {
+    for (const [key, inner] of Object.entries(value)) {
+      if (!conditions.has(key)) continue;
+      const found = pickTarget(inner, conditions, [...trail, key]);
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
+export function createResolver(
+  files: ReadonlySet<string>,
+  workspace: ReadonlyMap<string, WorkspacePackage>,
+) {
+  const fileAt = (candidate: string): Resolution | undefined => {
+    if (files.has(candidate)) return { class: 'file', target: candidate, rule: 'exact' };
+    const ext = posix.extname(candidate);
+    for (const ts of TS_FOR_JS[ext] ?? []) {
+      const swapped = candidate.slice(0, -ext.length) + ts;
+      if (files.has(swapped)) return { class: 'file', target: swapped, rule: 'ts-extension' };
+    }
+    for (const probe of PROBE) {
+      if (files.has(candidate + probe))
+        return { class: 'file', target: candidate + probe, rule: 'probe' };
+    }
+    for (const probe of PROBE) {
+      const index = posix.join(candidate, `index${probe}`);
+      if (files.has(index)) return { class: 'file', target: index, rule: 'probe' };
+    }
+    return undefined;
+  };
+
+  /** A package's exports, normalized once: exact subpaths, and star patterns in key order. */
+  type Picked = { target: string; conditions: string[] } | undefined;
+  interface PreparedExports {
+    exact: Map<string, unknown>;
+    stars: {
+      prefix: string;
+      suffix: string;
+      value: unknown;
+      /** The condition each mode picks, worked out once: it does not depend on the match. */
+      picked: Map<ReadonlySet<string>, Picked>;
+    }[];
+    tooLarge: boolean;
+  }
+  const prepared = new Map<string, PreparedExports>();
+  const prepare = (pkg: WorkspacePackage): PreparedExports => {
+    const known = prepared.get(pkg.name);
+    if (known) return known;
+    const field = pkg.exports;
+    const map: Record<string, unknown> =
+      typeof field === 'string' ||
+      Array.isArray(field) ||
+      typeof field !== 'object' ||
+      field === null ||
+      !Object.keys(field).some((key) => key.startsWith('.'))
+        ? { '.': field }
+        : (field as Record<string, unknown>);
+    const keys = Object.keys(map);
+    const result: PreparedExports = {
+      exact: new Map(),
+      stars: [],
+      tooLarge: keys.length > MAX_EXPORTS_KEYS,
+    };
+    if (!result.tooLarge)
+      for (const key of keys) {
+        const star = key.indexOf('*');
+        if (star < 0) result.exact.set(key, map[key]);
+        else
+          result.stars.push({
+            prefix: key.slice(0, star),
+            suffix: key.slice(star + 1),
+            value: map[key],
+            picked: new Map(),
+          });
+      }
+    // Node takes the most specific pattern, not the first: the longest text before the star, then
+    // the longest key.
+    result.stars.sort(
+      (a, b) =>
+        b.prefix.length - a.prefix.length ||
+        b.prefix.length + b.suffix.length - (a.prefix.length + a.suffix.length),
+    );
+    if (
+      result.stars.length > MAX_EXPORTS_PATTERNS ||
+      result.stars.some((s) => (JSON.stringify(s.value) ?? '').length > MAX_EXPORTS_VALUE_BYTES)
+    )
+      result.tooLarge = true;
+    prepared.set(pkg.name, result);
+    return result;
+  };
+
+  const viaExports = (
+    pkg: WorkspacePackage,
+    subpath: string,
+    conditions: ReadonlySet<string>,
+  ): Resolution => {
+    const exportsMap = prepare(pkg);
+    if (exportsMap.tooLarge)
+      return { class: 'unresolved', package: pkg.name, reason: 'exports-too-large' };
+    let found: Picked;
+    const exact = exportsMap.exact.get(subpath);
+    if (exact !== undefined) {
+      if (exact === null) return { class: 'unresolved', package: pkg.name, reason: 'not-exported' };
+      found = pickTarget(exact, conditions);
+    } else {
+      const pattern = exportsMap.stars.find(
+        ({ prefix, suffix }) =>
+          subpath.length >= prefix.length + suffix.length &&
+          subpath.startsWith(prefix) &&
+          subpath.endsWith(suffix),
+      );
+      if (!pattern) return { class: 'unresolved', package: pkg.name, reason: 'not-exported' };
+      if (!pattern.picked.has(conditions))
+        pattern.picked.set(
+          conditions,
+          pattern.value === null ? undefined : pickTarget(pattern.value, conditions),
+        );
+      const picked = pattern.picked.get(conditions);
+      if (picked) {
+        // Node substitutes the match into the chosen target string only, as text.
+        if (
+          picked.target.length > MAX_PATTERN_TARGET_LENGTH ||
+          picked.target.split('*').length - 1 > MAX_PATTERN_STARS
+        )
+          return { class: 'unresolved', package: pkg.name, reason: 'exports-too-large' };
+        const matched = subpath.slice(
+          pattern.prefix.length,
+          subpath.length - pattern.suffix.length,
+        );
+        found = { ...picked, target: picked.target.replaceAll('*', matched) };
+      }
+    }
+    if (!found) return { class: 'unresolved', package: pkg.name, reason: 'not-exported' };
+    const target = posix.normalize(posix.join(pkg.dir, found.target));
+    if (!files.has(target))
+      return { class: 'unresolved', package: pkg.name, reason: 'export-target-not-tracked' };
+    return {
+      class: 'file',
+      target,
+      rule: `exports:${found.conditions.join('>') || 'string'}`.slice(0, 120),
+      package: pkg.name,
+    };
+  };
+
+  /** Resolutions through a package, remembered: a file may name one subpath many times. */
+  const memo = new Map<string, Resolution>();
+  const viaPackage = (
+    pkg: WorkspacePackage,
+    specifier: string,
+    conditions: ReadonlySet<string>,
+  ): Resolution => {
+    const key = `${conditions === REQUIRE_CONDITIONS ? 'r' : 'i'}\0${specifier}`;
+    const known = memo.get(key);
+    if (known) return known;
+    const resolved = resolvePackage(pkg, specifier, conditions);
+    memo.set(key, resolved);
+    return resolved;
+  };
+
+  const resolvePackage = (
+    pkg: WorkspacePackage,
+    specifier: string,
+    conditions: ReadonlySet<string>,
+  ): Resolution => {
+    const subpath = `.${specifier.slice(pkg.name.length)}`;
+    if (pkg.exports !== undefined && pkg.exports !== null)
+      return viaExports(pkg, subpath, conditions);
+    if (subpath === '.') {
+      const main = pkg.main ? fileAt(posix.normalize(posix.join(pkg.dir, pkg.main))) : undefined;
+      const fallback = main ?? fileAt(posix.join(pkg.dir, 'index'));
+      if (fallback?.class === 'file') return { ...fallback, rule: 'main', package: pkg.name };
+      return { class: 'unresolved', package: pkg.name, reason: 'no-entry' };
+    }
+    const deep = fileAt(posix.normalize(posix.join(pkg.dir, subpath)));
+    if (deep?.class === 'file') return { ...deep, package: pkg.name };
+    return { class: 'unresolved', package: pkg.name, reason: 'subpath-not-tracked' };
+  };
+
+  /**
+   * @param specifier as the source wrote it
+   * @param importer repository-relative path of the importing file
+   * @param mode `require` for a require call, otherwise `import`
+   */
+  return function resolve(
+    specifier: string,
+    importer: string,
+    mode: 'import' | 'require' = 'import',
+  ): Resolution {
+    const clean = specifier.split('?')[0] ?? specifier;
+    if (clean.startsWith('.') || clean.startsWith('/')) {
+      if (clean.startsWith('/')) return { class: 'unresolved', reason: 'absolute-path' };
+      const candidate = posix.normalize(posix.join(posix.dirname(importer), clean));
+      if (candidate.startsWith('..')) return { class: 'unresolved', reason: 'outside-repository' };
+      return fileAt(candidate) ?? { class: 'unresolved', reason: 'no-tracked-file' };
+    }
+    if (clean.startsWith('node:') || BUILTINS.has(clean) || BUILTINS.has(packageName(clean)))
+      return { class: 'builtin', package: clean.replace(/^node:/, '') };
+    if (clean.startsWith('#'))
+      return { class: 'unresolved', reason: 'package-imports-not-supported' };
+    const name = packageName(clean);
+    const pkg = workspace.get(name);
+    if (pkg)
+      return viaPackage(pkg, clean, mode === 'require' ? REQUIRE_CONDITIONS : IMPORT_CONDITIONS);
+    return { class: 'external', package: name };
+  };
+}

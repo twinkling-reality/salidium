@@ -33,6 +33,7 @@ import {
 import { statusGlyph } from './SessionList.tsx';
 import { ExplanationSettings } from './Settings.tsx';
 import { Timeline, TimelineKey } from './Timeline.tsx';
+import { WhereItSitsPanel } from './WhereItSitsPanel.tsx';
 
 /**
  * The session page, laid out as a written document rather than a dashboard.
@@ -337,6 +338,14 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
                 onClick={() => openPanel('evidence')}
               />
             )}
+            {liveView.changes.files.length > 0 && (
+              <ToolButton
+                icon="where"
+                label="Where it sits"
+                title="Place the changed files in the codebase: their modules, what they import and what imports them"
+                onClick={() => openPanel('where')}
+              />
+            )}
             <ToolButton
               icon="save"
               label="Export"
@@ -575,6 +584,11 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
          * order the page happened to use and had to work out which was which on the way past.
          */}
         <EvidencePanel view={view} cwd={state.cwd} onRef={onRef} />
+        {/*
+         * Always the live session's files, not a rewound moment's: the map is of a commit, and the
+         * commit is chosen from what the whole session observed.
+         */}
+        <WhereItSitsPanel sessionId={sessionId} changedKey={whereKey(liveState)} />
       </div>
       {statsOpen ? (
         <ModelsUsageRail
@@ -803,4 +817,17 @@ function SessionError({ error, onRetry }: { error: LiveError; onRetry: () => voi
       </div>
     </div>
   );
+}
+
+/**
+ * What the Where it sits document is computed from: the changed files, where they were found, and
+ * the turn-end anchor. Every event would refetch a document that a live session rarely changes.
+ */
+function whereKey(state: RunState): string {
+  return [
+    Object.keys(state.files).length,
+    Object.keys(state.fileLocations ?? {}).length,
+    state.git.atTurnEnd?.at ?? '',
+    state.git.atStart?.at ?? '',
+  ].join('|');
 }

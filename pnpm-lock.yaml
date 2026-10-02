@@ -109,6 +109,9 @@ importers:
       '@salidium/daemon':
         specifier: workspace:*
         version: link:../daemon
+      '@salidium/project-map':
+        specifier: workspace:*
+        version: link:../project-map
       '@salidium/protocol':
         specifier: workspace:*
         version: link:../protocol
@@ -145,9 +148,18 @@ importers:
       '@salidium/core':
         specifier: workspace:*
         version: link:../core
+      '@salidium/project-map':
+        specifier: workspace:*
+        version: link:../project-map
       '@salidium/protocol':
         specifier: workspace:*
         version: link:../protocol
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
+  packages/project-map:
+    dependencies:
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -181,6 +193,9 @@ importers:
       '@salidium/core':
         specifier: workspace:*
         version: link:../core
+      '@salidium/project-map':
+        specifier: workspace:*
+        version: link:../project-map
       '@salidium/protocol':
         specifier: workspace:*
         version: link:../protocol

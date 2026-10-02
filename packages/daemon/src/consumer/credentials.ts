@@ -1,9 +1,10 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { CONSUMER_TOKEN_PATTERN } from '@salidium/consumer-contract';
 import { z } from 'zod';
 import { writePrivateJsonAtomic } from '../operations/files.ts';
+import { withCredentialLock } from './credentialLock.ts';
 
 /**
  * Read-only consumer credentials.
@@ -22,7 +23,6 @@ import { writePrivateJsonAtomic } from '../operations/files.ts';
  * no restart and revoking one takes effect on the next request.
  */
 export const CONSUMER_CREDENTIALS_FILE = 'consumer-credentials.json';
-const LOCK_DIRECTORY = 'consumer-credentials.lock';
 const TOKEN_PREFIX = 'salidium_consumer_';
 
 /** Enough for every tool a person could reasonably run, and a bound on what a mistake can create. */
@@ -95,65 +95,6 @@ function readCredentialFile(home: string): CredentialFile {
   const path = consumerCredentialPath(home);
   if (!existsSync(path)) return { version: 1, credentials: [] };
   return CredentialFileSchema.parse(JSON.parse(readFileSync(path, 'utf8')));
-}
-
-function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
-
-function pause(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/**
- * Serializes read-modify-write of the credential file between the CLI and the daemon.
- *
- * Without it, a revoke racing a create can write back a list read before the revoke, which
- * resurrects a credential the person just withdrew. The lock is an atomic directory; the owner's pid
- * lets a later writer recover a lock whose process died. Every holder finishes in milliseconds.
- */
-function withCredentialLock<T>(home: string, work: () => T): T {
-  const lock = join(home, LOCK_DIRECTORY);
-  const owner = join(lock, 'owner');
-  mkdirSync(home, { recursive: true, mode: 0o700 });
-  for (let attempt = 0; ; attempt++) {
-    try {
-      mkdirSync(lock, { mode: 0o700 });
-      writeFileSync(owner, String(process.pid), { mode: 0o600 });
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      let pid: number | undefined;
-      try {
-        pid = Number(readFileSync(owner, 'utf8'));
-      } catch {
-        /* mkdir finished and the owner write did not; stale once old enough, below. */
-      }
-      const age = (() => {
-        try {
-          return Date.now() - statSync(lock).mtimeMs;
-        } catch {
-          return 0;
-        }
-      })();
-      const stale =
-        (pid !== undefined && Number.isInteger(pid) && pid > 0 && !processAlive(pid)) ||
-        (pid === undefined && age > 5_000);
-      if (stale) rmSync(lock, { recursive: true, force: true });
-      else if (attempt >= 60) throw new Error('consumer credentials are being changed elsewhere');
-      else pause(50);
-    }
-  }
-  try {
-    return work();
-  } finally {
-    rmSync(lock, { recursive: true, force: true });
-  }
 }
 
 export function listConsumerCredentials(home: string): ConsumerCredential[] {

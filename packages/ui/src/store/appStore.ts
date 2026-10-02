@@ -148,7 +148,7 @@ function storedDetail(): Detail {
 applyTheme(storedTheme());
 
 /** The section summoned over the page. Nothing is a section of the document any more. */
-export type PanelId = 'checks' | 'left' | 'review' | 'evidence';
+export type PanelId = 'checks' | 'left' | 'review' | 'evidence' | 'where';
 
 interface AppState {
   api: ApiClient | undefined;

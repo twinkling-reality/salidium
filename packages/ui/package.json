@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@salidium/core": "workspace:*",
+    "@salidium/project-map": "workspace:*",
     "@salidium/protocol": "workspace:*",
     "@tanstack/react-virtual": "^3.14.9",
     "react": "^19.2.8",

@@ -92,6 +92,7 @@ import {
   prepareMacOSService,
   uninstallMacOSService,
 } from './macosService.ts';
+import { runMapCommand } from './mapCommand.ts';
 import { runFirstRunOnboarding } from './onboarding.ts';
 import { clearsPauseOnRun } from './pauseOnRun.ts';
 import { renderReport } from './render.ts';
@@ -160,6 +161,13 @@ Usage:
                                 the token is printed once
   salidium consumer list        Show consumer credentials (never their secrets)
   salidium consumer revoke ID   Revoke one consumer credential immediately
+  salidium map allow REPOSITORY Let Salidium map a repository's committed tree (experimental);
+                                tools with a consumer credential can then read its structure
+  salidium map list             Show the repositories Salidium may map
+  salidium map revoke REPOSITORY
+                                Stop mapping a repository and delete its cached maps
+  salidium map show REPOSITORY [COMMIT]
+                                Print a summary of the map at a commit (default HEAD)
   salidium audit-claims         Measure the claim classifier against every session in your store
                                 --sample=N (default 8), --only=rule, --seed=N, --limit=N, --json
 
@@ -1057,6 +1065,17 @@ async function main(argv: string[]): Promise<number> {
       process.stdout.write(`Forgot ${arg}; its source cursor remains tombstoned.\n`);
       return 0;
     }
+    case 'map':
+      return runMapCommand(
+        salidiumHome,
+        arg,
+        args,
+        { json: jsonOutput },
+        {
+          out: (text) => process.stdout.write(text),
+          err: (text) => process.stderr.write(text),
+        },
+      );
     case 'consumer':
       return runConsumerCommand(
         salidiumHome,

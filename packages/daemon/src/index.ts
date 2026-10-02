@@ -132,6 +132,19 @@ export {
   type NativeNotificationOptions,
   resolveNativeNotification,
 } from './operations/nativeNotifications.ts';
+export { MapOverBound } from './projectMap/build.ts';
+export { ProjectMapCache } from './projectMap/cache.ts';
+export { GitReadError, locateObjectStore } from './projectMap/gitObjects.ts';
+export { readHeadCommit } from './projectMap/head.ts';
+export { mainRootOf } from './projectMap/mainRoot.ts';
+export {
+  allowRepository,
+  listOptedInRepositories,
+  PROJECT_MAP_REPOSITORIES_FILE,
+  projectMapRepositoriesPath,
+  revokeRepository,
+} from './projectMap/optIn.ts';
+export { DaemonProjectMapService } from './projectMap/service.ts';
 export { effectiveCadence } from './sessions/sessionCoordinator.ts';
 export type {
   StoreLayoutInspection,

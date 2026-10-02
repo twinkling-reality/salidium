@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.8.0 - 2026-10-02
+
+- Experimental: see where a session's work sits in its repository. A session's report gains
+  **Where it sits**, which places each changed file in its module, shows what it imports and what
+  imports it, and can widen to the modules that depend on them. Everything shown is read from
+  committed Git objects at the commit the session was observed at: the latest turn end, else the
+  start. Nothing is matched by name, no model is called, and a file that is not in the map at that
+  commit says so in plain words. JavaScript and TypeScript are mapped file by file; C# is placed
+  by assembly only.
+- Salidium reads a repository only after you allow it: `salidium map allow <repository>`,
+  `salidium map list`, `salidium map revoke <repository>`, and `salidium map show` to print a
+  map. A linked worktree is allowed through its main repository. Allowing records the repository's
+  Git directory and a later read is refused if it changed. Tools you have given a consumer
+  credential can read the committed structure of a repository you allow, at `/project-map/v0`,
+  listed under discovery's `experimental`. Maps are built on request only, never at startup,
+  bounded in size and time, and a repository Git could be tricked into reading elsewhere for
+  (alternates, a crafted `commondir`, symlinked object stores) is refused.
+- The experimental documents `salidium.project-map` v0 and `salidium.execution-links` v0 carry no
+  compatibility promise yet. Consumer contract 1.1 is unchanged.
+- **Where it sits** stays cheap while it is open: it checks only the text it shows, serves the same
+  document again while nothing in the session or the allowed repositories changed, refetches at
+  most once every 15 seconds while a session is changing, and rate limits commit lookups, which it
+  remembers per allowed repository.
+- Two writers can no longer edit `consumer-credentials.json` at once. A lock left by a process that
+  died is taken over in one exclusive step instead of being removed by path, and an owner file
+  that cannot be read yet is treated as unknown rather than dead. Older releases still respect the
+  lock.
+- Tests that wait for a canceled Ollama request now wait on what they observe, not fixed delays.
+
 ## 0.7.0 - 2026-10-02
 
 - Observe OpenCode 2.x sessions, read only, as the provider `salidium/opencode`. Experimental and

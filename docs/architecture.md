@@ -426,6 +426,40 @@ records the decision; this is the durable shape.
 The consumer credential file is the authority, not the daemon. The CLI edits it under a lock whether
 or not the daemon is running, and the daemon re-reads it when its metadata changes.
 
+### Project map (experimental)
+
+`salidium.project-map` version 0 maps one repository at one commit: tracked files, the modules their
+manifests declare, and the import edges between JavaScript and TypeScript files, each with its rule
+and bounded evidence; C# at assembly level only. The record behind it is
+[project-map-validation.md](project-map-validation.md).
+
+- **Consent.** A repository is mapped only after `salidium map allow`, stored owner-only in
+  `project-map-repositories.json` beside the consumer credentials, with the same lock and the same
+  rule that the file, not the daemon, is the authority. Repositories are keyed by their main root,
+  as `file.located` reports it, so a linked worktree is its repository.
+- **Surface.** `GET /project-map/v0/repositories` and `GET /project-map/v0/maps?repository=&commit=`
+  with a consumer credential, dispatched like `/consumer` before the owner check, behind the same
+  loopback guards, answering in `salidium.project-map-error` documents. Discovery lists it in
+  `experimental`. A request names an opted-in root as an exact string and a full commit id; nothing
+  under a root that is not opted in is read.
+- **Reading untrusted repositories.** Maps are built on request only, one at a time and rate
+  limited, from committed objects through git plumbing (`cat-file --batch-check`, `cat-file
+  --batch`, `ls-tree`). Git runs against an empty Salidium-owned git directory with
+  `GIT_OBJECT_DIRECTORY` set to the repository's object store, so the repository's configuration,
+  hooks, refs and promisor remotes are never read; with a trusted absolute executable, an empty
+  `HOME`, no system or global configuration, transports disabled, full object ids only, sizes from
+  object headers before any content, and a timeout and output cap per process. The store must be
+  the repository's own: alternates, `commondir`, a symbolic-link object directory, anything but
+  files in the pack directory, and a git directory or store another user owns are refused, and the
+  git directory a root resolves to is recorded when it is allowed and must not change afterwards.
+  The build yields to the event loop every few milliseconds and is refused past a wall-clock bound,
+  so crafted content cannot hold the daemon's thread. Bounds on entries, bytes per blob, total
+  bytes, nodes, edges, exports maps, globs and scanner lookahead either refuse the map or are
+  reported in its coverage, never silently truncated. A git child's memory is not limited by
+  Salidium; its time and output are.
+- **Cache.** Built maps are kept owner-only under `project-map/cache`, keyed by the opt-in record
+  itself, bounded in entries and bytes, and deleted on revocation.
+
 ### Intelligence sync foundation
 
 Store schema 6 adds empty `sync_*` and `intelligence_*` tables. The migration performs no historical
