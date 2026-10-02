@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.2 - 2026-10-02
 
 - Read a session's activities, files and subagents by own entry only, so a call id or path named
   `constructor`, `toString` or `__proto__` is recorded like any other instead of crashing the
