@@ -546,3 +546,40 @@ describe('options that take no separate value do not hide the file after them', 
     expect(best).toBeLessThan(250);
   });
 });
+
+describe('the last option-parsing cases', () => {
+  it.each([
+    // format-patch: `-n` is --numbered, a flag.
+    'git format-patch --stdout -1 -n .env',
+    'git format-patch --stdout -1 -- .env',
+    // Digits in a cluster.
+    'xargs -0n 1 cat .env',
+    'echo .env | xargs -0n 1 cat',
+    'sudo -Eu0 cat .env',
+    // A value attached to an unlisted option ends the cluster.
+    'git log -p -O/dev/stdin .env',
+    "gawk -d/tmp/x '{print}' .env",
+    "gawk -d/tmp/v '{print}' .env",
+    "awk -F/tmp/f '{print}' .env",
+    'sed -i.bak -n p .env',
+    // Prefix options that need a value.
+    'doas -a style cat .env',
+    'env -L user cat .env',
+    'env -L user',
+    'xargs --max-procs 2 cat .env',
+    'echo .env | xargs --max-args 1 cat',
+    'echo .env | xargs --max-p 2 cat',
+    'sudo --us root cat .env',
+    'sudo --chd /tmp cat .env',
+    'sudo --preserve-env cat .env',
+  ])('suppresses %s', (command) => {
+    expect(isCredentialDumpCommand(command)).toBe(true);
+  });
+
+  it.each(['git format-patch --stdout -1 -n src/a.ts', "gawk -d/tmp/x '{print}' notes.txt"])(
+    'leaves %s alone',
+    (command) => {
+      expect(isCredentialDumpCommand(command)).toBe(false);
+    },
+  );
+});

@@ -58,7 +58,7 @@
 - Known limits: a recursive search of a directory that merely contains a sensitive file
   (`grep -r KEY .`), output lines whose `path:` prefix names a sensitive file, names reached by
   indirection (`f=.env; cat "$f"`), PowerShell, `cmd` and interpreter readers, `yq` given only a
-  file (`yq secrets.yaml`), Claude Code's Grep `glob` argument, `git show :0:.env`, and Windows 8.3
+  file (`yq secrets.yaml`, `yq .env`), Claude Code's Grep `glob` argument, `git show :0:.env`, and Windows 8.3
   short names are not recognized.
 
 ## 0.8.0 - 2026-10-02

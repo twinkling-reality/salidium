@@ -393,6 +393,9 @@ const FILE_OUTPUT_COMMANDS = new Set([
  * operand is a pattern or program unless an option supplies one. Short options are single
  * letters, so a cluster (`-rne PATTERN`) is read letter by letter. Case matters: `-E` is not `-e`.
  */
+/** A character that can be a short option in a cluster; anything else begins a value. */
+const OPTION_CHAR = /^[A-Za-z0-9]$/;
+
 interface ReaderSyntax {
   scriptFirst?: boolean;
   pattern?: string[];
@@ -499,6 +502,8 @@ function readerFiles(executable: string, args: string[]): string[] {
     }
     if (arg.startsWith('-') && arg.length > 1) {
       for (let k = 1; k < arg.length; k++) {
+        // A character that is not an option letter starts an attached value (`-d/tmp/x`).
+        if (!OPTION_CHAR.test(arg[k] ?? '')) break;
         const kind = optionKind(syntax, arg[k] ?? '');
         if (kind === 'flag') continue;
         if (kind === 'pattern' || kind === 'file') scriptGiven = true;
@@ -524,7 +529,15 @@ function readerFiles(executable: string, args: string[]): string[] {
  * `+Aa:BbC:c:D:Eeg:Hh::iKklNnPp:R:r:SsT:t:U:u:Vv`, so `-h` takes no separate value), with BSD
  * additions.
  */
-const COMMAND_PREFIXES: Record<string, { values?: string[]; operands?: number }> = {
+const COMMAND_PREFIXES: Record<
+  string,
+  {
+    values?: string[];
+    operands?: number;
+    /** The long options that take no value, to resolve an abbreviated long option uniquely. */
+    longFlags?: string[];
+  }
+> = {
   sudo: {
     values: [
       '-a',
@@ -553,9 +566,30 @@ const COMMAND_PREFIXES: Record<string, { values?: string[]; operands?: number }>
       '--other-user',
       '--user',
     ],
+    longFlags: [
+      '--askpass',
+      '--background',
+      '--bell',
+      '--edit',
+      '--help',
+      '--login',
+      '--list',
+      '--non-interactive',
+      '--no-update',
+      '--preserve-env',
+      '--preserve-groups',
+      '--remove-timestamp',
+      '--reset-timestamp',
+      '--set-home',
+      '--shell',
+      '--stdin',
+      '--validate',
+      '--version',
+    ],
   },
-  doas: { values: ['-u', '-C'] },
-  env: { values: ['-u', '--unset', '-C', '--chdir', '-P'] },
+  doas: { values: ['-a', '-u', '-C'] },
+  // FreeBSD adds `-L user[/class]` and `-P altpath`.
+  env: { values: ['-u', '--unset', '-C', '--chdir', '-L', '-P'] },
   command: {},
   builtin: {},
   exec: { values: ['-a'] },
@@ -581,6 +615,25 @@ const COMMAND_PREFIXES: Record<string, { values?: string[]; operands?: number }>
       '-s',
       '--arg-file',
       '--delimiter',
+      '--max-args',
+      '--max-chars',
+      '--max-lines',
+      '--max-procs',
+      '--process-slot-var',
+    ],
+    // `--eof[=E]` and `--replace[=R]` take only an attached value.
+    longFlags: [
+      '--eof',
+      '--exit',
+      '--interactive',
+      '--no-run-if-empty',
+      '--null',
+      '--open-tty',
+      '--replace',
+      '--show-limits',
+      '--verbose',
+      '--version',
+      '--help',
     ],
   },
 };
@@ -789,20 +842,30 @@ function executableName(token: string): string {
 }
 
 /**
- * Whether an option takes the next word as its value: named in `values`, or a short-option
+ * Whether an option takes the next word as its value: named in `values`, a long option that is
+ * an unambiguous abbreviation of one (`sudo --us root`, as getopt_long accepts), or a short-option
  * cluster in which the first letter that takes a value is the last (`sudo -Eu root`,
- * `env -iu NAME`). An earlier one takes the rest of the cluster instead (`sudo -uroot`).
+ * `xargs -0n 1`). An earlier one takes the rest of the cluster instead (`sudo -uroot`), and so
+ * does any character that is not an option letter (`-O/dev/stdin`): nothing more is consumed.
  */
-function takesValue(arg: string, values: string[] | undefined): boolean {
+function takesValue(arg: string, values: string[] | undefined, longFlags: string[] = []): boolean {
   if (!values) return false;
   if (values.includes(arg)) return true;
-  if (!/^-[A-Za-z]{2,}$/.test(arg)) return false;
-  for (let k = 1; k < arg.length; k++)
+  if (arg.startsWith('--')) {
+    if (arg.includes('=')) return false;
+    const matches = [...values, ...longFlags].filter(
+      (o) => o.startsWith('--') && o.startsWith(arg),
+    );
+    return matches.length === 1 && values.includes(matches[0] ?? '');
+  }
+  for (let k = 1; k < arg.length; k++) {
+    if (!OPTION_CHAR.test(arg[k] ?? '')) return false;
     if (values.includes(`-${arg[k]}`)) return k === arg.length - 1;
+  }
   return false;
 }
 
-const ENV_VALUE_OPTIONS = ['-u', '--unset', '-C', '--chdir', '-P', '-S', '--split-string'];
+const ENV_VALUE_OPTIONS = ['-u', '--unset', '-C', '--chdir', '-L', '-P', '-S', '--split-string'];
 
 /** Whether `env` with the arguments from `start` prints the environment rather than running one. */
 function envCommandIsDump(args: string[], start = 0): boolean {
@@ -866,7 +929,7 @@ function invocation(words: string[]): Invocation | undefined {
       }
       // After `env`, a bare `-` is an option (`-i`), not a command.
       if (arg.startsWith('-') && (arg !== '-' || executable === 'env')) {
-        i += takesValue(arg, prefix.values) ? 2 : 1;
+        i += takesValue(arg, prefix.values, prefix.longFlags) ? 2 : 1;
         continue;
       }
       if (executable === 'env' && ASSIGNMENT.test(arg)) {
@@ -1199,7 +1262,8 @@ const GIT_SKIPPED_VALUES: Record<string, string[]> = {
   log: LOG_VALUES,
   whatchanged: LOG_VALUES,
   show: LOG_VALUES,
-  'format-patch': LOG_VALUES,
+  // In format-patch `-n` is `--numbered`, a flag.
+  'format-patch': LOG_VALUES.filter((option) => option !== '-n'),
   diff: ['-S', '-G', '--diff-filter'],
   grep: [
     '-m',
@@ -1261,6 +1325,8 @@ function gitShowsSensitive(args: string[]): boolean {
       // A cluster: the first letter that takes a value takes the rest of it, or the next word.
       name = '';
       for (let c = 1; c < arg.length; c++) {
+        // A character that is not an option letter starts an attached value (`-O/dev/stdin`).
+        if (!OPTION_CHAR.test(arg[c] ?? '')) break;
         if (kind(`-${arg[c]}`) === 'flag') continue;
         name = `-${arg[c]}`;
         if (c + 1 < arg.length) {
