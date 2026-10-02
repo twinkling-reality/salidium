@@ -5,6 +5,7 @@ import {
   CONSUMER_CONTRACT,
   type ConsumerDiscovery,
 } from '@salidium/consumer-contract';
+import type { ProviderId } from '@salidium/protocol';
 import { writePrivateJsonAtomic } from '../operations/files.ts';
 
 /**
@@ -22,6 +23,8 @@ export function consumerDiscoveryPath(home: string): string {
 
 export function consumerDiscovery(options: {
   port: number;
+  /** The providers this instance launched with. Fixed for its life: a change needs a restart. */
+  providers: readonly ProviderId[];
   pid: number;
   instanceId: string;
   startedAt: string;
@@ -41,6 +44,7 @@ export function consumerDiscovery(options: {
       },
     ],
     salidium: { version: options.version },
+    providers: [...new Set(options.providers)].sort().map((id) => ({ id })),
     instanceId: options.instanceId,
     pid: options.pid,
     startedAt: options.startedAt,

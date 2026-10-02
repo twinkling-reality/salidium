@@ -1,5 +1,6 @@
+import { PROVIDER_ADAPTER_CONTRACT_VERSION, type ProviderDescriptor } from '@salidium/adapter-kit';
 import { EventBuilder } from '@salidium/core/testing';
-import type { CanonicalEvent, StoredEvent } from '@salidium/protocol';
+import type { CanonicalEvent, ProviderId, StoredEvent } from '@salidium/protocol';
 
 /**
  * Synthetic sessions for the consumer contract's tests and retained fixtures.
@@ -33,6 +34,8 @@ export const SCENARIO_SESSIONS = {
 } as const;
 
 const CWD = '/Users/dev/acme/checkout';
+/** A linked worktree of CWD, where the agent wrote one file: the session's root does not hold it. */
+const LANE = '/Users/dev/acme/checkout-refunds';
 
 const VITEST_PASS = `
  ✓ src/payments/ChargeService.test.ts (14 tests) 210ms
@@ -77,6 +80,7 @@ function verifiedSession(): CanonicalEvent[] {
       head: '3f9a2c1d8e7b6a5f4c3d2e1f0a9b8c7d6e5f4a3b',
       branch: 'fix/double-charge',
       dirty: [],
+      trigger: 'session.started',
     } as never),
     b.turnStarted(`${CONSUMER_CANARIES.prompt} Customers are charged twice when checkout retries.`),
     b.message(
@@ -87,8 +91,8 @@ function verifiedSession(): CanonicalEvent[] {
       { id: '2', text: 'Reuse the key in the retry worker', status: 'completed' },
       { id: '3', text: 'Document refund behaviour for support', status: 'pending' },
     ]),
-    ...b.edit('c1', 'src/payments/ChargeService.ts', 24, 3),
-    ...b.edit('c2', 'src/checkout/RetryWorker.ts', 8, 2),
+    ...b.edit('c1', `${CWD}/src/payments/ChargeService.ts`, 24, 3),
+    ...b.edit('c2', `${CWD}/src/checkout/RetryWorker.ts`, 8, 2),
     b.raw({
       id: 'subagent:reviewer:start',
       kind: 'subagent.started',
@@ -99,12 +103,28 @@ function verifiedSession(): CanonicalEvent[] {
     // A subagent's edit. Its only "reason" in the interface is the delegation brief above, which is
     // a tool input and must not cross.
     ...b
-      .edit('c2b', 'src/payments/ChargeService.test.ts', 6, 0)
+      .edit('c2b', `${CWD}/src/payments/ChargeService.test.ts`, 6, 0)
       .map((event) => ({ ...event, agentId: 'reviewer' }) as StoredEvent),
     b.raw({ id: 'thinking:1', kind: 'agent.thinking', chars: 1200 } as never),
     ...b.command('c3', `pnpm test ${CONSUMER_CANARIES.command}`, VITEST_PASS, { exitCode: 0 }),
     b.message(`All tests pass. The staging key ${CONSUMER_SECRET} was never used by the fix.`),
-    ...b.edit('c4', 'src/payments/refunds.ts', 5, 1),
+    ...b.edit('c4', `${LANE}/src/payments/refunds.ts`, 5, 1),
+    // Where Salidium found each changed file, as its file locator reports it for a live session.
+    b.raw({
+      id: 'located:1',
+      kind: 'file.located',
+      files: [
+        ...[
+          'src/payments/ChargeService.ts',
+          'src/checkout/RetryWorker.ts',
+          'src/payments/ChargeService.test.ts',
+        ].map((path) => ({ path: `${CWD}/${path}`, repository: { root: CWD, path } })),
+        {
+          path: `${LANE}/src/payments/refunds.ts`,
+          repository: { root: LANE, path: 'src/payments/refunds.ts', mainRoot: CWD },
+        },
+      ],
+    } as never),
     // The destructive segment is the review finding and crosses; the rest of the line does not.
     ...b.command(
       'c5',
@@ -121,6 +141,17 @@ function verifiedSession(): CanonicalEvent[] {
     b.turnEnded(
       `Fixed the double charge with one idempotency key per order.\n\n${CONSUMER_CANARIES.finalMessage} The retry worker now reads the key from the order row.`,
     ),
+  );
+  events.push(
+    b.raw({
+      id: 'git:2',
+      kind: 'git.snapshot',
+      repoRoot: CWD,
+      head: '8b1e4d7a2c9f6b3e0d5a8c1f4b7e2d9a6c3f0b5e',
+      branch: 'fix/double-charge',
+      dirty: [],
+      trigger: 'turn.ended',
+    } as never),
   );
   events.push(b.sessionEnded());
   events.push(
@@ -214,4 +245,26 @@ export function consumerScenario(): Array<{ sessionId: string; events: Canonical
     { sessionId: `claude-code:${SCENARIO_SESSIONS.working.sessionId}`, events: workingSession() },
     { sessionId: `claude-code:${SCENARIO_SESSIONS.internal.sessionId}`, events: internalSession() },
   ];
+}
+
+/**
+ * Providers that are enabled and do nothing: no session roots, no parser output, no hooks. The
+ * fixtures capture a daemon whose discovery really lists claude-code and codex without reading
+ * any provider state. The daemon still looks for a `codex` executable to read hook trust, so a
+ * caller removes provider tools from PATH first.
+ */
+export function inertProviderDescriptors(ids: readonly ProviderId[]): ProviderDescriptor[] {
+  return ids.map((id) => ({
+    contractVersion: PROVIDER_ADAPTER_CONTRACT_VERSION,
+    displayName: id,
+    hookEventBudget: { expectedPerTurn: { fixed: 0, perToolCall: 0 }, events: [] },
+    adapter: {
+      id,
+      sessionRoots: () => [],
+      matchSessionFile: () => undefined,
+      createRecordParser: () => ({ parseRecord: () => [] }),
+      parseHookPayload: () => [],
+      transcriptPathFromHook: () => undefined,
+    },
+  }));
 }

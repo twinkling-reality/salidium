@@ -129,10 +129,13 @@ Before tagging:
 1. Run `node scripts/write-consumer-contract.mjs --schema` after `pnpm build` and confirm the diff to
    `schema/v1/` is empty or only adds. Within a major version a release may add properties and feed
    message types, and nothing else.
-2. For the first release of a minor version, fixtures under `fixtures/v1/` must describe that
-   version. They are write-once from publication. Before the first publication only, they may be
-   removed and regenerated with `--fixtures`, which boots a real daemon on a temporary home and
-   records what it serves from synthetic sessions.
+2. For the first release of a minor version, its fixtures must describe that version: 1.0's are in
+   `fixtures/v1/`, and each later minor's in `fixtures/v1/<major.minor>/`, which `--fixtures`
+   writes for the contract's current minor. It boots a real daemon on a temporary home with inert
+   stand-ins for the built-in providers and records what it serves from synthetic sessions.
+   Fixtures are write-once from publication. Before the first publication only, a minor's set may
+   be removed and regenerated, for example after the Salidium version it records changes. Older
+   sets stay, and the tests hold each to its own released schemas.
 3. When a minor version is frozen for publication, copy its `schema/v1/*.schema.json` unchanged
    into `schema/v1/released/<major.minor>/` in the same change that sets the package version. The
    contract tests then require every retained fixture and every document the daemon serves in its

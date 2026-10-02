@@ -178,6 +178,25 @@ packs it and consumes it outside the workspace. A manual-only release workflow m
 contract's, except that it stages the version for a maintainer's 2FA approval rather than
 publishing it. Nothing is published without the owner's explicit approval.
 
+### Minor version 1.1
+
+The first additive minor answers two questions a consumer could not: which revision the work
+belongs to, and which repository holds each changed file. A session's root is where it started,
+not where it wrote; agents edit linked worktrees and other checkouts.
+
+- `report.revision` carries `HEAD` and the branch at the first session start and at the latest turn
+  end, from Salidium's own git snapshots, which now name the boundary that triggered them. A
+  snapshot recorded before that, or a session not watched live, anchors nothing: `null`.
+- `changes.files[].repository` carries the working tree that holds the file, the path inside it,
+  and for a linked worktree the repository it belongs to. Salidium resolves it when the change is
+  live from Git's pointer files alone (a `.git` directory with `HEAD`, or a `.git` file's
+  `gitdir:` and that directory's `commondir`), bounded in depth and bytes read, never running git,
+  never reading file contents, and never reporting anything under another user's home. Anything
+  it cannot establish is `null`. Paths and branches cross whole and redacted, never clipped.
+- Discovery lists the providers the daemon instance observes, so a consumer can tell "not
+  observed by this instance" from "not reported yet". The list is fixed for an instance's life,
+  as the enabled providers are, and changes only with a restart and a new `instanceId`.
+
 ## Consequences
 
 Salidium takes on a compatibility obligation for the meaning of its report, not only its shape. An

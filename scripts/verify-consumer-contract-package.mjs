@@ -47,30 +47,57 @@ for (const name of names) {
     throw new Error(`shipped schema ${name} does not match the shipped runtime`);
 }
 
-const fixtureDir = new URL('fixtures/v1/', rootUrl);
-const fixtures = readdirSync(fixtureDir).filter((file) => file.endsWith('.json'));
-if (fixtures.length === 0) throw new Error('no retained fixtures shipped');
-const covered = new Set();
-for (const file of fixtures) {
-  const value = JSON.parse(readFileSync(new URL(file, fixtureDir), 'utf8'));
-  const name = String(value.format).replace(/^salidium\./, '');
-  if (!names.includes(name)) throw new Error(`${file}: unrecognized format ${value.format}`);
-  CONSUMER_DOCUMENTS[name].parse(value);
-  const schema = JSON.parse(
-    readFileSync(
-      require.resolve(`@salidium/consumer-contract/schema/v1/${name}.schema.json`),
-      'utf8',
-    ),
+/*
+ * Retained fixtures come one set per minor version: 1.0's at `fixtures/v1/*.json`, every later
+ * minor's in `fixtures/v1/<major.minor>/`. The current minor's set must be exactly what the shipped
+ * runtime accepts and validate under the shipped schema and every released copy; an older set must
+ * still validate under its own released copy, which is what it was published against.
+ */
+const schemaFile = (name, released) =>
+  require.resolve(
+    `@salidium/consumer-contract/schema/v1/${released ? `released/${released}/` : ''}${name}.schema.json`,
   );
-  const result = z.fromJSONSchema(schema).safeParse(value);
-  if (!result.success) throw new Error(`${file}: rejected by the shipped JSON Schema`);
-  covered.add(name);
+const validates = (name, value, released) =>
+  z.fromJSONSchema(JSON.parse(readFileSync(schemaFile(name, released), 'utf8'))).safeParse(value)
+    .success;
+const releasedVersions = readdirSync(new URL('schema/v1/released/', rootUrl));
+const current = `${CONSUMER_CONTRACT.major}.${CONSUMER_CONTRACT.minor}`;
+const fixtureRoot = new URL('fixtures/v1/', rootUrl);
+const versions = [
+  '1.0',
+  ...readdirSync(fixtureRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name),
+];
+if (!versions.includes(current)) throw new Error(`no retained fixtures for ${current}`);
+let fixtureCount = 0;
+for (const version of versions) {
+  const dir = version === '1.0' ? fixtureRoot : new URL(`${version}/`, fixtureRoot);
+  const files = readdirSync(dir).filter((file) => file.endsWith('.json'));
+  const covered = new Set();
+  for (const file of files) {
+    const value = JSON.parse(readFileSync(new URL(file, dir), 'utf8'));
+    const name = String(value.format).replace(/^salidium\./, '');
+    if (!names.includes(name))
+      throw new Error(`${version}/${file}: unrecognized format ${value.format}`);
+    if (version === current) {
+      CONSUMER_DOCUMENTS[name].parse(value);
+      if (!validates(name, value)) throw new Error(`${file}: rejected by the shipped JSON Schema`);
+      for (const released of releasedVersions)
+        if (!validates(name, value, released))
+          throw new Error(`${file}: rejected by the released ${released} JSON Schema`);
+    } else if (!validates(name, value, version)) {
+      throw new Error(`${version}/${file}: rejected by its own released JSON Schema`);
+    }
+    covered.add(name);
+    fixtureCount += 1;
+  }
+  for (const name of names)
+    if (!covered.has(name)) throw new Error(`no ${version} fixture covers ${name}`);
 }
-for (const name of names)
-  if (!covered.has(name)) throw new Error(`no retained fixture covers ${name}`);
 
 process.stdout.write(
   `@salidium/consumer-contract@${manifest.version} (contract ${CONSUMER_CONTRACT.name} ` +
     `${CONSUMER_CONTRACT.major}.${CONSUMER_CONTRACT.minor}): ${names.length} schemas match, ` +
-    `${fixtures.length} retained fixtures valid under zod and JSON Schema\n`,
+    `${fixtureCount} retained fixtures across ${versions.length} minor versions valid\n`,
 );

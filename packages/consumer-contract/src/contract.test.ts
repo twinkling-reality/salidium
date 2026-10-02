@@ -27,13 +27,39 @@ function documentName(value: { format?: unknown }): ConsumerDocumentName {
   return name as ConsumerDocumentName;
 }
 
-const fixtures = readdirSync(fixtureDir)
-  .filter((file) => file.endsWith('.json'))
-  .sort()
-  .map((file) => ({
-    file,
-    value: JSON.parse(readFileSync(new URL(file, fixtureDir), 'utf8')) as Record<string, unknown>,
-  }));
+/*
+ * Retained fixtures, one set per minor version. 1.0's were published at `fixtures/v1/*.json` and
+ * stay there; every later minor's sit in `fixtures/v1/<major.minor>/`. The current minor's set
+ * describes what the code emits now; an older set is evidence about what that version emitted.
+ */
+const CURRENT = `${CONSUMER_CONTRACT.major}.${CONSUMER_CONTRACT.minor}`;
+const minorOf = (version: string) => Number(version.split('.')[1]);
+
+function fixtureSet(version: string) {
+  const dir = version === '1.0' ? fixtureDir : new URL(`${version}/`, fixtureDir);
+  return readdirSync(dir)
+    .filter((file) => file.endsWith('.json'))
+    .sort()
+    .map((file) => ({
+      file: version === '1.0' ? file : `${version}/${file}`,
+      value: JSON.parse(readFileSync(new URL(file, dir), 'utf8')) as Record<string, unknown>,
+    }));
+}
+
+const fixtureVersions = [
+  '1.0',
+  ...readdirSync(fixtureDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name),
+].sort((left, right) => minorOf(left) - minorOf(right));
+const fixtures = fixtureVersions.includes(CURRENT) ? fixtureSet(CURRENT) : [];
+/** A current fixture by its name within the set. */
+function fixture(name: string): Record<string, unknown> | undefined {
+  return fixtures.find(({ file }) => file.split('/').at(-1) === name)?.value;
+}
+const olderFixtures = fixtureVersions
+  .filter((version) => version !== CURRENT)
+  .map((version) => ({ version, fixtures: fixtureSet(version) }));
 
 describe('JSON Schema', () => {
   it.each(names)('schema/v1/%s.schema.json is exactly what the zod source generates', (name) => {
@@ -51,7 +77,7 @@ describe('JSON Schema', () => {
   });
 
   it('leaves objects open, so an older consumer accepts a newer minor version', () => {
-    const report = fixtures.find(({ file }) => file === 'session-report-verified.json')?.value;
+    const report = fixture('session-report-verified.json');
     const validator = z.fromJSONSchema(committedSchema('session-report'));
     const extended = {
       ...report,
@@ -62,7 +88,7 @@ describe('JSON Schema', () => {
   });
 
   it('accepts discovery that also lists a later major or another contract', () => {
-    const discovery = fixtures.find(({ file }) => file === 'consumer-discovery.json')?.value;
+    const discovery = fixture('consumer-discovery.json');
     const entries = discovery?.contracts as Array<Record<string, unknown>>;
     const validator = z.fromJSONSchema(committedSchema('consumer-discovery'));
     const later = {
@@ -83,7 +109,7 @@ describe('JSON Schema', () => {
   });
 
   it('still rejects a missing property, a wrong type, and an unknown enumeration value', () => {
-    const report = fixtures.find(({ file }) => file === 'session-report-failing.json')?.value;
+    const report = fixture('session-report-failing.json');
     const validator = z.fromJSONSchema(committedSchema('session-report'));
     const { verdict: _verdict, ...withoutVerdict } = report ?? {};
     expect(validator.safeParse(withoutVerdict).success).toBe(false);
@@ -104,11 +130,21 @@ describe('JSON Schema', () => {
 });
 
 describe('retained fixtures', () => {
-  it('cover every document and every feed message type', () => {
-    const formats = new Set(fixtures.map(({ value }) => documentName(value)));
+  it('hold a set for the current minor version and for every one before it', () => {
+    expect(fixtureVersions).toEqual(
+      Array.from(
+        { length: CONSUMER_CONTRACT.minor + 1 },
+        (_, minor) => `${CONSUMER_CONTRACT.major}.${minor}`,
+      ),
+    );
+  });
+
+  it.each(fixtureVersions)('%s covers every document and every feed message type', (version) => {
+    const set = fixtureSet(version);
+    const formats = new Set(set.map(({ value }) => documentName(value)));
     expect([...formats].sort()).toEqual([...names].sort());
     const feedTypes = new Set(
-      fixtures
+      set
         .filter(({ value }) => value.format === 'salidium.session-feed')
         .map(({ value }) => value.type),
     );
@@ -153,6 +189,21 @@ describe('retained fixtures', () => {
     'current fixtures validate against the released $version schemas',
     ({ dir }) => {
       for (const { file, value } of fixtures) {
+        const validator = z.fromJSONSchema(committedSchema(documentName(value), dir));
+        expect(validator.safeParse(value).success, file).toBe(true);
+      }
+    },
+  );
+
+  /*
+   * An older minor's fixtures are not documents of the current minor, which adds required
+   * properties, so they are held to what they always were: their own version's released schemas.
+   */
+  it.each(olderFixtures)(
+    '$version fixtures still validate against their own released schemas',
+    ({ version, fixtures: set }) => {
+      const dir = new URL(`${version}/`, releasedRoot);
+      for (const { file, value } of set) {
         const validator = z.fromJSONSchema(committedSchema(documentName(value), dir));
         expect(validator.safeParse(value).success, file).toBe(true);
       }

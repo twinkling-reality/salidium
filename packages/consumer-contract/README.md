@@ -8,7 +8,8 @@ This package holds the contract, not a client: TypeScript types, zod runtime sch
 truth), JSON Schema files generated from them, and retained example documents. It has no I/O and no
 network code, and it does not expose Salidium's internal events or state.
 
-Status: `1.0.0`, wire version 1.0, frozen unchanged from the `1.0.0-rc.0` release candidate.
+Status: `1.1.0-rc.0`, a release candidate for wire version 1.1. Wire 1.0 was published as `1.0.0`,
+unchanged from its release candidate; 1.1 only adds to it.
 
 ## Consent first
 
@@ -91,6 +92,23 @@ command lines, command output, or raw records, and the session title is present 
 provider supplied one. Text fields are short, redacted, and still untrusted input: escape them when
 rendering.
 
+## What 1.1 adds
+
+Check that your discovery entry's `minor` is at least 1 before relying on any of these.
+
+- `report.revision`: the commit `HEAD` named and the branch when the session started
+  (`atStart`, kept from the first start) and when its latest turn ended (`atLatestTurnEnd`), in
+  `session.repositoryRoot`. Each is `null` when Salidium did not watch that boundary live.
+- `changes.files[].repository`: the Git working tree that holds the file (`root`), the file's
+  path inside it (`path`), and for a linked worktree the repository it belongs to (`mainRoot`).
+  Agents often write outside the directory the session started in, so this can differ from
+  `session.repositoryRoot`. Salidium reads it from Git's pointer files when the change happens,
+  without running git; it is `null` for history imports and wherever no repository holds the file.
+- Discovery's top-level `providers`: the providers this daemon instance observes, as `{ id }`
+  objects with the ids `lookup` takes. An id that is not listed is not observed until Salidium
+  restarts with a new `instanceId`, so gate lookups on it rather than on the version. A 1.0 daemon
+  does not send it: treat its absence as unknown.
+
 ## Compatibility
 
 The major version is in the path. Within major version 1:
@@ -108,8 +126,9 @@ six months and two Salidium minor releases, announced with `Deprecation` and `Su
 
 Two ways, neither of which touches anyone's real data.
 
-**Recorded fixtures.** `fixtures/v1/` holds one real document of every kind and every feed message
-type, captured from a daemon serving synthetic sessions. They are MIT-licensed like the rest of
+**Recorded fixtures.** Each minor version has one real document of every kind and every feed
+message type, captured from a daemon serving synthetic sessions: 1.0's in `fixtures/v1/`, and each
+later minor's in `fixtures/v1/<major.minor>/`. They are MIT-licensed like the rest of
 Salidium; copy them into your own tests.
 
 **A real, isolated daemon.** From a Salidium checkout, run:
@@ -137,7 +156,7 @@ installs hooks; only first-run `salidium` and `salidium install-hooks` do.
   `@salidium/consumer-contract/schema/v1/<name>.schema.json`.
 - `schema/v1/released/<major.minor>/*.schema.json`: each published minor version's schemas, copied
   unchanged. Every later document validates against all of them.
-- `fixtures/v1/*.json`: real documents captured from a daemon serving synthetic sessions, to test a
-  consumer against.
+- `fixtures/v1/*.json` (1.0) and `fixtures/v1/<major.minor>/*.json` (later minors): real
+  documents captured from a daemon serving synthetic sessions, to test a consumer against.
 - Runtime exports: every schema (`SessionReportSchema`, `SessionListSchema`, and so on), their
   types, `readFeedMessage`, `consumerJsonSchema`, and `CONSUMER_CONTRACT`.

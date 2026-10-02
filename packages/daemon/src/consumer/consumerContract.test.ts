@@ -20,7 +20,7 @@ import {
   listConsumerCredentials,
   revokeConsumerCredential,
 } from './credentials.ts';
-import { consumerDiscoveryPath } from './discovery.ts';
+import { consumerDiscovery, consumerDiscoveryPath } from './discovery.ts';
 import {
   CONSUMER_CANARIES,
   CONSUMER_SECRET,
@@ -35,6 +35,8 @@ const providers = join(root, 'providers');
 let daemon: DaemonHandle;
 let token: string;
 
+const CHECKOUT = '/Users/dev/acme/checkout';
+const LANE = '/Users/dev/acme/checkout-refunds';
 const VERIFIED_ID = `claude-code:${SCENARIO_SESSIONS.verified.sessionId}`;
 const WORKING_ID = `claude-code:${SCENARIO_SESSIONS.working.sessionId}`;
 const FAILING_ID = `codex:${SCENARIO_SESSIONS.failing.sessionId}`;
@@ -140,7 +142,7 @@ describe('consumer discovery', () => {
       {
         name: 'salidium.consumer',
         major: 1,
-        minor: 0,
+        minor: 1,
         baseUrl: `http://127.0.0.1:${daemon.port}/consumer/v1`,
       },
     ]);
@@ -157,6 +159,61 @@ describe('consumer discovery', () => {
     );
     expect(served.instanceId).toBe(file.instanceId);
     expect(served.pid).toBe(process.pid);
+    expect(served.providers).toEqual(file.providers);
+  });
+
+  it('lists exactly the providers the instance launched with, which here is none', async () => {
+    const served = exactly(
+      ConsumerDiscoverySchema,
+      (await get('/consumer/v1/discovery', null)).body,
+    );
+    expect(served.providers).toEqual([]);
+  });
+
+  it('keeps listing what it observes when enabled providers change until it restarts', async () => {
+    const owner = (path: string, init: RequestInit = {}) =>
+      fetch(url(path), {
+        ...init,
+        headers: { Authorization: `Bearer ${daemon.token}`, ...(init.headers ?? {}) },
+      });
+    const before = (await (await owner('/api/operations')).json()) as {
+      config: { revision: number };
+    };
+    const changed = await owner('/api/operations/config', {
+      method: 'PUT',
+      headers: { 'If-Match': String(before.config.revision) },
+      body: JSON.stringify({ providers: { enabled: ['claude-code'] } }),
+    });
+    expect(changed.status).toBe(200);
+    const effective = (await changed.json()) as { revision: number; restartRequired: string[] };
+    expect(effective.restartRequired).toContain('providers.enabled');
+    const served = exactly(
+      ConsumerDiscoverySchema,
+      (await get('/consumer/v1/discovery', null)).body,
+    );
+    expect(served.providers).toEqual([]);
+    const restored = await owner('/api/operations/config?key=providers.enabled', {
+      method: 'DELETE',
+      headers: { 'If-Match': String(effective.revision) },
+    });
+    expect(restored.status).toBe(200);
+  });
+
+  it('names each provider once, sorted, by the id lookup takes', () => {
+    const discovery = consumerDiscovery({
+      port: 47822,
+      providers: ['salidium/opencode', 'codex', 'claude-code', 'codex'],
+      pid: 1,
+      instanceId: '0'.repeat(32),
+      startedAt: '2026-10-02T00:00:00.000Z',
+      version: '0.0.0',
+      now: 0,
+    });
+    expect(exactly(ConsumerDiscoverySchema, discovery).providers).toEqual([
+      { id: 'claude-code' },
+      { id: 'codex' },
+      { id: 'salidium/opencode' },
+    ]);
   });
 });
 
@@ -332,14 +389,14 @@ describe('consumer documents', () => {
     expect(destructive?.items[0]?.instance).toBe('rm -rf node_modules/.cache');
     expect(report.verdict).toMatchObject({ tone: 'attention', provenance: 'observed' });
     expect(report.changes.files.map((file) => file.path)).toEqual([
-      'src/payments/refunds.ts',
-      'src/payments/ChargeService.test.ts',
-      'src/checkout/RetryWorker.ts',
-      'src/payments/ChargeService.ts',
+      `${LANE}/src/payments/refunds.ts`,
+      `${CHECKOUT}/src/payments/ChargeService.test.ts`,
+      `${CHECKOUT}/src/checkout/RetryWorker.ts`,
+      `${CHECKOUT}/src/payments/ChargeService.ts`,
     ]);
     // Edited by a subagent: the interface's reason for it is the delegation brief, a tool input.
     const delegated = report.changes.files.find(
-      (file) => file.path === 'src/payments/ChargeService.test.ts',
+      (file) => file.path === `${CHECKOUT}/src/payments/ChargeService.test.ts`,
     );
     expect(delegated?.reason).toBeNull();
     const [refunds, retry] = report.changes.files;
@@ -350,7 +407,44 @@ describe('consumer documents', () => {
       outcome: 'pass',
       counts: { passed: 118, failed: null, skipped: null, total: 118 },
     });
-    expect(report.verification.unverifiedFiles).toEqual(['src/payments/refunds.ts']);
+    expect(report.verification.unverifiedFiles).toEqual([`${LANE}/src/payments/refunds.ts`]);
+    // 1.1: where the work started and stands, and where each file lives. The agent wrote one file
+    // in a linked worktree of the session's repository, which session.repositoryRoot cannot say.
+    expect(report.revision).toEqual({
+      atStart: {
+        head: '3f9a2c1d8e7b6a5f4c3d2e1f0a9b8c7d6e5f4a3b',
+        branch: 'fix/double-charge',
+        at: expect.any(String),
+        provenance: 'observed',
+      },
+      atLatestTurnEnd: {
+        head: '8b1e4d7a2c9f6b3e0d5a8c1f4b7e2d9a6c3f0b5e',
+        branch: 'fix/double-charge',
+        at: expect.any(String),
+        provenance: 'observed',
+      },
+    });
+    expect(report.changes.files.map((file) => file.repository)).toEqual([
+      { root: LANE, path: 'src/payments/refunds.ts', mainRoot: CHECKOUT, provenance: 'observed' },
+      {
+        root: CHECKOUT,
+        path: 'src/payments/ChargeService.test.ts',
+        mainRoot: null,
+        provenance: 'observed',
+      },
+      {
+        root: CHECKOUT,
+        path: 'src/checkout/RetryWorker.ts',
+        mainRoot: null,
+        provenance: 'observed',
+      },
+      {
+        root: CHECKOUT,
+        path: 'src/payments/ChargeService.ts',
+        mainRoot: null,
+        provenance: 'observed',
+      },
+    ]);
     expect(report.review.groups.map((group) => group.rule)).toContain('destructive:rm-rf');
     expect(report.remaining.items).toEqual([
       expect.objectContaining({ text: 'Document refund behaviour for support', source: 'plan' }),
@@ -386,6 +480,9 @@ describe('consumer documents', () => {
     // Codex gave no title, and the prompt-derived fallback is not carried.
     expect(report.session.title).toBeNull();
     expect(report.session.repositoryRoot).toBeNull();
+    // Nothing watched this session's boundaries or located its files: null, never a guess.
+    expect(report.revision).toEqual({ atStart: null, atLatestTurnEnd: null });
+    expect(report.changes.files.map((file) => file.repository)).toEqual([null]);
     expect(report.session.endedAt).toBeNull();
     expect(report.explanation).toEqual({
       status: 'disabled',
@@ -599,10 +696,39 @@ describe('consumer contract edges', () => {
   });
 });
 
+describe('identifiers at the boundary', () => {
+  it('redacts a located path like any text that crosses, and never clips or reflows it', async () => {
+    const { createRedactor } = await import('@salidium/core');
+    const { consumerText, repository } = await import('./report.ts');
+    const text = consumerText(createRedactor());
+    const spaced = '/Users/dev/My  Project';
+    expect(repository({ root: spaced, path: 'a  b.ts' }, text)).toEqual({
+      root: spaced,
+      path: 'a  b.ts',
+      mainRoot: null,
+      provenance: 'observed',
+    });
+    const leaked = repository(
+      { root: `/tmp/${CONSUMER_SECRET}`, path: 'x.ts', mainRoot: `/srv/${CONSUMER_SECRET}` },
+      text,
+    );
+    expect(JSON.stringify(leaked)).not.toContain(CONSUMER_SECRET);
+    expect(leaked?.root).toContain('ghp_[GITHUB_TOKEN#');
+    // Too long to carry whole: the whole location is null, because a clipped path names something
+    // else.
+    expect(repository({ root: `/${'d'.repeat(4096)}`, path: 'x.ts' }, text)).toBeNull();
+    expect(repository(null, text)).toBeNull();
+    expect(repository(undefined, text)).toBeNull();
+  });
+});
+
 describe('retained fixtures', () => {
   it('carry none of the planted content, because they are what other products copy', async () => {
     const dir = new URL('../../../consumer-contract/fixtures/v1/', import.meta.url);
-    const files = readdirSync(dir).filter((file) => file.endsWith('.json'));
+    // Every minor version's set: 1.0 at the top, later minors in their own directories.
+    const files = (readdirSync(dir, { recursive: true }) as string[]).filter((file) =>
+      file.endsWith('.json'),
+    );
     expect(files.length).toBeGreaterThan(0);
     for (const file of files) {
       const text = readFileSync(new URL(file, dir), 'utf8');

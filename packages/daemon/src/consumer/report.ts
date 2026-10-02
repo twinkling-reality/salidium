@@ -1,6 +1,8 @@
 import type {
   ExplanationStatus,
+  FileRepository,
   Provenance,
+  RevisionAnchor,
   SessionEntry,
   SessionReport,
   SessionStatus,
@@ -8,9 +10,11 @@ import type {
   VerificationRun,
 } from '@salidium/consumer-contract';
 import type {
+  FileLocation,
   Line,
   Redactor,
   RunState,
+  RevisionAnchor as RunStateAnchor,
   SessionView,
   VerificationRow,
   WaitingState,
@@ -98,12 +102,16 @@ function workingHeadline(state: RunState, callId: string | undefined): string {
 export interface ConsumerText {
   (value: string, max: number): string;
   (value: string | undefined, max: number): string | null;
+  /** Redacted only: never clipped or reflowed, for identifiers such as paths. */
+  exact(value: string): string;
 }
 
 /** Redact, then clip: clipping first could cut a secret in half and hide it from the redactor. */
 export function consumerText(redactor: Redactor): ConsumerText {
-  return ((value: string | undefined, max: number) =>
+  const text = ((value: string | undefined, max: number) =>
     value === undefined ? null : clip(redactor.redact(value).text, max)) as ConsumerText;
+  text.exact = (value: string) => redactor.redact(value).text;
+  return text;
 }
 
 /**
@@ -175,6 +183,42 @@ function statement(line: Line | undefined, text: ConsumerText): Statement | null
   };
 }
 
+/**
+ * An observed identifier that must cross whole or not at all: redacted like any text that crosses,
+ * but never clipped, because a clipped path or branch names something else. Too long is null.
+ */
+function identifier(value: string | undefined, max: number, text: ConsumerText): string | null {
+  if (value === undefined || value.length > max) return null;
+  const redacted = text.exact(value);
+  return redacted.length > max ? null : redacted;
+}
+
+const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+function anchor(value: RunStateAnchor | undefined, text: ConsumerText): RevisionAnchor | null {
+  if (!value) return null;
+  return {
+    head: value.head && FULL_SHA.test(value.head) ? value.head : null,
+    branch: identifier(value.branch, 256, text),
+    at: value.at,
+    provenance: 'observed',
+  };
+}
+
+export function repository(
+  location: FileLocation | null | undefined,
+  text: ConsumerText,
+): FileRepository | null {
+  if (!location) return null;
+  const root = identifier(location.root, 4096, text);
+  const path = identifier(location.path, 4096, text);
+  if (root === null || path === null) return null;
+  const mainRoot =
+    location.mainRoot === undefined ? null : identifier(location.mainRoot, 4096, text);
+  if (location.mainRoot !== undefined && mainRoot === null) return null;
+  return { root, path, mainRoot, provenance: 'observed' };
+}
+
 function run(row: VerificationRow, text: ConsumerText): VerificationRun {
   return {
     id: row.id,
@@ -235,10 +279,16 @@ export function toSessionReport(
           provenance: PROVENANCE[view.strip.waiting.epistemic],
         }
       : null,
+    revision: {
+      atStart: anchor(state.git.atStart, text),
+      atLatestTurnEnd: anchor(state.git.atTurnEnd, text),
+    },
     changes: {
       glance: text(view.changes.glance, 300),
       files: view.changes.files.map((file) => ({
-        path: file.path,
+        // Identifiers cross whole; like every string that crosses, they pass the redactor again.
+        path: text.exact(file.path),
+        repository: repository(state.fileLocations[file.path], text),
         changeCount: file.changeCount,
         linesAdded: file.linesAdded,
         linesRemoved: file.linesRemoved,
@@ -260,7 +310,7 @@ export function toSessionReport(
         ...run(row, text),
         laterUnreadable: row.laterUnreadable,
       })),
-      unverifiedFiles: [...view.verified.unverifiedFiles],
+      unverifiedFiles: view.verified.unverifiedFiles.map((path) => text.exact(path)),
       statements: view.verified.claims.flatMap((line) => statement(line, text) ?? []),
     },
     review: {

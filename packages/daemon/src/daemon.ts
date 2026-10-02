@@ -579,6 +579,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
   const discovery = () =>
     consumerDiscovery({
       port,
+      providers: config.providers,
       pid: process.pid,
       instanceId,
       startedAt,

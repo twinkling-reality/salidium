@@ -11,9 +11,11 @@
  *
  * `--fixtures` boots a real daemon on a temporary home, seeds the synthetic sessions in
  * `packages/daemon/src/consumer/scenario.ts` through the real ingest, and records what the consumer
- * endpoints actually return. Fixtures are write-once: they are evidence about a released version,
- * so this refuses to overwrite existing files. Removing them to regenerate is legitimate only
- * before that version is first published; see docs/releasing.md.
+ * endpoints actually return, into the directory for the contract's current minor version:
+ * `fixtures/v1/` for 1.0, which was published there, and `fixtures/v1/<major.minor>/` for every
+ * later minor. Fixtures are write-once: they are evidence about a released version, so this
+ * refuses to write into a directory that already holds any. Removing them to regenerate is
+ * legitimate only before that version is first published; see docs/releasing.md.
  *
  * Nothing here reads the person's own Salidium state or provider homes.
  */
@@ -38,9 +40,11 @@ if (mode === '--schema') {
   for (const name of Object.keys(contract.CONSUMER_DOCUMENTS))
     write(join(dir, `${name}.schema.json`), contract.consumerJsonSchemaText(name));
 } else if (mode === '--fixtures') {
-  const dir = join(contractDir, 'fixtures', 'v1');
+  const { major, minor } = contract.CONSUMER_CONTRACT;
+  const base = join(contractDir, 'fixtures', `v${major}`);
+  const dir = minor === 0 ? base : join(base, `${major}.${minor}`);
   mkdirSync(dir, { recursive: true });
-  if (readdirSync(dir).length > 0) {
+  if (readdirSync(dir).some((file) => file.endsWith('.json'))) {
     process.stderr.write(
       `${dir} already holds fixtures. They are write-once; see docs/releasing.md before removing them.\n`,
     );
@@ -58,6 +62,13 @@ async function writeFixtures(dir) {
   process.env.CLAUDE_CONFIG_DIR = join(temporary, 'providers', '.claude');
   process.env.CODEX_HOME = join(temporary, 'providers', '.codex');
   process.env.SALIDIUM_HOME = join(temporary, 'salidium');
+  process.env.SALIDIUM_EXPLAINER = 'off';
+  // The daemon looks for a `codex` executable to read hook trust when codex is enabled. The
+  // providers here are inert stand-ins, and no provider tool may run while fixtures are captured.
+  const { withoutProviderExecutables } = await import(
+    join(root, 'packages', 'adapter-kit', 'dist', 'testing', 'providerIsolation.js')
+  );
+  process.env.PATH = withoutProviderExecutables(process.env.PATH);
   const { startDaemon, createConsumerCredential, revokeConsumerCredential } = await import(
     join(root, 'packages', 'daemon', 'dist', 'index.js')
   );
@@ -71,8 +82,9 @@ async function writeFixtures(dir) {
     home,
     userHome: join(temporary, 'providers'),
     port: 0,
-    // No adapters: the Codex one would start `codex app-server` from PATH to read hook trust.
-    providers: [],
+    // Enabled, so discovery lists them, but inert: nothing reads provider state.
+    providers: ['claude-code', 'codex'],
+    providerDescriptors: scenario.inertProviderDescriptors(['claude-code', 'codex']),
     gitEnrichment: false,
     historyDays: 0,
     logLevel: 'silent',

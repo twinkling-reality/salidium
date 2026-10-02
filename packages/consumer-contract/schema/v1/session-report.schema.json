@@ -433,6 +433,122 @@
         }
       ]
     },
+    "revision": {
+      "type": "object",
+      "properties": {
+        "atStart": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "head": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The full commit id HEAD named. Null for a repository with no commits yet."
+                },
+                "branch": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The checked-out branch. Null for a detached HEAD."
+                },
+                "at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+                  "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+                },
+                "provenance": {
+                  "type": "string",
+                  "const": "observed"
+                }
+              },
+              "required": [
+                "head",
+                "branch",
+                "at",
+                "provenance"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When the session started. Kept from the first start; a resumed session does not replace it."
+        },
+        "atLatestTurnEnd": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "head": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The full commit id HEAD named. Null for a repository with no commits yet."
+                },
+                "branch": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The checked-out branch. Null for a detached HEAD."
+                },
+                "at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+                  "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+                },
+                "provenance": {
+                  "type": "string",
+                  "const": "observed"
+                }
+              },
+              "required": [
+                "head",
+                "branch",
+                "at",
+                "provenance"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When the most recent turn ended. Commits made since then are in changes.commits."
+        }
+      },
+      "required": [
+        "atStart",
+        "atLatestTurnEnd"
+      ],
+      "description": "Which revision of session.repositoryRoot the work started from and stands at. Each anchor is null when Salidium did not watch that boundary live: history imports, sessions that began before Salidium was running, or git observation turned off. Added in 1.1."
+    },
     "changes": {
       "type": "object",
       "properties": {
@@ -448,6 +564,51 @@
               "path": {
                 "type": "string",
                 "maxLength": 4096
+              },
+              "repository": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "root": {
+                        "type": "string",
+                        "maxLength": 4096,
+                        "description": "Top level of the Git working tree that holds the file."
+                      },
+                      "path": {
+                        "type": "string",
+                        "maxLength": 4096,
+                        "description": "The file relative to root, with / separators."
+                      },
+                      "mainRoot": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "maxLength": 4096
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "When root is a linked worktree, the repository it belongs to: the working tree that owns the shared Git directory, or that directory itself for a bare repository. Null for a main working tree."
+                      },
+                      "provenance": {
+                        "type": "string",
+                        "const": "observed"
+                      }
+                    },
+                    "required": [
+                      "root",
+                      "path",
+                      "mainRoot",
+                      "provenance"
+                    ],
+                    "description": "Resolved from Git pointer files on disk when the change was live, without running git. Null when no repository held the file, when the change was imported from history, or when Salidium could not tell; nothing is guessed. Added in 1.1."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "changeCount": {
                 "type": "integer",
@@ -571,6 +732,7 @@
             },
             "required": [
               "path",
+              "repository",
               "changeCount",
               "linesAdded",
               "linesRemoved",
@@ -1590,6 +1752,7 @@
     "verdict",
     "latestStatement",
     "waiting",
+    "revision",
     "changes",
     "verification",
     "review",

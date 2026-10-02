@@ -66,6 +66,24 @@
         "version"
       ]
     },
+    "providers": {
+      "maxItems": 32,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^(?:claude-code|codex|[a-z][a-z0-9-]{0,62}\\/[a-z][a-z0-9-]{0,62})$",
+            "description": "claude-code, codex, or a namespaced owner/name extension provider."
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "description": "Providers this daemon instance observes, by the id lookup's provider= takes. An id not listed is not observed by this instance until it restarts with a new instanceId. Sorted by id, each once. Added in 1.1: check minor in your contract entry first; a 1.0 daemon does not send it."
+    },
     "instanceId": {
       "type": "string",
       "pattern": "^[0-9a-f]{32}$",
@@ -111,6 +129,7 @@
     "generatedAt",
     "contracts",
     "salidium",
+    "providers",
     "instanceId",
     "pid",
     "startedAt",
