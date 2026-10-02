@@ -505,7 +505,33 @@ function mapAssistant(
 
   const text = textParts(content);
   if (text) turn.lastAssistantText = text;
+
+  // A declined permission ends the run: OpenCode aborts the step ("Step interrupted") and writes no
+  // `idle` row for the turn. Both facts are in this row, so the turn's end is observed here rather
+  // than left open until the next prompt closes it by inference.
+  const aborted = finish === 'error' && asString(asObject(data.error)?.type) === 'aborted';
+  if (!ctx.agentId && aborted && content.some(isDeclinedCall)) {
+    events.push({
+      ...base,
+      id: id('turn', 'ended', 'declined'),
+      ts: completed,
+      turnId,
+      kind: 'turn.ended',
+      outcome: 'interrupted',
+      error: 'A permission request was declined, which ended the turn',
+      lastMessage: turn.lastAssistantText
+        ? excerpt(turn.lastAssistantText, 6000, 2000).text
+        : undefined,
+    });
+  }
   return events;
+}
+
+function isDeclinedCall(part: unknown): boolean {
+  const p = asObject(part);
+  if (p?.type !== 'tool') return false;
+  const state = asObject(p.state);
+  return state?.status === 'error' && failureCause(asObject(state.error)) === 'rejected';
 }
 
 function count(value: unknown): number {

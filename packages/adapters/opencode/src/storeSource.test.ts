@@ -405,6 +405,58 @@ describe('OpenCode store source', () => {
     );
   });
 
+  it('ends the last turn on a declined permission, so it does not stay open', () => {
+    const id = store.session({ directory: PROJECT });
+    store.message(id, 'user', userData('ls please', T0 + 1));
+    store.message(
+      id,
+      'assistant',
+      stepData(
+        T0 + 2,
+        [
+          { type: 'text', text: 'Listing.' },
+          tools.failed(
+            'call_d',
+            T0 + 3,
+            'shell',
+            { command: 'ls' },
+            {
+              type: 'aborted',
+              message: 'The user declined this tool call',
+            },
+          ),
+        ],
+        { finish: 'error', error: { type: 'aborted', message: 'Step interrupted' } },
+      ),
+    );
+    const events = harness().poll();
+    const state = createInitialState({
+      sessionId: makeSessionId(OPENCODE_PROVIDER_ID, id),
+      provider: OPENCODE_PROVIDER_ID,
+      providerSessionId: id,
+    });
+    events.forEach((e, seq) => {
+      applyEvent(state, { ...e, seq } as StoredEvent);
+    });
+    expect(state.turns).toHaveLength(1);
+    expect(state.turns[0]).toMatchObject({ outcome: 'interrupted', lastMessage: 'Listing.' });
+    expect(state.turns[0]?.endInferred).toBeFalsy();
+  });
+
+  it('does not end a turn on an interrupt alone; the idle row does', () => {
+    const id = store.session({ directory: PROJECT });
+    store.message(id, 'user', userData('long job', T0 + 1));
+    store.message(
+      id,
+      'assistant',
+      stepData(T0 + 2, [{ type: 'reasoning', text: 'Thinking.' }], {
+        finish: 'error',
+        error: { type: 'aborted', message: 'Step interrupted' },
+      }),
+    );
+    expect(of(harness().poll(), 'turn.ended')).toEqual([]);
+  });
+
   it('passes a step OpenCode abandoned once a later turn exists, and says so', () => {
     const id = store.session({ directory: PROJECT, timeCreated: T0 });
     store.message(id, 'user', userData('first', T0 + 1));
@@ -431,7 +483,7 @@ describe('OpenCode store source', () => {
 
   it('records a declined permission as a rejected call and an interrupt as interrupted', () => {
     const id = store.session({ directory: PROJECT });
-    store.message(id, 'user', userData('ls please', T0 + 1));
+    const first = store.message(id, 'user', userData('ls please', T0 + 1));
     store.message(
       id,
       'assistant',
@@ -449,7 +501,7 @@ describe('OpenCode store source', () => {
         { finish: 'error', error: { type: 'aborted', message: 'Step interrupted' } },
       ),
     );
-    store.message(id, 'user', userData('read it', T0 + 10));
+    const second = store.message(id, 'user', userData('read it', T0 + 10));
     store.message(
       id,
       'assistant',
@@ -476,7 +528,11 @@ describe('OpenCode store source', () => {
     ]);
     // Asked and granted permissions are not in the store; nothing is inferred about them.
     expect(of(events, 'permission.requested')).toEqual([]);
-    expect(of(events, 'turn.ended')).toEqual([expect.objectContaining({ outcome: 'interrupted' })]);
+    // The declined call ends the first turn (observed in its aborted step); the second ends on idle.
+    expect(of(events, 'turn.ended').map((e) => [e.turnId, e.outcome, e.error])).toEqual([
+      [first.id, 'interrupted', 'A permission request was declined, which ended the turn'],
+      [second.id, 'interrupted', undefined],
+    ]);
   });
 
   it('maps patch, subagent lanes and migrated to-do lists', () => {
