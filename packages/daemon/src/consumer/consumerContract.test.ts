@@ -225,6 +225,7 @@ describe('consumer discovery', () => {
         { ...entry('salidium.remote'), baseUrl: 'http://example.com:47822/x/v0' },
         { ...entry('salidium.negative'), major: -1 },
         { ...entry('salidium.elsewhere'), baseUrl: 'http://127.0.0.1:9/map/v0' },
+        { ...entry('salidium.no-such-port'), baseUrl: 'http://127.0.0.1:99999/map/v0' },
         'not an entry',
         ...Array.from({ length: 9 }, (_, i) => entry(`salidium.z${i}`)),
       ],
@@ -241,7 +242,7 @@ describe('consumer discovery', () => {
       'salidium.z4',
       'salidium.z5',
     ]);
-    expect(reasons).toHaveLength(6);
+    expect(reasons).toHaveLength(7);
     // A supplier that fails or returns something else lists nothing and does not stop the daemon.
     const failures: string[] = [];
     expect(
@@ -535,13 +536,15 @@ describe('consumer documents', () => {
       atLatestTurnEnd: {
         root: CHECKOUT,
         head: '8b1e4d7a2c9f6b3e0d5a8c1f4b7e2d9a6c3f0b5e',
-        branch: 'fix/ghp_[GITHUB_TOKEN#1]',
+        // The branch name holds the secret, so it is not carried rather than carried altered.
+        branch: null,
         at: expect.any(String),
         provenance: 'observed',
       },
     });
     expect(report.changes.files.map((file) => file.repository)).toEqual([
-      { root: SCRATCH, path: 'notes.md', mainRoot: null, provenance: 'observed' },
+      // The scratch repository's name holds the secret: its location is not carried at all.
+      null,
       { root: LANE, path: 'src/payments/refunds.ts', mainRoot: CHECKOUT, provenance: 'observed' },
       {
         root: CHECKOUT,
@@ -994,12 +997,11 @@ describe('identifiers at the boundary', () => {
       mainRoot: null,
       provenance: 'observed',
     });
-    const leaked = repository(
-      { root: `/tmp/${CONSUMER_SECRET}`, path: 'x.ts', mainRoot: `/srv/${CONSUMER_SECRET}` },
-      text,
-    );
-    expect(JSON.stringify(leaked)).not.toContain(CONSUMER_SECRET);
-    expect(leaked?.root).toContain('ghp_[GITHUB_TOKEN#');
+    // One the redactor would change is not carried altered, which would name another path: null.
+    expect(repository({ root: `/tmp/${CONSUMER_SECRET}`, path: 'x.ts' }, text)).toBeNull();
+    expect(
+      repository({ root: '/tmp/repo', path: 'x.ts', mainRoot: `/srv/${CONSUMER_SECRET}` }, text),
+    ).toBeNull();
     // Too long to carry whole: the whole location is null, because a clipped path names something
     // else.
     expect(repository({ root: `/${'d'.repeat(4096)}`, path: 'x.ts' }, text)).toBeNull();

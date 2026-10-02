@@ -128,9 +128,12 @@ export class GitSnapshotEnricher {
         const since = Date.now() - (this.lastReadAt.get(sessionId) ?? Number.NEGATIVE_INFINITY);
         if (since < this.minIntervalMs)
           await new Promise((resolve) => setTimeout(resolve, this.minIntervalMs - since));
-        this.rememberRead(sessionId, Date.now());
         const [trigger, kind] = next;
-        await this.throttled(() => this.snapshot(sessionId, trigger, kind));
+        await this.throttled(() => {
+          // Stamped once the read holds a slot, so time spent queued does not count as a gap.
+          this.rememberRead(sessionId, Date.now());
+          return this.snapshot(sessionId, trigger, kind);
+        });
         next = undefined;
         const queue = this.waiting.get(sessionId);
         for (const waitingKind of BOUNDARY_ORDER) {
@@ -229,14 +232,50 @@ async function git(cwd: string, args: string[]): Promise<string | undefined> {
     const { stdout } = await run(command, ['-c', 'core.fsmonitor=false', '-C', cwd, ...args], {
       timeout: 5000,
       maxBuffer: 4 * 1024 * 1024,
-      env: {
-        ...process.env,
-        PATH: trustedPathEntries(trust).join(process.platform === 'win32' ? ';' : ':'),
-        GIT_OPTIONAL_LOCKS: '0',
-      },
+      env: gitEnvironment(
+        process.env,
+        trustedPathEntries(trust).join(process.platform === 'win32' ? ';' : ':'),
+      ),
     });
     return stdout;
   } catch {
     return undefined;
   }
+}
+
+/** Variables git may inherit. Everything else, every GIT_* variable included, is left out. */
+const GIT_ENVIRONMENT = new Set(
+  [
+    'HOME',
+    'LANG',
+    'TMPDIR',
+    'DEVELOPER_DIR',
+    'XDG_CONFIG_HOME',
+    // What git needs to start on Windows, where names are case-insensitive.
+    'SYSTEMROOT',
+    'USERPROFILE',
+    'APPDATA',
+    'LOCALAPPDATA',
+    'HOMEDRIVE',
+    'HOMEPATH',
+    'TEMP',
+    'TMP',
+  ].map((name) => name.toUpperCase()),
+);
+
+/**
+ * The environment git runs in: an allowlist, not the daemon's own environment. A daemon started
+ * from a git hook or `rebase --exec` inherits GIT_DIR or GIT_WORK_TREE, which would make git read
+ * a different repository from the one `cwd` names, and GIT_CONFIG_PARAMETERS or GIT_EXEC_PATH
+ * would change what it runs.
+ */
+export function gitEnvironment(from: NodeJS.ProcessEnv, path: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { PATH: path, GIT_OPTIONAL_LOCKS: '0' };
+  for (const [name, value] of Object.entries(from))
+    if (
+      value !== undefined &&
+      (GIT_ENVIRONMENT.has(name.toUpperCase()) || name.toUpperCase().startsWith('LC_'))
+    )
+      env[name] = value;
+  return env;
 }

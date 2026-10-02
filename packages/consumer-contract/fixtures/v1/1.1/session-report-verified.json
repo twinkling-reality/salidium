@@ -59,7 +59,7 @@
     "atLatestTurnEnd": {
       "root": "/Users/dev/acme/checkout",
       "head": "8b1e4d7a2c9f6b3e0d5a8c1f4b7e2d9a6c3f0b5e",
-      "branch": "fix/ghp_[GITHUB_TOKEN#1]",
+      "branch": null,
       "at": "2026-09-20T15:41:25.000Z",
       "provenance": "observed"
     }
@@ -69,12 +69,7 @@
     "files": [
       {
         "path": "/Users/dev/scratch-ghp_[GITHUB_TOKEN#1]/notes.md",
-        "repository": {
-          "root": "/Users/dev/scratch-ghp_[GITHUB_TOKEN#1]",
-          "path": "notes.md",
-          "mainRoot": null,
-          "provenance": "observed"
-        },
+        "repository": null,
         "changeCount": 1,
         "linesAdded": 3,
         "linesRemoved": 0,

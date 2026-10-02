@@ -1,8 +1,17 @@
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { CanonicalEvent, StoredEvent } from '@salidium/protocol';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../logging/logger.ts';
 import type { SessionRegistry } from '../sessions/sessionRegistry.ts';
-import { type GitObservation, GitSnapshotEnricher, readGitObservation } from './gitSnapshot.ts';
+import {
+  type GitObservation,
+  GitSnapshotEnricher,
+  gitEnvironment,
+  readGitObservation,
+} from './gitSnapshot.ts';
 
 const NOW = Date.parse('2026-10-02T12:00:00.000Z');
 const SESSION = 'codex:thread';
@@ -178,5 +187,58 @@ describe('git snapshot reads', () => {
   it('runs nothing for a working directory that is relative or remote', async () => {
     for (const cwd of ['repo', '//server/share/repo', '\\\\server\\share\\repo'])
       expect(await readGitObservation(cwd)).toBeUndefined();
+  });
+});
+
+describe('the environment git runs in', () => {
+  it('passes no GIT_ variable, whatever the daemon inherited', () => {
+    const env = gitEnvironment(
+      {
+        HOME: '/Users/me',
+        LANG: 'en_US.UTF-8',
+        LC_ALL: 'C',
+        GIT_DIR: '/elsewhere/.git',
+        GIT_WORK_TREE: '/elsewhere',
+        GIT_COMMON_DIR: '/elsewhere/.git',
+        GIT_CONFIG_PARAMETERS: "'core.fsmonitor=evil'",
+        GIT_EXEC_PATH: '/tmp/evil',
+        NODE_OPTIONS: '--require=evil',
+      },
+      '/usr/bin',
+    );
+    expect(env).toEqual({
+      PATH: '/usr/bin',
+      GIT_OPTIONAL_LOCKS: '0',
+      HOME: '/Users/me',
+      LANG: 'en_US.UTF-8',
+      LC_ALL: 'C',
+    });
+  });
+
+  it('reads the repository the working directory is in, though GIT_DIR names another', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'salidium-gitenv-')));
+    try {
+      const repo = (name: string) => {
+        const dir = join(root, name);
+        mkdirSync(dir);
+        const git = (...args: string[]) =>
+          execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], {
+            cwd: dir,
+            env: { PATH: process.env.PATH, HOME: root },
+          });
+        git('init', '-q', '-b', name);
+        git('commit', '-q', '--allow-empty', '-m', name);
+        return { dir, head: git('rev-parse', 'HEAD').toString().trim() };
+      };
+      const a = repo('a');
+      const b = repo('b');
+      vi.stubEnv('GIT_DIR', join(a.dir, '.git'));
+      vi.stubEnv('GIT_WORK_TREE', a.dir);
+      const seen = await readGitObservation(b.dir);
+      expect(seen).toMatchObject({ repoRoot: b.dir, head: b.head, branch: 'b' });
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

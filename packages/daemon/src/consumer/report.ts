@@ -137,8 +137,10 @@ export function toSessionEntry(
     // A provider's own title only. Salidium's fallback is the first line of the prompt, and prompts
     // do not cross this boundary; a summary that does not say which it holds is treated as a prompt.
     title: summary.titleSource === 'provider' ? text(summary.title, 200) : null,
-    cwd: summary.cwd,
-    repositoryRoot: summary.repoRoot ?? null,
+    // `cwd` is required in v1, so it crosses redacted; `repositoryRoot` is nullable and follows
+    // the identifier rule, as every 1.1 path and branch does.
+    cwd: text.exact(summary.cwd),
+    repositoryRoot: identifier(summary.repoRoot, 4096, text),
     model: summary.model ?? null,
     status: currentStatus(summary, now),
     startedAt: summary.startedAt ?? null,
@@ -186,13 +188,15 @@ function statement(line: Line | undefined, text: ConsumerText): Statement | null
 }
 
 /**
- * An observed identifier that must cross whole or not at all: redacted like any text that crosses,
- * but never clipped, because a clipped path or branch names something else. Too long is null.
+ * An observed identifier in a nullable field crosses whole or not at all. One the redactor would
+ * change, because it holds something credential-shaped, is null rather than altered, so it never
+ * names a different path or branch, and two fields naming the same repository never seem to
+ * differ because one was redacted. Too long is null too, because a clipped one names something
+ * else.
  */
 function identifier(value: string | undefined, max: number, text: ConsumerText): string | null {
   if (value === undefined || value.length > max) return null;
-  const redacted = text.exact(value);
-  return redacted.length > max ? null : redacted;
+  return text.exact(value) === value ? value : null;
 }
 
 const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;

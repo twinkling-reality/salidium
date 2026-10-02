@@ -90,7 +90,7 @@ export function experimentalContracts(
       continue;
     }
     // Only this daemon's own port: discovery must never point a consumer somewhere else.
-    if (new URL(parsed.data.baseUrl).port !== String(port)) {
+    if (Number(/:(\d{1,5})\//.exec(parsed.data.baseUrl)?.[1]) !== port) {
       onInvalid(`experimental contract ${parsed.data.name} is not on this daemon's port`);
       continue;
     }
