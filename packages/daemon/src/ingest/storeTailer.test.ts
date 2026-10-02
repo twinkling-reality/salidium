@@ -259,6 +259,10 @@ describe('OpenCode through the daemon', () => {
 
   it('answers a consumer v1 lookup by provider salidium/opencode and the OpenCode session id', async () => {
     const { token } = createConsumerCredential(salidiumHome, 'local-tool-test');
+    const discovery = await (
+      await fetch(`http://127.0.0.1:${daemon?.port}/consumer/v1/discovery`)
+    ).json();
+    expect(discovery.providers).toEqual([{ id: 'salidium/opencode' }]);
     const lookup = await api<unknown>(
       `/consumer/v1/sessions/lookup?provider=${encodeURIComponent('salidium/opencode')}&sessionId=${encodeURIComponent(nativeId)}`,
       token,
