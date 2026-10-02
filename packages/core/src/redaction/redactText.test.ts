@@ -278,6 +278,48 @@ describe('credentials in structured text', () => {
     expect(out).toBe('{"private_key_id":"[SECRET#1]","private_key":"[PRIVATE_KEY#2]\\n"}');
   });
 
+  it('keeps everything the earlier rules caught', () => {
+    // A header name after a prefix: the header rule never had a left anchor.
+    expect(redact('HTTP_AUTHORIZATION=Bearer 4f8a9c2d7e1b3a6f5c8d')).toBe(
+      'HTTP_AUTHORIZATION=Bearer [BEARER_TOKEN#1]',
+    );
+    expect(redact('X-Authorization: Bearer 4f8a9c2d7e1b3a6f5c8d')).toBe(
+      'X-Authorization: Bearer [BEARER_TOKEN#1]',
+    );
+    expect(
+      redact('git -c http.extraheader="Authorization: Bearer art_9f8e7d6c5b4a3f2e" fetch'),
+    ).toBe('git -c http.extraheader="Authorization: Bearer [BEARER_TOKEN#1]" fetch');
+    expect(redact('{"HTTP_AUTHORIZATION": "Bearer abc123"}')).toBe(
+      '{"HTTP_AUTHORIZATION": "Bearer [BEARER_TOKEN#1]"}',
+    );
+    // A quoted value with whitespace still has its leading run read, at the original bar.
+    expect(redact('password: "Xk9mP2vL7qR4wT6y x"')).toBe('password: "[SECRET#1] x"');
+    // A template inside a value does not excuse the rest of it.
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a template is the input under test.
+    expect(redact('password: "a1B2c3D4e5F6g7H8i9J0${x}"')).not.toContain('a1B2c3D4');
+  });
+
+  it('reads an environment value to its end and a long quoted value to its quote', () => {
+    expect(redact('DB_PASSWORD=S3cret@2024!x')).toBe('DB_PASSWORD=[SECRET#1]');
+    expect(redact('DB_PASSWORD=Zq8r?L0xStaging npm start')).toBe(
+      'DB_PASSWORD=[SECRET#1] npm start',
+    );
+    const long = `Zq8rL0x"${'a1B2c3D4'.repeat(600)}`;
+    const out = redact(JSON.stringify({ password: long }));
+    expect(out).toBe('{"password":"[SECRET#1]"}');
+  });
+
+  it('numbers past the placeholders already in the text, and decodes escapes before numbering', () => {
+    // The consumer boundary redacts stored text with a fresh redactor.
+    expect(redact('{"api_key":"[SECRET#1]"} DB_PASSWORD=Zq8rL0xS')).toBe(
+      '{"api_key":"[SECRET#1]"} DB_PASSWORD=[SECRET#2]',
+    );
+    const r = createRedactor();
+    expect(r.redact('{"api_key":"Zq8r\\u004c0xS"}').text).toBe('{"api_key":"[SECRET#1]"}');
+    expect(r.redact('{"api_key":"Zq8rL0xS"}').text).toBe('{"api_key":"[SECRET#1]"}');
+    expect(r.redact('{"api_key": ["Zq8rL0xS"]}').text).toBe('{"api_key": ["[SECRET#1]"]}');
+  });
+
   it('does not take prose, code, or non-secret JSON values for credentials', () => {
     for (const text of [
       // The word in a sentence.
@@ -296,6 +338,7 @@ describe('credentials in structured text', () => {
       '{"Authorization": "Bearer ${token}"}',
       // biome-ignore lint/suspicious/noTemplateCurlyInString: a template is the input under test.
       'GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}',
+      '{"Authorization": "Bearer {token}"}',
       'API_TOKEN=$API_TOKEN pnpm release',
       // JSON keys with empty or plainly non-secret values.
       '{"password": ""}',

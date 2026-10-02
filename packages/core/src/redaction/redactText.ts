@@ -62,15 +62,20 @@ const TERM = '(?![A-Za-z0-9._~+/=-])';
  * output as a JSON string and each of its lines starts after a literal `\n`.
  */
 const KEY_START = String.raw`(?<=^|[\s"'${'`'}{(\[,;]|\\[nrt])`;
+/**
+ * A header name may follow anything but a letter or digit. The header rule never had a left anchor,
+ * and `HTTP_AUTHORIZATION=`, `X-Authorization:` and `http.extraheader=Authorization:` are headers.
+ */
+const HEADER_START = String.raw`(?:(?<![A-Za-z0-9])|(?<=\\[nrt]))`;
 
 /**
  * A key, bare or quoted, then its separator. The quote may be escaped to any depth, since a JSON
  * document inside a JSON string writes `\"key\"`, and must close the way it opened. Groups: 1 the
  * quote's backslashes, 2 the quote, 3 the key name, 4 the separator with its whitespace.
  */
-function keyPattern(name: string): RegExp {
+function keyPattern(start: string, name: string): RegExp {
   return new RegExp(
-    String.raw`${KEY_START}(?:(\\*)(["'${'`'}]))?(${name})\1\2\]?(\s*(?:=>|:=|=|:)\s*)`,
+    String.raw`${start}(?:(\\*)(["'${'`'}]))?(${name})\1\2\]?(\s*(?:=>|:=|=|:)\s*)`,
     'gi',
   );
 }
@@ -85,11 +90,17 @@ const ENV_NAME = /^[A-Z][A-Z0-9_]*$/;
 const CREDENTIAL_HEADER =
   '(?:proxy-)?authorization|x-api-key|api-key|x-auth-token|x-access-token|private-token|x-goog-api-key';
 const AUTH_SCHEME = /^(?:bearer|token|basic)\s+/i;
-/** A quoted value is read no further than this; anything longer is not one credential. */
-const MAX_VALUE = 4096;
 /** The characters of an unquoted value, as each rule has always read them. */
 const HEADER_VALUE = /[A-Za-z0-9._~+/=-]*/y;
 const GENERIC_VALUE = /[A-Za-z0-9_+/=.~!#$%^&*-]*/y;
+/**
+ * An environment variable's unquoted value runs to whitespace, so `@` or `?` in a password does not
+ * cut it short. It stops at a quote or backslash, which in a raw record ends or escapes the JSON
+ * string around it, and at shell punctuation that ends a word.
+ */
+const ENV_VALUE = /[^\s"'`\\;|()<>]*/y;
+/** A placeholder already in the text, whose number a fresh redactor must not hand out again. */
+const PLACEHOLDER_NUMBER = /\[[A-Z_]+#(\d+)\]/g;
 
 const RULES: Rule[] = [
   {
@@ -236,7 +247,7 @@ const RULES: Rule[] = [
   {
     id: 'bearer-header',
     label: 'BEARER_TOKEN',
-    pattern: keyPattern(CREDENTIAL_HEADER),
+    pattern: keyPattern(HEADER_START, String.raw`(?:[\w.-]*[-_.])?(?:${CREDENTIAL_HEADER})`),
     group: 0,
     keywords: ['authorization', 'api-key', '-token'],
     keyed: 'header',
@@ -251,7 +262,7 @@ const RULES: Rule[] = [
   {
     id: 'generic-secret',
     label: 'SECRET',
-    pattern: keyPattern(String.raw`[\w.-]{0,30}?(?:${CREDENTIAL_WORD})[\w.-]{0,10}`),
+    pattern: keyPattern(KEY_START, String.raw`[\w.-]{0,30}?(?:${CREDENTIAL_WORD})[\w.-]{0,10}`),
     group: 0,
     keywords: [
       'passw',
@@ -280,7 +291,7 @@ const ALLOW_VALUE = [
   /^[0-9a-f-]{36}$/i, // uuids
   /^(?:\*+|•+|\[?redacted\]?|<redacted>)$/i, // already masked
   /^[\w.-]*\[[A-Z_]+(?:#\d+)?\]$/, // a placeholder of ours: text that crosses is redacted twice
-  /\$\{[^}]*\}|\{\{[^}]*\}\}/, // a template that is filled in later
+  /^(?:\$\{[^}]*\}|\{\{[^}]*\}\}|\{\w[\w.]*\})$/, // a template that is filled in later
 ];
 /** Bare 40/64-hex values are usually git SHAs or content hashes — unless the surrounding keyword says otherwise. */
 const HEX_HASH = /^[0-9a-f]{40}$|^[0-9a-f]{64}$/i;
@@ -299,25 +310,31 @@ export function shannonEntropy(s: string): number {
 }
 
 /**
- * Where the content of a quoted value ends, or -1 when it does not end before a line break, the
- * end of the text, or MAX_VALUE.
+ * Where the content of a quoted value ends, or -1 when a line break or the end of the text comes
+ * first.
  *
  * The opening delimiter was `depth` backslashes and a quote: 0 in a JSON or YAML document, 1 in a
  * JSON document inside a JSON string, 3 one level further in. At that depth an escaped quote in
- * the value is preceded by 2 * depth + 1 backslashes and an escaped backslash is 2 * depth + 2 of
- * them, so a quote closes the value exactly when the backslashes before it number `depth` modulo
- * 2 * depth + 2.
+ * the value, or any quote of a string nested deeper, is preceded by 2 * depth + 1 backslashes
+ * modulo 2 * depth + 2, and the closing quote by `depth`. Any other count belongs to a string
+ * this one sits inside, which ended first, so the value has no end here. The scan stops at the
+ * next quote of its own kind, so keys that each open a value cannot make it quadratic.
  */
 function quotedValueEnd(text: string, from: number, quote: string, depth: number): number {
-  const limit = Math.min(text.length, from + MAX_VALUE);
   let i = from;
-  while (i < limit) {
+  while (i < text.length) {
     const c = text[i];
+    // Inside a raw record, a single-quoted or backtick value is itself inside a JSON string, and a
+    // double quote ends that string; reading past it would redact across a JSON boundary.
+    if (c === '"' && quote !== '"') return -1;
     if (c === '\\') {
       let j = i;
       while (text[j] === '\\') j++;
+      if (text[j] === '"' && quote !== '"') return -1;
       if (text[j] === quote) {
-        if ((j - i) % (2 * depth + 2) === depth) return j - depth;
+        const run = (j - i) % (2 * depth + 2);
+        if (run === depth) return j - depth;
+        if (run !== 2 * depth + 1) return -1;
         i = j + 1;
       } else i = j;
       continue;
@@ -342,10 +359,18 @@ function isBasicCredential(value: string): boolean {
   }
 }
 
-/** The value a reader means: one level of escaping removed for each level the delimiter had. */
+const ESCAPED: Record<string, string> = { n: '\n', r: '\r', t: '\t', b: '\b', f: '\f' };
+
+/**
+ * The value a reader means, with one level of JSON escaping removed for each level the delimiter
+ * had, so a secret is numbered the same however deeply it was quoted.
+ */
 function unescapeValue(raw: string, depth: number): string {
   let value = raw;
-  for (let level = depth + 1; level >= 1; level /= 2) value = value.replace(/\\(.)/gs, '$1');
+  for (let level = depth + 1; level >= 1; level /= 2)
+    value = value.replace(/\\(u[0-9a-fA-F]{4}|.)/gs, (_, c: string) =>
+      c.length === 5 ? String.fromCharCode(Number.parseInt(c.slice(1), 16)) : (ESCAPED[c] ?? c),
+    );
   return value;
 }
 
@@ -361,8 +386,8 @@ function unescapeValue(raw: string, depth: number): string {
  *
  * A quoted value is read to its closing quote, escapes included, and replaced whole, so the
  * placeholder never splits an escape and a redacted JSON document still parses. A quoted value
- * with whitespace in it is prose, not a credential, and is left alone. A quote that never closes,
- * as in a clipped excerpt, falls back to the unquoted characters after it.
+ * with whitespace in it is usually prose, so only its leading run is read, at the original bar,
+ * as the rules always did. So is a quote that never closes, as in a clipped excerpt.
  */
 function keyedValue(
   text: string,
@@ -371,40 +396,41 @@ function keyedValue(
   kind: 'header' | 'generic',
 ): Candidate | undefined {
   let i = from;
-  if (kind === 'header' && text[i] === '[') {
-    i++;
-    while (text[i] === ' ') i++;
-  }
+  // A list of one quoted value, as `{"Authorization": ["Bearer ..."]}` in a Go header map.
+  const listed = /^\[ *\\*["'`]/.exec(text.slice(i, i + 64));
+  if (listed) i += listed[0].replace(/\\*["'`]$/, '').length;
   let depth = 0;
   while (text[i + depth] === '\\') depth++;
   const quote = text[i + depth];
-  let start = i;
-  let raw: string | undefined;
-  let quoted = false;
-  if (quote === '"' || quote === "'" || quote === '`') {
-    quoted = true;
-    start = i + depth + 1;
-    const end = quotedValueEnd(text, start, quote, depth);
-    if (end >= 0) raw = text.slice(start, end);
-  } else if (depth > 0) return undefined;
-  const unquoted = kind === 'header' ? HEADER_VALUE : GENERIC_VALUE;
-
+  const quoted = quote === '"' || quote === "'" || quote === '`';
+  if (!quoted && depth > 0) return undefined;
+  const start = quoted ? i + depth + 1 : i;
+  // A "quote" followed by JSON punctuation closed the string the key sat in (`"token: "}`); reading
+  // it as an opening quote would redact across that string's end.
+  if (quoted && /[,:}\]]/.test(text[start] ?? '')) return undefined;
+  const end = quoted ? quotedValueEnd(text, start, quote, depth) : -1;
+  let raw = end >= 0 ? text.slice(start, end) : undefined;
+  let weak = false;
   const name = key[3] ?? '';
+
   if (kind === 'header') {
-    const scheme = AUTH_SCHEME.exec(raw ?? text.slice(start, start + 16))?.[0] ?? '';
+    let scheme = raw === undefined ? '' : (AUTH_SCHEME.exec(raw)?.[0] ?? '');
     let secretStart = start + scheme.length;
-    let secretRaw: string;
-    if (raw !== undefined) {
-      secretRaw = raw.slice(scheme.length);
-      if (/\s/.test(secretRaw)) return undefined;
-    } else {
+    let secretRaw = raw?.slice(scheme.length);
+    if (secretRaw !== undefined && /\s/.test(secretRaw)) {
+      secretRaw = undefined;
+      weak = true;
+    }
+    if (secretRaw === undefined) {
+      scheme = AUTH_SCHEME.exec(text.slice(start, start + 16))?.[0] ?? '';
+      secretStart = start + scheme.length;
       // `Authorization: Bearer "..."` quotes the credential rather than the whole value.
       if (scheme && /['"]/.test(text[secretStart] ?? '')) secretStart++;
-      unquoted.lastIndex = secretStart;
-      secretRaw = unquoted.exec(text)?.[0] ?? '';
+      HEADER_VALUE.lastIndex = secretStart;
+      secretRaw = HEADER_VALUE.exec(text)?.[0] ?? '';
       depth = 0;
     }
-    const named = scheme !== '' || !/authorization$/i.test(name);
+    const named = !weak && (scheme !== '' || !/authorization$/i.test(name));
     const secret = unescapeValue(secretRaw, depth);
     if (secret.length < (named ? 6 : 16)) return undefined;
     return {
@@ -416,13 +442,18 @@ function keyedValue(
     };
   }
 
+  if (raw !== undefined && /\s/.test(raw)) {
+    raw = undefined;
+    weak = true;
+  }
+  const envStyle = key[2] === undefined && ENV_NAME.test(name) && /^\s*[:=]/.test(key[4] ?? '');
+  const strong = !weak && NAMES_CREDENTIAL.test(name) && (quoted || envStyle);
   if (raw === undefined) {
+    const unquoted = envStyle && !quoted ? ENV_VALUE : GENERIC_VALUE;
     unquoted.lastIndex = start;
     raw = unquoted.exec(text)?.[0] ?? '';
     depth = 0;
-  } else if (/\s/.test(raw)) return undefined;
-  const envStyle = key[2] === undefined && ENV_NAME.test(name) && /^\s*[:=]/.test(key[4] ?? '');
-  const strong = NAMES_CREDENTIAL.test(name) && (quoted || envStyle);
+  }
   const secret = unescapeValue(raw, depth);
   if (secret.length < (strong ? 6 : 12)) return undefined;
   return { start, end: start + raw.length, secret, entropy: strong ? 2 : 3.5 };
@@ -513,6 +544,11 @@ export function createRedactor(): Redactor {
         }
       }
       if (spans.length === 0) return { text, findings: [] };
+      // Text redacted at ingest is redacted again where it crosses a boundary, by a fresh redactor.
+      // A number already in the text is taken, or two different secrets would share a placeholder.
+      if (text.includes('#'))
+        for (const placeholder of text.matchAll(PLACEHOLDER_NUMBER))
+          counter = Math.max(counter, Number(placeholder[1]));
       spans.sort((a, b) => a.start - b.start || b.end - a.end);
       const merged: typeof spans = [];
       for (const s of spans) {
