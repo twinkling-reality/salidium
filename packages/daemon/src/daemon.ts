@@ -84,6 +84,7 @@ import {
 } from './ingest/limits.ts';
 import { StoreTailer } from './ingest/storeTailer.ts';
 import { TranscriptTailer } from './ingest/transcriptTailer.ts';
+import { createSessionLinks } from './links/sessionLinks.ts';
 import { createLogger } from './logging/logger.ts';
 import {
   type AlertSink,
@@ -690,9 +691,17 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     log,
     ...(overrides.now ? { now: overrides.now } : {}),
   });
+  // One links handler for both routes, so the interface and consumers get the same document
+  // under the same opt-in, cache, build queue and rate limit.
+  const sessionLinks = createSessionLinks({
+    registry,
+    log,
+    ...(overrides.now ? { now: overrides.now } : {}),
+  }).handler({ maps });
   const projectMap = createProjectMapRoutes({
     maps,
     credentials: consumerCredentials,
+    sessionLinks,
     ...(overrides.now ? { now: overrides.now } : {}),
     log,
   });
@@ -706,6 +715,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
       read: (provider, ref) => storeTailer.readRawRecord(provider, ref),
     },
     projectMap,
+    sessionLinks,
     registry,
     hooks,
     token,
