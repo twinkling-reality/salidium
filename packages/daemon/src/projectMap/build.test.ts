@@ -162,6 +162,21 @@ describe('createResolver', () => {
     });
   });
 
+  test('takes the most specific exports pattern, as Node does, not the first listed', () => {
+    const patterned = createResolver(
+      new Set(['packages/t/src/any/x.ts', 'packages/t/src/feature/x.ts']),
+      new Map([
+        pkg('@x/t', 'packages/t', {
+          './*': './src/any/*.ts',
+          './feature/*': './src/feature/*.ts',
+        }),
+      ]),
+    );
+    expect(patterned('@x/t/feature/x', 'src/main.ts')).toMatchObject({
+      target: 'packages/t/src/feature/x.ts',
+    });
+  });
+
   test('does not guess', () => {
     expect(resolve('./missing.ts', 'src/main.ts')).toMatchObject({ reason: 'no-tracked-file' });
     expect(resolve('../../outside.ts', 'src/main.ts')).toMatchObject({

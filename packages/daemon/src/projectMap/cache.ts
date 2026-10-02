@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, rmSync, statSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
-import { type OptedInRepository, type ProjectMap, ProjectMapSchema } from '@salidium/project-map';
+import type { OptedInRepository, ProjectMap } from '@salidium/project-map';
 import { writePrivateTextAtomic } from '../operations/files.ts';
 import { INDEXER_VERSION } from './build.ts';
 
@@ -38,7 +38,15 @@ export class ProjectMapCache {
     return join(this.directoryFor(repository), `${commit}-${INDEXER_VERSION}.json`);
   }
 
-  get(repository: OptedInRepository, commit: string): ProjectMap | undefined {
+  /**
+   * The cached map and its text. The file is Salidium's own, owner-only, and was validated against
+   * the schema when it was built, so a read checks its identity rather than parsing it against the
+   * schema again, which for a large map would hold the daemon's thread for seconds.
+   */
+  get(
+    repository: OptedInRepository,
+    commit: string,
+  ): { map: ProjectMap; text: string } | undefined {
     const file = this.fileFor(repository, commit);
     let text: string;
     try {
@@ -47,22 +55,33 @@ export class ProjectMapCache {
       return undefined;
     }
     try {
-      const map = ProjectMapSchema.parse(JSON.parse(text));
-      if (map.repository.root !== repository.root || map.repository.commit !== commit)
-        throw new Error('a cached map names another repository or commit');
+      const map = JSON.parse(text) as ProjectMap;
+      if (
+        map?.format !== 'salidium.project-map' ||
+        map.version !== 0 ||
+        map.repository?.root !== repository.root ||
+        map.repository?.commit !== commit ||
+        !Array.isArray(map.nodes) ||
+        !Array.isArray(map.edges)
+      )
+        throw new Error('a cached map is not this repository and commit');
       const now = new Date();
       utimesSync(file, now, now);
-      return map;
+      return { map, text };
     } catch {
       rmSync(file, { force: true });
       return undefined;
     }
   }
 
-  set(repository: OptedInRepository, map: ProjectMap, current: readonly OptedInRepository[]): void {
-    const text = JSON.stringify(map);
+  set(
+    repository: OptedInRepository,
+    commit: string,
+    text: string,
+    current: readonly OptedInRepository[],
+  ): void {
     if (Buffer.byteLength(text) > this.limits.bytes) return;
-    writePrivateTextAtomic(this.fileFor(repository, map.repository.commit), text);
+    writePrivateTextAtomic(this.fileFor(repository, commit), text);
     this.evict(current);
   }
 

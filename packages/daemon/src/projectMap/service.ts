@@ -25,7 +25,7 @@ import { mapFromObjectStore } from './source.ts';
 /** Builds one at a time; a request arriving while this many wait is told to retry. */
 export const MAX_QUEUED_BUILDS = 4;
 /** Builds and disk-cache reads started per minute; maps already in memory are not counted. */
-export const MAX_BUILDS_PER_MINUTE = 12;
+export const MAX_BUILDS_PER_MINUTE = 6;
 /** Recently served maps kept parsed and serialized, so repeated requests cost nothing. */
 const MEMORY_CACHE_BYTES = 64 * 1024 * 1024;
 
@@ -167,18 +167,17 @@ export class DaemonProjectMapService implements ProjectMapService {
         this.optIn.get(repository.root)?.allowedAt === repository.allowedAt
           ? this.cache.get(repository, commit)
           : undefined;
-      const result = cached
-        ? { ok: true as const, map: cached }
-        : await this.build(repository, commit);
-      return result.ok ? this.remember(key, result.map) : result;
+      if (cached) return this.remember(key, cached.map, cached.text);
+      const built = await this.build(repository, commit);
+      return built.ok ? this.remember(key, built.map, built.text) : built;
     }).finally(() => this.inFlight.delete(key));
     this.inFlight.set(key, work);
     return work;
   }
 
-  private remember(key: string, map: ProjectMap): MapDocumentResult {
-    const text = JSON.stringify(map);
-    const bytes = Buffer.byteLength(text);
+  private remember(key: string, map: ProjectMap, text: string): MapDocumentResult {
+    // A parsed map takes several times its text in memory, so both are charged at four times it.
+    const bytes = 4 * Buffer.byteLength(text);
     if (bytes <= MEMORY_CACHE_BYTES / 4) {
       this.memory.set(key, { map, text, bytes });
       let total = 0;
@@ -235,7 +234,7 @@ export class DaemonProjectMapService implements ProjectMapService {
     };
   }
 
-  private async build(repository: StoredRepository, commit: string): Promise<MapResult> {
+  private async build(repository: StoredRepository, commit: string): Promise<MapDocumentResult> {
     // The opt-in may have been revoked while this build waited its turn, or while it reads.
     const current = () => this.optIn.get(repository.root)?.allowedAt === repository.allowedAt;
     if (!current()) return NOT_OPTED_IN();
@@ -266,13 +265,14 @@ export class DaemonProjectMapService implements ProjectMapService {
       }
       const checked = parsed.data;
       if (!current()) return NOT_OPTED_IN();
-      this.cache.set(repository, checked, this.optIn.list());
+      const text = JSON.stringify(checked);
+      this.cache.set(repository, commit, text, this.optIn.list());
       this.log?.info('project map built', {
         files: checked.coverage.files,
         edges: checked.edges.length,
         ms: this.now() - started,
       });
-      return { ok: true, map: checked };
+      return { ok: true, map: checked, text };
     } catch (error) {
       return this.refuseError(error);
     }

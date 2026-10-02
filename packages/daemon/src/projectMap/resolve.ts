@@ -155,6 +155,13 @@ export function createResolver(
             picked: new Map(),
           });
       }
+    // Node takes the most specific pattern, not the first: the longest text before the star, then
+    // the longest key.
+    result.stars.sort(
+      (a, b) =>
+        b.prefix.length - a.prefix.length ||
+        b.prefix.length + b.suffix.length - (a.prefix.length + a.suffix.length),
+    );
     if (
       result.stars.length > MAX_EXPORTS_PATTERNS ||
       result.stars.some((s) => (JSON.stringify(s.value) ?? '').length > MAX_EXPORTS_VALUE_BYTES)
