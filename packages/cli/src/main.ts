@@ -164,7 +164,7 @@ Environment:
   SALIDIUM_HOME          State directory (default ~/.salidium)
   SALIDIUM_PORT          Loopback port (default ${DEFAULT_PORT})
   SALIDIUM_HISTORY_DAYS  Whole days of transcript history to import, 0 or greater (default 7)
-  SALIDIUM_NO_GIT=1      Disable read-only git snapshots
+  SALIDIUM_NO_GIT=1      Disable read-only git snapshots and changed-file locations
   SALIDIUM_EXPLAINER     Visual explainer: auto, claude, codex, or off (default auto)
   SALIDIUM_EXPLAIN_MODEL Optional model override for the selected explainer
 

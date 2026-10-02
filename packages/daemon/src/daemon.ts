@@ -46,6 +46,7 @@ import { createConsumerRoutes } from './consumer/routes.ts';
 import { explainWithStatus } from './enrich/explainer.ts';
 import { explainedConfiguration } from './enrich/explainerBackends.ts';
 import { personalizeExplanation } from './enrich/personalizeExplanation.ts';
+import { FileLocationEnricher } from './enrichers/fileLocation.ts';
 import { GitSnapshotEnricher } from './enrichers/gitSnapshot.ts';
 import { type CodexHookTrust, inspectCodexHookTrust } from './ingest/codexHookTrust.ts';
 import {
@@ -354,6 +355,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     log,
   });
   const git = new GitSnapshotEnricher(registry, log);
+  const locations = new FileLocationEnricher(registry, log);
   const token = randomBytes(32).toString('hex');
   const startedAt = new Date().toISOString();
 
@@ -732,6 +734,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     tailer.stop();
     hooks.stop();
     git.stop();
+    locations.stop();
     // Tell open consumer feeds why they are ending before the connections are cut below.
     consumer.close();
     removeConsumerDiscovery(config.home, process.pid);
@@ -770,7 +773,11 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
       protocolVersion: PROTOCOL_VERSION,
       storeSchemaVersion: SCHEMA_VERSION,
     };
-    if (config.gitEnrichment) git.start();
+    if (config.gitEnrichment) {
+      git.start();
+      // Reading where a changed file lives is repository observation too, under the same switch.
+      locations.start();
+    }
     // Recover the spool before publishing daemon.json, not after. The file is what both the CLI's
     // readiness probe and every relay treat as "there is a daemon here", and the first drain is the
     // one moment a fresh daemon is busiest: announcing first meant a backlog could make `salidium
