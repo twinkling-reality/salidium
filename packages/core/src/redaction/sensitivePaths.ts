@@ -400,11 +400,19 @@ interface ReaderSyntax {
   value?: string[];
 }
 
+/*
+ * These tables under-claim on purpose. An option listed as taking a value hides the next word,
+ * so a wrong entry can hide the real file (`grep --color KEY .env`) and leak it; an option left
+ * out only exposes its value to the sensitive-name check, which at worst over-suppresses. An
+ * option is listed only when every common implementation (GNU and BSD) requires its value, and
+ * one whose value is optional or attached only (`--color[=when]`, BSD `grep -C[num]`, BSD
+ * `sed -l`) is left out.
+ */
 const GREP_SYNTAX: ReaderSyntax = {
   scriptFirst: true,
   pattern: ['e', '--regexp'],
   file: ['f', '--file'],
-  value: ['A', 'B', 'C', 'm', 'd', 'D', '--max-count', '--context', '--label', '--color'],
+  value: ['A', 'B', 'm', 'd', 'D', '--max-count', '--label'],
 };
 
 const READER_SYNTAX: Record<string, ReaderSyntax> = {
@@ -421,7 +429,7 @@ const READER_SYNTAX: Record<string, ReaderSyntax> = {
     scriptFirst: true,
     pattern: ['e', '--expression'],
     file: ['f', '--file'],
-    value: ['l', '--line-length'],
+    value: ['--line-length'],
   },
   awk: {
     scriptFirst: true,
@@ -432,7 +440,7 @@ const READER_SYNTAX: Record<string, ReaderSyntax> = {
   jq: {
     scriptFirst: true,
     file: ['f', '--from-file'],
-    value: ['--indent', '--tab'],
+    value: ['--indent'],
   },
   yq: { scriptFirst: true, file: ['--from-file'], value: ['--indent'] },
 };
@@ -510,12 +518,44 @@ function readerFiles(executable: string, args: string[]): string[] {
  * Commands that run the command after them, with the options that take a value and the number of
  * operands before that command (`timeout 5 cat .env`).
  */
+/*
+ * For a prefix both mistakes misplace the command: a missing value is read as the command, and a
+ * wrong one skips it. These follow each tool's own option string (sudo's is
+ * `+Aa:BbC:c:D:Eeg:Hh::iKklNnPp:R:r:SsT:t:U:u:Vv`, so `-h` takes no separate value), with BSD
+ * additions.
+ */
 const COMMAND_PREFIXES: Record<string, { values?: string[]; operands?: number }> = {
   sudo: {
-    values: ['-u', '-g', '-h', '-p', '-C', '-D', '-r', '-t', '-U', '-T', '--user', '--group'],
+    values: [
+      '-a',
+      '-C',
+      '-c',
+      '-D',
+      '-g',
+      '-p',
+      '-R',
+      '-r',
+      '-T',
+      '-t',
+      '-U',
+      '-u',
+      '--auth-type',
+      '--close-from',
+      '--login-class',
+      '--chdir',
+      '--group',
+      '--host',
+      '--prompt',
+      '--chroot',
+      '--role',
+      '--type',
+      '--command-timeout',
+      '--other-user',
+      '--user',
+    ],
   },
   doas: { values: ['-u', '-C'] },
-  env: { values: ['-u', '--unset', '-C', '--chdir'] },
+  env: { values: ['-u', '--unset', '-C', '--chdir', '-P'] },
   command: {},
   builtin: {},
   exec: { values: ['-a'] },
@@ -525,17 +565,19 @@ const COMMAND_PREFIXES: Record<string, { values?: string[]; operands?: number }>
   time: { values: ['-f', '-o', '--format', '--output'] },
   timeout: { values: ['-k', '-s', '--kill-after', '--signal'], operands: 1 },
   stdbuf: { values: ['-i', '-o', '-e'] },
+  // GNU `-e[eof]`, `-i[replace]` and `-l[lines]` take only an attached value; BSD adds -J, -R, -S.
   xargs: {
     values: [
       '-a',
       '-d',
       '-E',
-      '-e',
       '-I',
+      '-J',
       '-L',
-      '-l',
       '-n',
       '-P',
+      '-R',
+      '-S',
       '-s',
       '--arg-file',
       '--delimiter',
@@ -748,19 +790,23 @@ function executableName(token: string): string {
 
 /**
  * Whether an option takes the next word as its value: named in `values`, or a short-option
- * cluster whose last letter is (`sudo -Eu root`, `env -iu NAME`).
+ * cluster in which the first letter that takes a value is the last (`sudo -Eu root`,
+ * `env -iu NAME`). An earlier one takes the rest of the cluster instead (`sudo -uroot`).
  */
 function takesValue(arg: string, values: string[] | undefined): boolean {
   if (!values) return false;
   if (values.includes(arg)) return true;
-  return /^-[A-Za-z]{2,}$/.test(arg) && values.includes(`-${arg.at(-1)}`);
+  if (!/^-[A-Za-z]{2,}$/.test(arg)) return false;
+  for (let k = 1; k < arg.length; k++)
+    if (values.includes(`-${arg[k]}`)) return k === arg.length - 1;
+  return false;
 }
 
-const ENV_VALUE_OPTIONS = ['-u', '--unset', '-C', '--chdir', '-S', '--split-string'];
+const ENV_VALUE_OPTIONS = ['-u', '--unset', '-C', '--chdir', '-P', '-S', '--split-string'];
 
-/** Whether `env` with these arguments prints the environment rather than running a command. */
-function envCommandIsDump(args: string[]): boolean {
-  let i = 0;
+/** Whether `env` with the arguments from `start` prints the environment rather than running one. */
+function envCommandIsDump(args: string[], start = 0): boolean {
+  let i = start;
   while (i < args.length) {
     const arg = args[i] ?? '';
     if (ASSIGNMENT.test(arg)) {
@@ -800,9 +846,10 @@ function invocation(words: string[]): Invocation | undefined {
     if (word === undefined) return undefined;
     const executable = executableName(word);
     const prefix = COMMAND_PREFIXES[executable];
-    const rest = words.slice(i + 1);
-    if (!prefix || (executable === 'env' && envCommandIsDump(rest)))
-      return { executable, args: rest, viaXargs };
+    // The arguments are copied only once, for the command finally run, so a long prefix chain
+    // stays linear.
+    if (!prefix || (executable === 'env' && envCommandIsDump(words, i + 1)))
+      return { executable, args: words.slice(i + 1), viaXargs };
     if (executable === 'xargs') viaXargs = true;
     i++;
     let operands = prefix.operands ?? 0;
@@ -1127,14 +1174,13 @@ function anyNamesSensitive(words: Iterable<string>): boolean {
   return false;
 }
 
-/** Git options whose value is a pattern, a revision or a format, never a path to read. */
-const GIT_SKIPPED_VALUES = new Set([
-  '-S',
-  '-G',
-  '-e',
-  '--grep',
-  '--author',
-  '--committer',
+/**
+ * Git options, per subcommand, that take the next word as a value that is a pattern, a count, a
+ * date or a name, never a path to read. Under-claimed like the reader tables: `--pretty`,
+ * `--format`, `--date`, `-U` and `-O` take only an attached value, `git log -m` and
+ * `git grep -n` are flags, and `git log -n` and `git grep -m` take a count.
+ */
+const LOG_VALUES = [
   '-n',
   '--max-count',
   '--skip',
@@ -1142,16 +1188,32 @@ const GIT_SKIPPED_VALUES = new Set([
   '--after',
   '--until',
   '--before',
-  '--format',
-  '--pretty',
-  '--date',
-  '-m',
-  '--max-depth',
-  '-O',
-  '-U',
-  '--unified',
+  '--author',
+  '--committer',
+  '--grep',
+  '-S',
+  '-G',
   '--diff-filter',
-]);
+];
+const GIT_SKIPPED_VALUES: Record<string, string[]> = {
+  log: LOG_VALUES,
+  whatchanged: LOG_VALUES,
+  show: LOG_VALUES,
+  'format-patch': LOG_VALUES,
+  diff: ['-S', '-G', '--diff-filter'],
+  grep: [
+    '-m',
+    '--max-count',
+    '--max-depth',
+    '-A',
+    '-B',
+    '-C',
+    '--context',
+    '--after-context',
+    '--before-context',
+    '--threads',
+  ],
+};
 
 /**
  * Whether git prints a sensitive file: `git show HEAD:.env`, `git cat-file -p :.env`, a path
@@ -1164,35 +1226,56 @@ function gitShowsSensitive(args: string[]): boolean {
     i += GIT_VALUE_OPTIONS.has(args[i] ?? '') ? 2 : 1;
   const subcommand = args[i] ?? '';
   if (!GIT_CONTENT_COMMANDS.has(subcommand)) return false;
+  const skipped = GIT_SKIPPED_VALUES[subcommand] ?? [];
   const named = (arg: string) => {
     const colon = arg.indexOf(':');
     return isSensitiveShellWord(arg) || (colon >= 0 && isSensitiveShellWord(arg.slice(colon + 1)));
+  };
+  /** What an option does with its value: a path to check, a pattern, something to skip, none. */
+  const kind = (name: string): 'checked' | 'pattern' | 'skipped' | 'flag' => {
+    if (name === '-L' || (subcommand === 'grep' && (name === '-f' || name === '--file')))
+      return 'checked';
+    if (subcommand === 'grep' && (name === '-e' || name === '--regexp')) return 'pattern';
+    return skipped.includes(name) ? 'skipped' : 'flag';
   };
   const operands: string[] = [];
   let patternGiven = false;
   for (let k = i + 1; k < args.length; k++) {
     const arg = args[k] ?? '';
-    if (arg === '--') return args.slice(k + 1).some(named) || false;
+    if (arg === '--') return args.slice(k + 1).some(named);
     if (!arg.startsWith('-') || arg === '-') {
       operands.push(arg);
       continue;
     }
-    const eq = arg.indexOf('=');
-    const name = eq < 0 ? arg : arg.slice(0, eq);
-    const attached = eq < 0 && /^-[A-Za-z]./.test(arg) ? arg.slice(2) : undefined;
-    if (name === '-L' || name.startsWith('-L')) {
-      const value = eq >= 0 ? arg.slice(eq + 1) : attached || args[++k];
-      if (value !== undefined && named(value)) return true;
-      continue;
+    let name = arg;
+    let value: string | undefined;
+    let hasValue = false;
+    if (arg.startsWith('--')) {
+      const eq = arg.indexOf('=');
+      if (eq >= 0) {
+        name = arg.slice(0, eq);
+        value = arg.slice(eq + 1);
+        hasValue = true;
+      }
+    } else {
+      // A cluster: the first letter that takes a value takes the rest of it, or the next word.
+      name = '';
+      for (let c = 1; c < arg.length; c++) {
+        if (kind(`-${arg[c]}`) === 'flag') continue;
+        name = `-${arg[c]}`;
+        if (c + 1 < arg.length) {
+          value = arg.slice(c + 1);
+          hasValue = true;
+        }
+        break;
+      }
+      if (!name) continue;
     }
-    if (subcommand === 'grep' && (name === '-f' || name === '--file')) {
-      patternGiven = true;
-      const value = eq >= 0 ? arg.slice(eq + 1) : (attached ?? args[++k]);
-      if (value !== undefined && named(value)) return true;
-      continue;
-    }
-    if (subcommand === 'grep' && (name === '-e' || name === '--regexp')) patternGiven = true;
-    if (eq < 0 && attached === undefined && GIT_SKIPPED_VALUES.has(name)) k++;
+    const what = kind(name);
+    if (what === 'flag') continue;
+    if (!hasValue) value = args[++k];
+    if (what === 'pattern' || (what === 'checked' && name !== '-L')) patternGiven = true;
+    if (what === 'checked' && value !== undefined && named(value)) return true;
   }
   if (subcommand === 'grep' && !patternGiven) operands.shift();
   return operands.some(named);

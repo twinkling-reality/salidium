@@ -291,9 +291,10 @@ Known limits: Windows 8.3 short names are not recognized; a recursive read of a 
 merely contains a sensitive file (`grep -r KEY .`) is not caught; output is suppressed per command,
 not filtered line by line where a prefix such as `path:` names a sensitive file; a name reached by
 indirection (`f=.env; cat "$f"`, `cat $(echo .env)`, a `for` list, a here-string) is not followed;
-PowerShell, `cmd` and interpreter readers (`python -c`, `node -e`) are not recognized; Claude
-Code's Grep `glob` argument and `git show :0:.env` are not checked; and events stored before a rule
-changed keep what they stored. Recognizing printing commands from a list of readers is the weaker
+PowerShell, `cmd` and interpreter readers (`python -c`, `node -e`) are not recognized; `yq`
+given only a file (`yq secrets.yaml`, its expression left out) is read as given an expression;
+Claude Code's Grep `glob` argument and `git show :0:.env` are not checked; and events stored
+before a rule changed keep what they stored. Recognizing printing commands from a list of readers is the weaker
 design; an allowlist of commands known not to print files would be stronger.
 
 General redaction then replaces recognized secrets with stable placeholders so a

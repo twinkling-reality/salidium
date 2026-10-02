@@ -487,3 +487,62 @@ describe('shell syntax the first review missed', () => {
     expect(best).toBeLessThan(250);
   });
 });
+
+describe('options that take no separate value do not hide the file after them', () => {
+  it.each([
+    'grep --color KEY .env',
+    'grep --color=always KEY .env',
+    'grep -C KEY .env',
+    'grep --context KEY .env',
+    'jq --tab . .env',
+    'sed -l p .env',
+    'sed --line-length 80 p .env',
+    'git grep -n KEY .env',
+    'git grep -m 1 KEY .env',
+    'git grep -m1 KEY .env',
+    'git log -p -m .env',
+    'git log -p --pretty .env',
+    'git log --format .env',
+    'git log -n 5 .env',
+    'git log -n5 -p .env',
+    'git show -U .env',
+    'git diff -S KEY .env',
+    // A cluster's first value-taking letter takes the rest of it.
+    'sudo -uroot cat .env',
+    'sudo -Euroot cat .env',
+    'sudo -h cat .env',
+    'sudo --chdir /tmp cat .env',
+    'sudo --user root --group wheel cat .env',
+    'sudo -c staff cat .env',
+    'sudo -R /jail cat .env',
+    'env -P /usr/bin cat .env',
+    'echo .env | xargs -J % cat %',
+    'echo .env | xargs -R 2 -I % cat %',
+    'echo .env | xargs -S 512 -I % cat %',
+    'echo .env | xargs -e cat',
+    'echo .env | xargs -l cat',
+  ])('suppresses %s', (command) => {
+    expect(isCredentialDumpCommand(command)).toBe(true);
+  });
+
+  it.each([
+    'git log -n 5 -S .env',
+    "git log --grep '.env' -n 3",
+    'git grep -m 1 .env src',
+    "git grep -e '.env' -m 2 src",
+  ])('still reads a pattern value as a pattern in %s', (command) => {
+    expect(isCredentialDumpCommand(command)).toBe(false);
+  });
+
+  it('reads a long prefix chain in linear time', () => {
+    const command = `${'nice '.repeat(20000)}cat .env`;
+    let best = Number.POSITIVE_INFINITY;
+    for (let run = 0; run < 5; run++) {
+      const started = performance.now();
+      expect(isCredentialDumpCommand(command)).toBe(true);
+      best = Math.min(best, performance.now() - started);
+    }
+    // Copying the remaining words at each prefix made this quadratic.
+    expect(best).toBeLessThan(250);
+  });
+});
