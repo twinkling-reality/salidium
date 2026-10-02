@@ -1618,6 +1618,10 @@ async function statusCommand(options: {
         process.stdout.write(
           `Maintenance: ${health.maintenance ? `${maintenancePhaseLabel(health.maintenance.phase)} · ${health.maintenance.message}` : 'Idle'}\n`,
         );
+        if (health.historyUpdate)
+          process.stdout.write(
+            `Updating session history: ${health.historyUpdate.sessionsUpdated} of ${health.historyUpdate.sessionsTotal}${health.historyUpdate.state === 'paused' ? ' (paused)' : ''}\n`,
+          );
         process.stdout.write(
           `Alerts: ${operations.alerts.active.length} active${operations.alerts.active.some((alert) => alert.state === 'acknowledged') ? ' (some acknowledged)' : ''}\n`,
         );

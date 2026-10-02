@@ -285,6 +285,20 @@ export const MaintenanceStateSchema = z
   .strict();
 export type MaintenanceState = z.infer<typeof MaintenanceStateSchema>;
 
+/**
+ * Stored sessions being brought up to a new reducer in the background after an upgrade, with exact
+ * counts. Absent from snapshots taken before it existed; null when nothing is left to update.
+ */
+export const HistoryUpdateSchema = z
+  .object({
+    state: z.enum(['running', 'paused']),
+    sessionsUpdated: z.number().int().nonnegative(),
+    sessionsTotal: z.number().int().nonnegative(),
+    reducerVersion: z.string().min(1).max(32),
+  })
+  .strict();
+export type HistoryUpdate = z.infer<typeof HistoryUpdateSchema>;
+
 export const DerivedEstimateSchema = z
   .object({
     value: z.number().finite(),
@@ -361,6 +375,7 @@ export const OperationsHealthSnapshotSchema = z
     store: OperationsStoreMeasurementSchema,
     gaps: OperationsGapSummarySchema,
     maintenance: MaintenanceStateSchema.nullable(),
+    historyUpdate: HistoryUpdateSchema.nullable().optional(),
     hooks: z.array(HookHealthSchema),
     estimates: z
       .object({

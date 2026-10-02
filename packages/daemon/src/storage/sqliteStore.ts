@@ -27,6 +27,7 @@ import type {
   RetentionPreview,
   SalidiumStore,
   SalidiumStoreFactory,
+  SessionNeedingReplay,
   SessionSearchResult,
   SourceCursor,
   UsageBackfillProgress,
@@ -1233,6 +1234,22 @@ export class SqliteStore implements SalidiumStore {
       deleteEvents: this.db.prepare('DELETE FROM events WHERE session_id = ?'),
       deleteChanges: this.db.prepare('DELETE FROM changes WHERE session_id = ?'),
       deleteCheckpoints: this.db.prepare('DELETE FROM checkpoints WHERE session_id = ?'),
+      deleteOtherVersionCheckpoints: this.db.prepare(
+        'DELETE FROM checkpoints WHERE session_id = ? AND reducer_version <> ?',
+      ),
+      sessionsNeedingReplay:
+        this.db.prepare(`SELECT id, provider, provider_session_id, cwd, latest_seq
+        FROM sessions s
+        WHERE s.internal = 0 AND s.latest_seq >= 0
+          AND NOT EXISTS (SELECT 1 FROM checkpoints c WHERE c.session_id = s.id AND c.reducer_version = ?)
+        ORDER BY s.activity_at DESC, s.id
+        LIMIT ?`),
+      countSessionsNeedingReplay: this.db.prepare(`SELECT COUNT(*) AS n
+        FROM sessions s
+        WHERE s.internal = 0 AND s.latest_seq >= 0
+          AND NOT EXISTS (SELECT 1 FROM checkpoints c WHERE c.session_id = s.id AND c.reducer_version = ?)`),
+      getMeta: this.db.prepare('SELECT value FROM meta WHERE key = ?'),
+      setMeta: this.db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)'),
       deleteSources: this.db.prepare('DELETE FROM sources WHERE session_id = ?'),
       deleteAllSources: this.db.prepare('DELETE FROM sources'),
       allSources: this.db.prepare(
@@ -1582,6 +1599,20 @@ export class SqliteStore implements SalidiumStore {
     state: RunState,
     keep = 6,
   ): void {
+    this.atomically(() => this.writeCheckpoint(sessionId, seq, reducerVersion, state, keep));
+  }
+
+  /**
+   * A checkpoint and the removal of the session's checkpoints from other reducer versions, which
+   * no load can read again and which would otherwise stay in the file for good.
+   */
+  private writeCheckpoint(
+    sessionId: string,
+    seq: number,
+    reducerVersion: string,
+    state: RunState,
+    keep: number,
+  ): void {
     this.stmts.insertCheckpoint.run(
       sessionId,
       seq,
@@ -1590,6 +1621,56 @@ export class SqliteStore implements SalidiumStore {
       new Date().toISOString(),
     );
     this.stmts.pruneCheckpoints.run(sessionId, sessionId, keep);
+    this.stmts.deleteOtherVersionCheckpoints.run(sessionId, reducerVersion);
+  }
+
+  /** Runs `fn` in a transaction, or inside the caller's when one is already open. */
+  private atomically<T>(fn: () => T): T {
+    return this.db.isTransaction ? fn() : this.transaction(fn);
+  }
+
+  sessionsNeedingReplay(reducerVersion: string, limit: number): SessionNeedingReplay[] {
+    const rows = this.stmts.sessionsNeedingReplay.all(reducerVersion, limit) as Array<{
+      id: string;
+      provider: string;
+      provider_session_id: string;
+      cwd: string | null;
+      latest_seq: number;
+    }>;
+    return rows.map((row) => ({
+      sessionId: row.id,
+      provider: row.provider,
+      providerSessionId: row.provider_session_id,
+      cwd: row.cwd ?? '',
+      latestSeq: row.latest_seq,
+    }));
+  }
+
+  countSessionsNeedingReplay(reducerVersion: string): number {
+    return (this.stmts.countSessionsNeedingReplay.get(reducerVersion) as { n: number }).n;
+  }
+
+  replayTotal(reducerVersion: string, remaining: number): number {
+    const key = `replay_total:${reducerVersion}`;
+    const stored = this.stmts.getMeta.get(key) as { value: string } | undefined;
+    const total = stored ? Number(stored.value) : Number.NaN;
+    if (Number.isSafeInteger(total) && total >= remaining) return total;
+    this.stmts.setMeta.run(key, String(remaining));
+    return remaining;
+  }
+
+  saveReplayedSession(
+    sessionId: string,
+    seq: number,
+    reducerVersion: string,
+    state: RunState,
+    changes: SemanticChange[],
+  ): void {
+    this.atomically(() => {
+      this.stmts.deleteChanges.run(sessionId);
+      this.insertChanges(changes, reducerVersion);
+      this.writeCheckpoint(sessionId, seq, reducerVersion, state, 6);
+    });
   }
 
   latestCheckpoint(sessionId: string, reducerVersion: string): CheckpointRow | undefined {

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type {
   CollectionStatus,
   EffectiveOperationalConfig,
+  HistoryUpdate,
   MaintenanceState,
   OperationsHealthSnapshot,
   QueueInspection,
@@ -237,6 +238,7 @@ export interface HealthSnapshotInput {
   daemon: OperationsHealthSnapshot['daemon'];
   hooks: HookHealth[];
   maintenance: MaintenanceState | null;
+  historyUpdate?: HistoryUpdate | null;
   config: EffectiveOperationalConfig;
   history: HealthHistorySample[];
   schemaVersion: number | null;
@@ -332,6 +334,7 @@ export function createHealthSnapshot(input: HealthSnapshotInput): OperationsHeal
       recoveredEpisodes: input.collection.gaps.recovered,
     },
     maintenance: input.maintenance,
+    historyUpdate: input.historyUpdate ?? null,
     hooks: input.hooks,
     estimates: calculateHealthEstimates(history),
     history: {

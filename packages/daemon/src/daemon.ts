@@ -105,6 +105,7 @@ import {
 import { readMaintenanceState, runQueueDrainMaintenance } from './operations/maintenance.ts';
 import { NativeAlertSink } from './operations/nativeNotifications.ts';
 import { createHttpServer } from './server/httpServer.ts';
+import { HistoryWarmup } from './sessions/historyWarmup.ts';
 import { effectiveCadence } from './sessions/sessionCoordinator.ts';
 import { SessionRegistry } from './sessions/sessionRegistry.ts';
 import { inspectStoreLayout } from './storage/optimizeStore.ts';
@@ -149,6 +150,8 @@ export type StartDaemonOptions = Partial<DaemonConfig> & {
    * for the instance's whole life. Defaults to none.
    */
   experimentalContracts?: (context: { port: number }) => readonly unknown[];
+  /** Test seam: false leaves stored sessions to be re-derived on first open only. */
+  historyWarmup?: boolean;
   /** Internal persistence seam; SQLite is the production authority and default. */
   storeFactory?: SalidiumStoreFactory;
   /** Test/embedding seam; the native desktop sink is used when notification policy enables it. */
@@ -368,6 +371,18 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     log,
   });
   const git = new GitSnapshotEnricher(registry, log);
+  // After a reducer upgrade, stored sessions are re-derived in the background rather than on
+  // first open. Maintenance and a collection pause both hold it.
+  const historyWarmup = new HistoryWarmup({
+    store,
+    log,
+    isLive: (sessionId) => registry.peek(sessionId) !== undefined,
+    isPaused: () => {
+      if (collectionPaused) return true;
+      const phase = readMaintenanceState(config.home)?.phase;
+      return phase !== undefined && phase !== 'idle' && phase !== 'completed';
+    },
+  });
   const locations = new FileLocationEnricher(registry, log);
   const token = randomBytes(32).toString('hex');
   const startedAt = new Date().toISOString();
@@ -479,6 +494,17 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
         trust: provider.hookTrust ?? 'unknown',
       })),
       maintenance: readMaintenanceState(config.home, now),
+      historyUpdate: (() => {
+        const progress = historyWarmup.progress();
+        return progress
+          ? {
+              state: progress.state,
+              sessionsUpdated: progress.updated,
+              sessionsTotal: progress.total,
+              reducerVersion: progress.reducerVersion,
+            }
+          : null;
+      })(),
       config: effective,
       history: store.healthSamples(cutoff, sampleLimit),
       schemaVersion: storeLayout.schemaVersion,
@@ -781,6 +807,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     hooks.stop();
     git.stop();
     locations.stop();
+    await historyWarmup.stop();
     // Tell open consumer feeds why they are ending before the connections are cut below.
     consumer.close();
     removeConsumerDiscovery(config.home, process.pid);
@@ -921,6 +948,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
       });
     };
     startUsageBackfillWorker();
+    if (overrides.historyWarmup !== false) historyWarmup.start();
 
     const sampleOperations = () => {
       if (stopped) return;
