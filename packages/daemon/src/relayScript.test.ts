@@ -458,10 +458,14 @@ describe('the installed hook relay', () => {
    * full. The shell exits at once when it cannot fork, so a reaper that cannot start `rmdir` leaves
    * its guard for good, and every later sender that meets a dead owner's lock spins out its whole
    * attempt budget. An `rmdir` that fails stands in for that fork here.
+   *
+   * Every wait is on observable state with a generous deadline, never on elapsed time, because this
+   * runs sender processes that a loaded machine can delay by many seconds.
    */
   it('recovers lock reclaiming after a reaper leaves its guard behind', async () => {
     const root = mkdtempSync(join(tmpdir(), 'salidium-relay-reaping-'));
     const isolation = isolateProviders();
+    const senders: ReturnType<typeof spawn>[] = [];
     try {
       const home = join(root, 'state');
       const pending = join(home, 'spool', 'pending');
@@ -469,40 +473,73 @@ describe('the installed hook relay', () => {
       const lock = join(pending, HOOK_QUOTA_LOCK_FILE);
       const guard = join(pending, HOOK_QUOTA_REAPING_DIR);
       const deadOwner = () => `${spawnSync('/bin/sh', ['-c', 'exit 0']).pid}\n`;
-      const send = (relay: string, name: string, timeout = 15_000) => {
+      const waitUntil = async (what: string, ready: () => boolean) => {
+        const deadline = Date.now() + 90_000;
+        while (!ready()) {
+          if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+          await sleep(20);
+        }
+      };
+      const start = (relay: string, name: string) => {
         const input = join(pending, name);
         writeFileSync(input, JSON.stringify({ synthetic: name }));
-        return spawnSync('/bin/sh', [relay, '--send', 'claude-code', 'Stop', 'lifecycle', input], {
-          env: isolation.environment({}, {}),
-          timeout,
+        const child = spawn(
+          '/bin/sh',
+          [relay, '--send', 'claude-code', 'Stop', 'lifecycle', input],
+          { env: isolation.environment({}, {}), stdio: 'ignore' },
+        );
+        senders.push(child);
+        let exit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+        child.once('exit', (code, signal) => {
+          exit = { code, signal };
         });
+        return { exit: () => exit };
+      };
+      const installedBin = (name: string, files: Record<string, string>) => {
+        const bin = join(root, name, 'bin');
+        mkdirSync(bin, { recursive: true });
+        for (const [file, text] of Object.entries(files)) {
+          writeFileSync(join(bin, file), text);
+          chmodSync(join(bin, file), 0o700);
+        }
+        return bin;
       };
 
-      const brokenBin = join(root, 'installed', 'bin');
-      mkdirSync(brokenBin, { recursive: true });
-      writeFileSync(join(brokenBin, 'rmdir'), '#!/bin/sh\nexit 1\n');
-      chmodSync(join(brokenBin, 'rmdir'), 0o700);
       const broken = writeRelayScript(join(root, 'broken-hooks'), home, {
-        PATH: [brokenBin, '/usr/bin', '/bin'].join(delimiter),
+        PATH: [installedBin('broken', { rmdir: '#!/bin/sh\nexit 1\n' }), '/usr/bin', '/bin'].join(
+          delimiter,
+        ),
       });
       writeFileSync(lock, deadOwner());
-      expect(send(broken, 'claude-code_1-1-a.json').status).toBe(0);
+      const first = start(broken, 'claude-code_1-1-a.json');
+      await waitUntil('the first sender to exit', () => first.exit() !== undefined);
+      expect(first.exit()).toEqual({ code: 0, signal: null });
       expect(existsSync(join(pending, 'claude-code_1-1-a.ready.json'))).toBe(true);
       expect(existsSync(guard)).toBe(true);
 
-      // Another owner dies holding the lock. With the guard still there, nobody may reclaim it: a
-      // sender spins on its attempt budget instead of publishing.
+      // Another owner dies holding the lock. The lock loop is the relay's only `sleep`, so a sender
+      // that has slept has failed to take the lock and failed to take the guard. From then on it may
+      // not publish while the guard is there; it spins on its attempt budget instead.
+      const spun = join(root, 'spun');
       const relay = writeRelayScript(join(home, 'hooks'), home, {
-        PATH: ['/usr/bin', '/bin'].join(delimiter),
+        PATH: [
+          installedBin('observed', { sleep: `#!/bin/sh\n: > '${spun}'\nexec /bin/sleep "$@"\n` }),
+          '/usr/bin',
+          '/bin',
+        ].join(delimiter),
       });
       const deadLock = deadOwner();
       writeFileSync(lock, deadLock);
-      const spinning = send(relay, 'claude-code_2-1-spin.json', 1_500);
-      expect(spinning.signal).toBe('SIGTERM');
+      const spinner = start(relay, 'claude-code_2-1-spin.json');
+      await waitUntil('the sender to meet the guard', () => existsSync(spun));
+      expect(spinner.exit()).toBeUndefined();
       expect(existsSync(join(pending, 'claude-code_2-1-spin.ready.json'))).toBe(false);
       expect(readFileSync(lock, 'utf8')).toBe(deadLock);
+      expect(existsSync(guard)).toBe(true);
+
       const abandoned = new Date(Date.now() - STALE_HOOK_QUOTA_REAPING_MS - 1_000);
       utimesSync(guard, abandoned, abandoned);
+      const warnings: string[] = [];
       new HookIngress({
         adapters: [],
         registry: { ingest: () => 1, flush: () => true } as unknown as SessionRegistry,
@@ -510,21 +547,23 @@ describe('the installed hook relay', () => {
         spoolDir: join(home, 'spool'),
         breakerFile: join(home, 'hooks-off'),
         userHome: root,
-        log: createLogger('silent'),
+        log: { info() {}, debug() {}, warn: (message) => warnings.push(message) },
       }).drainSpool();
-      expect(existsSync(guard)).toBe(false);
+      // Not asserted on the filesystem: the live sender may take a fresh guard the moment it is gone.
+      expect(warnings).toContain('abandoned relay reaping guard removed');
 
-      const started = Date.now();
-      expect(send(relay, 'claude-code_2-2-b.json').status).toBe(0);
-      expect(Date.now() - started).toBeLessThan(10_000);
-      expect(existsSync(join(pending, 'claude-code_2-2-b.ready.json'))).toBe(true);
+      // The same sender, still within its budget, now reclaims the dead owner's lock and publishes.
+      await waitUntil('the spinning sender to exit', () => spinner.exit() !== undefined);
+      expect(spinner.exit()).toEqual({ code: 0, signal: null });
+      expect(existsSync(join(pending, 'claude-code_2-1-spin.ready.json'))).toBe(true);
       expect(existsSync(lock)).toBe(false);
       expect(existsSync(guard)).toBe(false);
     } finally {
+      for (const sender of senders) if (sender.exitCode === null) sender.kill('SIGKILL');
       isolation.dispose();
       rmSync(root, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, 240_000);
 
   /**
    * The regression that matters most, and the cheapest one to state: an earlier relay measured the
