@@ -112,10 +112,12 @@ alone, under both resolution conditions. CI runs the same check on every push.
 
 The package's npm trusted publisher is staged-only ("Allow npm publish" is off), so the workflow
 runs `npm stage publish`, which first shipped in npm 12.0.0. The unprivileged verification job
-fetches that npm at a pinned version and checks it against the registry's published integrity; the
-publish job, which holds the OIDC identity, receives it checksummed beside the package and runs it
-from the tarball without installing or fetching anything. To move to a newer npm, change the
-version and the pinned `npm view npm@<version> dist.integrity` together. A staged version is not installable. Every release therefore needs a second,
+fetches that npm at a pinned version, before any dependency code runs, and checks it against the
+registry's published integrity; the publish job, which holds the OIDC identity, receives it beside
+the package, checks it again against the same pin read from the workflow file rather than against
+anything the verification job reported, and runs it from the tarball without installing or fetching
+anything. To move to a newer npm, change `NPM_CLI_VERSION` and `NPM_CLI_INTEGRITY` (the pinned
+`npm view npm@<version> dist.integrity`) together. A staged version is not installable. Every release therefore needs a second,
 human step: a maintainer signs in to npmjs.com, opens **Staged Packages**, checks the staged version
 and its provenance against the workflow run, and approves it with 2FA (or runs
 `npm stage approve <stage-id>`, which also prompts for 2FA). Reject a staged version that does not
