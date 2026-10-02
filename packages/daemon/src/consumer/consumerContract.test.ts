@@ -604,7 +604,15 @@ describe('consumer documents', () => {
   it('does not serve Salidium’s own sessions or unknown ones', async () => {
     for (const segment of [encodeURIComponent(INTERNAL_ID), encodeURIComponent('codex:unknown')])
       expect((await get(`/consumer/v1/sessions/${segment}/report`)).status).toBe(404);
-    expect((await get('/consumer/v1/sessions/%E0%A4%A/report')).status).toBe(400);
+  });
+
+  it('answers a session id with malformed percent-encoding as a bad request, not a failure', async () => {
+    for (const segment of ['%E0%A4%A', '%', 'claude-code%3A%ZZ']) {
+      const { status, headers, body } = await get(`/consumer/v1/sessions/${segment}/report`);
+      expect(status, segment).toBe(400);
+      expect(headers.get('cache-control')).toBe('no-store');
+      expect(exactly(ConsumerErrorSchema, body).error).toBe('bad-request');
+    }
   });
 });
 

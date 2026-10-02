@@ -281,8 +281,10 @@ export function createHttpServer(deps: HttpServerDeps): Server {
     }
     const acknowledge = /^\/api\/operations\/alerts\/([^/]+)\/acknowledge$/.exec(url.pathname);
     if (req.method === 'POST' && acknowledge?.[1] && deps.operations) {
+      const alertId = decodeSegment(acknowledge[1]);
+      if (alertId === undefined) return badEncoding(res);
       try {
-        return json(res, 200, deps.operations.acknowledgeAlert(decodeURIComponent(acknowledge[1])));
+        return json(res, 200, deps.operations.acknowledgeAlert(alertId));
       } catch (error) {
         if (String(error).includes('unknown alert'))
           return json(res, 404, { error: 'unknown alert' });
@@ -307,7 +309,9 @@ export function createHttpServer(deps: HttpServerDeps): Server {
     }
     const disconnect = /^\/api\/collection\/hooks\/([^/]+)$/.exec(url.pathname);
     if (req.method === 'DELETE' && disconnect?.[1] && deps.collection) {
-      const status = deps.collection.disconnect(decodeURIComponent(disconnect[1]));
+      const provider = decodeSegment(disconnect[1]);
+      if (provider === undefined) return badEncoding(res);
+      const status = deps.collection.disconnect(provider);
       return status ? json(res, 200, status) : json(res, 404, { error: 'unknown provider' });
     }
     if (req.method === 'GET' && url.pathname === '/api/sessions')
@@ -405,7 +409,8 @@ export function createHttpServer(deps: HttpServerDeps): Server {
 
     const m = /^\/api\/sessions\/([^/]+)(?:\/(.*))?$/.exec(url.pathname);
     if (m?.[1]) {
-      const sessionId = decodeURIComponent(m[1]);
+      const sessionId = decodeSegment(m[1]);
+      if (sessionId === undefined) return badEncoding(res);
       const rest = m[2] ?? '';
       if (req.method === 'DELETE' && rest === '') {
         registry.forget(sessionId);
@@ -477,7 +482,8 @@ export function createHttpServer(deps: HttpServerDeps): Server {
           return streamSession(res, sessionId, after);
         }
         case rest.startsWith('raw/'): {
-          const eventId = decodeURIComponent(rest.slice(4));
+          const eventId = decodeSegment(rest.slice(4));
+          if (eventId === undefined) return badEncoding(res);
           return rawRecord(res, sessionId, eventId);
         }
         default:
@@ -672,7 +678,12 @@ export function createHttpServer(deps: HttpServerDeps): Server {
   }
 
   function serveStatic(res: ServerResponse, dist: string, pathname: string): void {
-    const rel = normalize(decodeURIComponent(pathname)).replace(/^(\.\.[/\\])+/, '');
+    const decoded = decodeSegment(pathname);
+    if (decoded === undefined) {
+      badEncoding(res);
+      return;
+    }
+    const rel = normalize(decoded).replace(/^(\.\.[/\\])+/, '');
     let file = join(dist, rel === '/' || rel === '' ? 'index.html' : rel);
     if (!file.startsWith(dist)) {
       json(res, 403, { error: 'forbidden' });
@@ -732,6 +743,22 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.end(JSON.stringify(body));
+}
+
+/**
+ * `decodeURIComponent` throws on a malformed escape such as `%E0%A4%A`. That is the client's
+ * mistake, so it answers 400 through `badEncoding` rather than reaching the 500 handler.
+ */
+function decodeSegment(raw: string): string | undefined {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+function badEncoding(res: ServerResponse): void {
+  json(res, 400, { error: 'invalid percent-encoding in path' });
 }
 
 function revisionHeader(req: IncomingMessage): number | undefined | 'invalid' {
