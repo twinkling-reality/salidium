@@ -30,6 +30,7 @@ import {
 } from './mapping.ts';
 import {
   countMessagesThrough,
+  type MessageRow,
   maxSeqThrough,
   readLatestBefore,
   readMessage,
@@ -38,6 +39,7 @@ import {
   readSession,
   readSessions,
   type SessionRow,
+  turnBoundaryAfter,
 } from './records.ts';
 import { withOpenCodeStore } from './storeAccess.ts';
 import { patchPaths } from './toolMapping.ts';
@@ -101,6 +103,26 @@ function depth(session: SessionRow, byId: ReadonlyMap<string, SessionRow>): numb
 
 function lastActive(session: SessionRow): number {
   return Math.max(session.timeCreated, session.timeUpdated, session.timeIdle ?? 0);
+}
+
+function abandonedStepWarning(ctx: SessionContext, row: MessageRow): CanonicalEvent {
+  return {
+    id: makeEventId(ctx.sessionId, row.id, 'warning', 'abandoned'),
+    sessionId: ctx.sessionId,
+    ts: ctx.observedAt,
+    tsSource: 'ingest',
+    agentId: ctx.agentId,
+    source: {
+      provider: OPENCODE_PROVIDER_ID,
+      channel: 'transcript',
+      version: ctx.session.version,
+      ref: { path: ctx.storePath, line: row.seq, recordId: `${row.sessionId}/${row.id}` },
+    },
+    kind: 'ingest.warning',
+    code: 'source-gap',
+    detail:
+      'OpenCode left a model step unfinished before a later turn; its tool calls and results are unknown.',
+  };
 }
 
 function revertWarning(
@@ -192,6 +214,24 @@ function rawView(
     const { output: _output, ...rest } = data;
     const command = asString(data.command);
     return { record: { type, ...rest }, paths: [], commands: command ? [command] : [] };
+  }
+  if (type === 'user' && Array.isArray(data.files)) {
+    // Attached files travel inside the prompt as base64. The raw view names them, never shows
+    // their contents, and reports their paths for the caller's sensitive-file check.
+    const paths: string[] = [];
+    const files = data.files.map((file) => {
+      const f = asObject(file) ?? {};
+      const { data: content, ...rest } = f;
+      const uri = asString(asObject(f.source)?.uri);
+      const name = asString(f.name);
+      if (uri) paths.push(uri.startsWith('file://') ? decodeURIComponent(uri.slice(7)) : uri);
+      if (name) paths.push(name);
+      return {
+        ...rest,
+        data: `[attachment omitted by Salidium: ${typeof content === 'string' ? content.length : 0} base64 characters]`,
+      };
+    });
+    return { record: { type, ...data, files }, paths, commands: [] };
   }
   return { record: { type, ...data }, paths: [], commands: [] };
 }
@@ -286,6 +326,7 @@ export function createOpenCodeStoreSource(): StoreSource {
             bytesLeft,
           );
           const rows = read.rows;
+          let blocked: typeof rows = [];
           budget -= rows.length;
           bytesLeft -= read.bytes;
           if (rows.length > 0) {
@@ -301,7 +342,7 @@ export function createOpenCodeStoreSource(): StoreSource {
                 ),
               ),
             };
-            for (const row of rows) {
+            for (const [index, row] of rows.entries()) {
               const data = parseRowData(row);
               if (isCopiedForkRow(session, row)) {
                 // Inherited history: the source session reports it once, under its own identity.
@@ -309,13 +350,31 @@ export function createOpenCodeStoreSource(): StoreSource {
                 count += 1;
                 continue;
               }
-              if (!isFinalRow(row, data)) break;
+              if (!isFinalRow(row, data)) {
+                // A row OpenCode is still writing waits for a later poll, unless a later turn has
+                // already begun or ended, in which case OpenCode abandoned it (it stopped mid-step)
+                // and waiting would hold back every row after it for good.
+                if (!turnBoundaryAfter(store, session.id, row.seq)) {
+                  blocked = rows.slice(index);
+                  break;
+                }
+                if (row.type === 'assistant') events.push(abandonedStepWarning(ctx, row));
+                position = row.seq;
+                count += 1;
+                continue;
+              }
               events.push(...mapMessage(ctx, row, turn, data));
               position = row.seq;
               count += 1;
             }
           }
-          const exhausted = budget <= 0 || bytesLeft <= 0;
+          // Rows read past a blocking row were not used; return them to the budgets, so a session
+          // waiting on a running step neither spends the poll nor asks to be read again at once.
+          for (const row of blocked) {
+            budget += 1;
+            if (row.data !== undefined) bytesLeft += row.size;
+          }
+          const exhausted = blocked.length === 0 && (budget <= 0 || bytesLeft <= 0);
           if (exhausted) more = true;
           else seen.set(key, { sequence, position, count });
 

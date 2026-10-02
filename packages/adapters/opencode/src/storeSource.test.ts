@@ -367,6 +367,68 @@ describe('OpenCode store source', () => {
     expect(h.poll()).toEqual([]);
   });
 
+  it('never spins on a step OpenCode did not finish', () => {
+    // A step left running with more rows after it and no later turn: the session waits, and the
+    // poll neither asks to be read again nor holds back a healthy session sorted after it.
+    const stuck = store.session({ directory: PROJECT, timeCreated: T0 });
+    store.message(stuck, 'user', userData('start', T0 + 1));
+    store.message(
+      stuck,
+      'assistant',
+      stepData(T0 + 2, [tools.running('call_r', T0 + 3, 'shell', { command: 'sleep 99' })], {
+        running: true,
+      }),
+    );
+    for (let i = 0; i < 30; i++)
+      store.message(stuck, 'compaction', {
+        time: { created: T0 + 4 + i },
+        status: 'completed',
+        reason: 'auto',
+      });
+    const healthy = store.session({ directory: PROJECT, timeCreated: T0 + 1000 });
+    store.message(healthy, 'user', userData('healthy', T0 + 1001));
+    const source = createOpenCodeStoreSource();
+    const result = source.poll({
+      path,
+      activeSinceMs: 0,
+      cursors: new Map(),
+      observedAt: '2026-10-02T13:00:00.000Z',
+      maxRecordBytes: 8 * 1024 * 1024,
+      rowBudget: 20,
+    });
+    expect(result.more).toBe(false);
+    const healthyEvents =
+      result.batches.find((b) => b.cursor.providerSessionId === healthy)?.events ?? [];
+    expect(of(healthyEvents, 'turn.started').map((e) => e.prompt)).toEqual(['healthy']);
+    expect(result.batches.find((b) => b.cursor.providerSessionId === stuck)?.cursor.position).toBe(
+      1,
+    );
+  });
+
+  it('passes a step OpenCode abandoned once a later turn exists, and says so', () => {
+    const id = store.session({ directory: PROJECT, timeCreated: T0 });
+    store.message(id, 'user', userData('first', T0 + 1));
+    store.message(
+      id,
+      'assistant',
+      stepData(T0 + 2, [tools.running('call_r', T0 + 3, 'shell', { command: 'sleep 99' })], {
+        running: true,
+      }),
+    );
+    store.message(id, 'user', userData('second', T0 + 10));
+    store.message(id, 'assistant', stepData(T0 + 11, [{ type: 'text', text: 'Done.' }]));
+    store.message(id, 'idle', idleData('succeeded', T0 + 12));
+    const events = harness().poll();
+    expect(of(events, 'turn.started').map((e) => e.prompt)).toEqual(['first', 'second']);
+    expect(of(events, 'ingest.warning')).toEqual([
+      expect.objectContaining({
+        code: 'source-gap',
+        detail: expect.stringContaining('unfinished'),
+      }),
+    ]);
+    expect(of(events, 'turn.ended')).toHaveLength(1);
+  });
+
   it('records a declined permission as a rejected call and an interrupt as interrupted', () => {
     const id = store.session({ directory: PROJECT });
     store.message(id, 'user', userData('ls please', T0 + 1));
@@ -706,6 +768,29 @@ describe('OpenCode raw records', () => {
     const shell = cite((e) => e.source.ref?.recordId === `${id}/${person.id}`);
     expect(shell.raw).not.toContain('SYNTHETIC');
     expect(shell).toMatchObject({ commands: ['cat .env'] });
+
+    // A prompt's attached file is named, not shown.
+    const withFile = store.message(id, 'user', {
+      time: { created: T0 + 20 },
+      text: 'see attached',
+      files: [
+        {
+          data: Buffer.from('SYNTHETIC_SECRET=not-real').toString('base64'),
+          mime: 'text/plain',
+          source: { type: 'uri', uri: `file://${PROJECT}/.env` },
+          name: '.env',
+        },
+      ],
+    });
+    const prompt = source.readRawRecord(
+      path,
+      harness()
+        .poll()
+        .find((e) => e.source.ref?.recordId === `${id}/${withFile.id}`)?.source.ref ?? {},
+    );
+    expect(prompt.raw).toBeDefined();
+    expect(prompt.raw).not.toContain(Buffer.from('SYNTHETIC_SECRET=not-real').toString('base64'));
+    expect(prompt).toMatchObject({ paths: [`${PROJECT}/.env`, '.env'] });
 
     expect(
       source.readRawRecord(path, {

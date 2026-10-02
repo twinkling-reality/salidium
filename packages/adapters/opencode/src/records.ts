@@ -180,6 +180,20 @@ export function countMessagesThrough(
   return num(row?.n) ?? 0;
 }
 
+/** Whether a later `user` or `idle` row exists: a turn began or ended after `seq`. */
+export function turnBoundaryAfter(
+  store: OpenCodeStoreConnection,
+  sessionId: string,
+  seq: number,
+): boolean {
+  const row = store.get(
+    "SELECT count(*) AS n FROM session_message WHERE session_id = ? AND seq > ? AND type IN ('user', 'idle')",
+    sessionId,
+    seq,
+  );
+  return (num(row?.n) ?? 0) > 0;
+}
+
 /** The highest row seq of the session at or below `seq`, or -1. */
 export function maxSeqThrough(
   store: OpenCodeStoreConnection,

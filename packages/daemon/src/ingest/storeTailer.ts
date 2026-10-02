@@ -24,6 +24,7 @@ interface Tracked {
 const DEFAULT_POLL_MS = 1000;
 const DEFAULT_ROW_BUDGET = 2000;
 const MAX_RETRY_MS = 60_000;
+const MAX_ROUNDS_PER_TICK = 500;
 
 /**
  * Polls providers whose durable record is a local database. The source reads; this class decides
@@ -233,6 +234,13 @@ export class StoreTailer {
     for (let round = 0; ; round++) {
       if (this.stopped || this.paused) {
         complete = false;
+        break;
+      }
+      // A backstop: a source that keeps asking for more is read again on the next tick rather
+      // than holding this one, and the providers after it, forever.
+      if (round >= MAX_ROUNDS_PER_TICK) {
+        complete = false;
+        this.log.warn('provider store read did not finish in one tick', { provider: provider.id });
         break;
       }
       const result = provider.source.poll({
