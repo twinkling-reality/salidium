@@ -349,6 +349,15 @@ describe('credentials in structured text', () => {
     expect(r.redact('{"api_key": ["Zq8rL0xS"]}').text).toBe('{"api_key": ["[SECRET#1]"]}');
   });
 
+  it('reserves the numbers of text it will redact later', () => {
+    const r = createRedactor();
+    expect(r.reserve('no placeholder here')).toBe(0);
+    expect(r.reserve('ghp_[GITHUB_TOKEN#2] and [SECRET#4]')).toBe(4);
+    expect(r.reserve('[SECRET#3]')).toBe(3);
+    expect(r.redact('DB_PASSWORD=Zq8rL0xS').text).toBe('DB_PASSWORD=[SECRET#5]');
+    expect(r.findingsCount).toBe(1);
+  });
+
   it('stays linear on input shaped to make a key match backtrack', () => {
     // A header-name boundary that let every `-` or `_` start a match took 558 ms at 16 KB and grew
     // fourfold with each doubling; base64url data has one of those every few characters. Linear

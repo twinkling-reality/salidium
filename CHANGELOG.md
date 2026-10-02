@@ -22,8 +22,12 @@
   `DB_PASSWORD=hunter2` are redacted. Other values keep the earlier bar. A repeated secret keeps
   one placeholder whether it is bare, quoted, or escaped, though a header and a key-value pair
   still get separate placeholders. A placeholder already in a text keeps its number when that text
-  is redacted again. The consumer boundary redacts a document's fields one at a time, though, so a
-  secret it finds first can still share a number with a placeholder stored in a later field.
+  is redacted again. The consumer boundary numbers what it finds past every placeholder stored
+  anywhere in the report or list entry it is building, so a placeholder never names two secrets
+  there; it uses one redactor per report or entry rather than one for the daemon's life, so numbers
+  no longer depend on which session or request came first. A secret found only at the boundary
+  gets a new number even when a stored placeholder in the same report stands for it, and
+  placeholders in two list entries are numbered by their own sessions.
   Not covered: an unquoted lowercase key with a short value (`password: hunter2` in YAML,
   `password=hunter2` in an ini file); a quoted value containing whitespace beyond the leading run
   the earlier rules read; the part of an unquoted environment value after a `,` or an unclosed

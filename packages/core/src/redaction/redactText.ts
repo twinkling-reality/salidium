@@ -477,6 +477,12 @@ function keyedValue(
 
 export interface Redactor {
   redact(text: string): RedactionResult;
+  /**
+   * Takes every placeholder number already in `text`, so this redactor never hands one of them out
+   * for a different secret, and returns the highest, or 0. `redact` does this for its own text; a
+   * caller redacting several texts into one document reserves the later ones first.
+   */
+  reserve(text: string): number;
   readonly findingsCount: number;
 }
 
@@ -497,10 +503,19 @@ export function createRedactor(): Redactor {
     }
     return n;
   };
+  const reserve = (text: string): number => {
+    let highest = 0;
+    if (text.includes('#'))
+      for (const placeholder of text.matchAll(PLACEHOLDER_NUMBER))
+        highest = Math.max(highest, Number(placeholder[1]));
+    counter = Math.max(counter, highest);
+    return highest;
+  };
   return {
     get findingsCount() {
       return findingsCount;
     },
+    reserve,
     redact(text: string): RedactionResult {
       if (!text) return { text, findings: [] };
       const lower = text.toLowerCase();
@@ -562,9 +577,7 @@ export function createRedactor(): Redactor {
       if (spans.length === 0) return { text, findings: [] };
       // Text redacted at ingest is redacted again where it crosses a boundary, by a fresh redactor.
       // A number already in the text is taken, or two different secrets would share a placeholder.
-      if (text.includes('#'))
-        for (const placeholder of text.matchAll(PLACEHOLDER_NUMBER))
-          counter = Math.max(counter, Number(placeholder[1]));
+      reserve(text);
       spans.sort((a, b) => a.start - b.start || b.end - a.end);
       const merged: typeof spans = [];
       for (const s of spans) {
