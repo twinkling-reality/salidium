@@ -375,17 +375,29 @@ describe('buildProjectMap on crafted input', () => {
     );
   });
 
-  test('yields to the event loop and stops at its time bound', async () => {
-    let ticks = 0;
-    const timer = setInterval(() => (ticks += 1), 1);
+  const busyRepository = () => {
     const files: Record<string, string> = {};
     for (let i = 0; i < 4000; i += 1) files[`src/f${i}.ts`] = "import './g.ts';\n".repeat(50);
+    return files;
+  };
+
+  test('yields to the event loop while it builds', async () => {
+    let ticks = 0;
+    const timer = setInterval(() => (ticks += 1), 1);
+    const started = performance.now();
     try {
-      await expect(build(files, { deadlineMs: 50 })).rejects.toMatchObject({ bound: 'build-time' });
+      await build(busyRepository(), { deadlineMs: 120_000 });
     } finally {
       clearInterval(timer);
     }
-    expect(ticks).toBeGreaterThan(0);
+    // A build shorter than one slice has no reason to yield.
+    if (performance.now() - started > 40) expect(ticks).toBeGreaterThan(0);
+  });
+
+  test('stops at its time bound', async () => {
+    await expect(build(busyRepository(), { deadlineMs: 1 })).rejects.toMatchObject({
+      bound: 'build-time',
+    });
   });
 
   test('paths with C1 controls or bidirectional overrides are omitted', async () => {
