@@ -3,12 +3,13 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
 /*
- * Keeping a test away from the developer's real Claude Code and Codex state.
+ * Keeping a test away from the developer's real Claude Code, Codex and OpenCode state.
  *
  * Provider state is found in two ways. Code that is handed a `userHome` looks under it, unless
- * `CLAUDE_CONFIG_DIR` or `CODEX_HOME` says otherwise, in which case the variable wins. A process a
- * test spawns is handed nothing and inherits everything, so it reads the real home, and with the
- * real `claude` and `codex` on its PATH it can reach a hosted model from inside a test.
+ * `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `XDG_DATA_HOME` says otherwise, in which case the variable
+ * wins. A process a test spawns is handed nothing and inherits everything, so it reads the real
+ * home, and with the real `claude`, `codex` or `opencode` on its PATH it can reach a hosted model
+ * from inside a test.
  *
  * Neither environment the developer can choose is safe for both. With the variables unset a
  * spawned daemon watches their live sessions; with them set to scratch directories every test that
@@ -17,11 +18,19 @@ import { delimiter, join } from 'node:path';
  * `userHome` mean what it says, and every spawned process is given scratch directories of its own.
  */
 
-/** The variables that redirect provider state away from a `userHome` a caller passed. */
-export const PROVIDER_STATE_OVERRIDES = ['CLAUDE_CONFIG_DIR', 'CODEX_HOME'] as const;
+/**
+ * The variables that redirect provider state away from a `userHome` a caller passed.
+ * `XDG_DATA_HOME` locates OpenCode's store, which also holds its credentials; cleared, code given a
+ * `userHome` looks under that home's `.local/share` instead of the developer's real data directory.
+ */
+export const PROVIDER_STATE_OVERRIDES = [
+  'CLAUDE_CONFIG_DIR',
+  'CODEX_HOME',
+  'XDG_DATA_HOME',
+] as const;
 
 /** Provider command line tools a spawned daemon could otherwise find and run. */
-export const PROVIDER_EXECUTABLES = ['claude', 'codex'] as const;
+export const PROVIDER_EXECUTABLES = ['claude', 'codex', 'opencode'] as const;
 
 /**
  * Removes the provider state overrides, so code given a `userHome` resolves provider state under
