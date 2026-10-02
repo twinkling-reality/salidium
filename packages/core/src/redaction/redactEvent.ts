@@ -16,6 +16,17 @@ export interface RedactionContext {
 }
 
 /**
+ * Whether a call reads a sensitive file, whatever shape its result takes: a native read, an MCP
+ * filesystem read, or a search inside one (Grep over `.env` returns its lines).
+ */
+function readsSensitiveFile(input: ToolInput | undefined): boolean {
+  if (input?.kind === 'mcp') return isSensitiveMcpFileRead(input);
+  if (input?.kind === 'fileRead' || input?.kind === 'search')
+    return input.path !== undefined && isSensitivePath(input.path);
+  return false;
+}
+
+/**
  * Applies redaction to every free-text field of an event, and structural suppression to reads
  * or dumps of sensitive files. Returns the (possibly new) event and the number of findings.
  * Never modifies the caller's object.
@@ -101,8 +112,10 @@ export function redactEvent(
               ...event,
               result: {
                 ...result,
+                // A file moved out of a sensitive path carries that file's contents in its hunks.
                 changes: result.changes.map((c) =>
-                  isSensitivePath(c.path)
+                  isSensitivePath(c.path) ||
+                  (c.movedFrom !== undefined && isSensitivePath(c.movedFrom))
                     ? { ...c, hunks: undefined }
                     : c.hunks
                       ? { ...c, hunks: c.hunks.map((h) => ({ ...h, lines: h.lines.map(r) })) }
@@ -127,7 +140,7 @@ export function redactEvent(
           };
         case 'generic': {
           const input = context.inputForCall?.(event.callId);
-          if (input?.kind === 'mcp' && isSensitiveMcpFileRead(input)) {
+          if (readsSensitiveFile(input)) {
             return {
               event: { ...event, result: { ...result, excerpt: SUPPRESSED } },
               findings,
@@ -142,8 +155,16 @@ export function redactEvent(
           return { event, findings };
       }
     }
-    case 'tool.failed':
+    case 'tool.failed': {
+      // A failure keeps the output before it: `cat .env; exit 1` fails with the file in it.
+      const command = context.commandForCall?.(event.callId);
+      if (
+        (command !== undefined && isCredentialDumpCommand(command)) ||
+        readsSensitiveFile(context.inputForCall?.(event.callId))
+      )
+        return { event: { ...event, errorExcerpt: SUPPRESSED }, findings };
       return { event: { ...event, errorExcerpt: r(event.errorExcerpt) }, findings };
+    }
     case 'subagent.started':
       return { event: { ...event, description: opt(event.description) }, findings };
     case 'subagent.ended':

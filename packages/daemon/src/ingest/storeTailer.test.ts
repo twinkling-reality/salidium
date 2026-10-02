@@ -302,6 +302,83 @@ describe('OpenCode through the daemon', () => {
     },
   );
 
+  it.each([
+    ['filesystem_read_file', { uri: `file://${PROJECT}/%2Eenv` }, 100],
+    ['file_system_read_file', { file_path: `file://localhost${PROJECT}/.%65nv.local` }, 110],
+    ['read', { filePath: `${PROJECT}//./.ENV.` }, 120],
+    ['read', { filePath: `${PROJECT}/src/../%2Essh/id_rsa` }, 130],
+  ] as const)(
+    'suppresses a %s of an encoded sensitive path in the stored event and the raw view',
+    async (name, input, at) => {
+      const step = store.message(
+        nativeId,
+        'assistant',
+        stepData(T0 + at, [
+          {
+            type: 'tool',
+            id: 'call_enc',
+            name,
+            executed: false,
+            state: {
+              status: 'completed',
+              input,
+              content: [{ type: 'text', text: 'SYNTHETIC_ENCODED_SECRET=not-real' }],
+              metadata: {},
+            },
+            time: { created: T0 + at + 1, completed: T0 + at + 2 },
+          },
+        ]),
+      );
+      const callId = `${step.id}/call_enc`;
+      const all = await waitFor(async () => {
+        const list = await events();
+        return list.some((e) => e.kind === 'tool.completed' && e.callId === callId)
+          ? list
+          : undefined;
+      });
+      const mine = all.filter((e) => 'callId' in e && e.callId === callId);
+      expect(mine.length).toBeGreaterThan(0);
+      expect(JSON.stringify(mine)).not.toContain('SYNTHETIC_ENCODED_SECRET');
+      for (const event of mine) {
+        const raw = await api<{ raw: unknown; reason?: string }>(
+          `/api/sessions/${encodeURIComponent(sessionId)}/raw/${encodeURIComponent(event.id)}`,
+        );
+        expect(raw.raw).toBeNull();
+        expect(raw.reason).toMatch(/^suppressed/);
+      }
+    },
+  );
+
+  it.each([
+    [`file://${PROJECT}/%2Eenv`, 140],
+    [`file://${PROJECT}/.%65nv.local`, 150],
+    [`file://localhost${PROJECT}/%2essh/ID_RSA`, 160],
+    [`file://${PROJECT}/.E%4EV.`, 170],
+  ])('refuses the raw view of a prompt attaching %s', async (uri, at) => {
+    const message = store.message(nativeId, 'user', {
+      time: { created: T0 + at },
+      text: `attached ${at}`,
+      files: [
+        {
+          data: Buffer.from('SYNTHETIC_ATTACHED_SECRET=not-real').toString('base64'),
+          mime: 'text/plain',
+          source: { type: 'uri', uri },
+          name: 'notes.txt',
+        },
+      ],
+    });
+    const prompt = await waitFor(async () =>
+      (await events()).find((e) => e.source.ref?.recordId === `${nativeId}/${message.id}`),
+    );
+    const raw = await api<{ raw: unknown; reason?: string }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/raw/${encodeURIComponent(prompt.id)}`,
+    );
+    expect(raw).toMatchObject({
+      raw: null,
+      reason: 'suppressed: sensitive file contents or credential dump',
+    });
+  });
+
   it('answers a consumer v1 lookup by provider salidium/opencode and the OpenCode session id', async () => {
     const { token } = createConsumerCredential(salidiumHome, 'local-tool-test');
     const discovery = await (

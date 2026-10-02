@@ -238,14 +238,6 @@ function partSubjects(part: unknown): { paths: string[]; commands: string[] } {
   return { paths, commands: command ? [command] : [] };
 }
 
-function safeDecode(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
 /**
  * What the raw view of a row shows. An assistant step holds every part of the step, so an event
  * gets only its own part (or, for usage, the step's fields without content); a person's shell
@@ -294,7 +286,9 @@ function rawView(
       const name = asString(f.name);
       // A `data:` URL is the file's content again; it is neither shown nor treated as a path.
       const inline = uri?.startsWith('data:') === true;
-      if (uri && !inline) paths.push(uri.startsWith('file://') ? safeDecode(uri.slice(7)) : uri);
+      // Given as written: the sensitive-path check decodes a `file:` URI itself, and treats one
+      // it cannot decode as sensitive rather than falling back to the undecoded text.
+      if (uri && !inline) paths.push(uri);
       if (name) paths.push(name);
       return {
         ...rest,

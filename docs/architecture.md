@@ -271,7 +271,11 @@ the current file line as historical evidence. Fingerprint backfill only succeeds
 redacted event still matches the immutable stored event apart from its fingerprint and sequence.
 
 Structural suppression runs before general text redaction for credential dumps and reads of
-sensitive files. General redaction then replaces recognized secrets with stable placeholders so a
+sensitive files. A path is compared in every spelling a tool might open: as given, as a `file:`
+URI's path, percent-decoded, with separators, `.` and `..` segments and trailing dots normalized,
+and without regard to case. The comparison is lexical and never consults the filesystem, and a
+path whose percent-encoding cannot be decoded counts as sensitive. Shell arguments are not
+percent-decoded, since a shell passes them through as written. General redaction then replaces recognized secrets with stable placeholders so a
 repeated secret remains recognizable without revealing it. Provider records are not copied into a
 hosted Salidium service.
 

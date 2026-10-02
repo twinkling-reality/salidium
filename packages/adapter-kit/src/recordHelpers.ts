@@ -109,11 +109,13 @@ export function pathArgumentMetadata(value: unknown): { paths: string[]; truncat
           truncated = true;
         } else {
           // Preserve the basename as well as the head when a hostile or malformed path is huge.
-          const bounded =
-            current.length <= MAX_PATH_ARGUMENT_CHARS
-              ? current
-              : `${current.slice(0, 490)}…${current.slice(-490)}`;
-          paths.push(bounded);
+          // The cut can hide what the path names (a `..` run around `.aws/`), so it also counts
+          // as truncated metadata and the read is suppressed rather than trusted.
+          if (current.length <= MAX_PATH_ARGUMENT_CHARS) paths.push(current);
+          else {
+            truncated = true;
+            paths.push(`${current.slice(0, 490)}…${current.slice(-490)}`);
+          }
         }
       }
       return;

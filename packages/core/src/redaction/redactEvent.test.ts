@@ -183,3 +183,82 @@ describe('command credential-output suppression', () => {
     });
   });
 });
+
+describe('reads that are not shaped as reads', () => {
+  const event = (result: CanonicalEvent extends never ? never : object): CanonicalEvent =>
+    ({
+      id: 'codex:test#result:r1',
+      sessionId: 'codex:test',
+      provider: 'codex',
+      ts: '2026-10-02T00:00:00.000Z',
+      tsSource: 'provider',
+      source: { provider: 'codex', channel: 'rollout' },
+      kind: 'tool.completed',
+      callId: 'r1',
+      toolName: 'view_image',
+      result,
+      isError: false,
+    }) as CanonicalEvent;
+
+  it('suppresses a generic result of an encoded sensitive file read', () => {
+    const redacted = redactEvent(
+      event({ kind: 'generic', excerpt: 'INTERNAL_THING=zzzsecretzzz' }),
+      createRedactor(),
+      { inputForCall: () => ({ kind: 'fileRead', path: 'file:///repo/%2Eenv' }) },
+    );
+    expect(JSON.stringify(redacted.event)).not.toContain('zzzsecretzzz');
+  });
+
+  it('suppresses a search inside an encoded sensitive file', () => {
+    const redacted = redactEvent(
+      event({ kind: 'generic', excerpt: 'INTERNAL_THING=zzzsecretzzz' }),
+      createRedactor(),
+      { inputForCall: () => ({ kind: 'search', query: '.', path: '/repo/.ENV' }) },
+    );
+    expect(JSON.stringify(redacted.event)).not.toContain('zzzsecretzzz');
+  });
+
+  it('suppresses the output a failed sensitive read or dump carries', () => {
+    const failed = {
+      ...event({ kind: 'generic' }),
+      kind: 'tool.failed',
+      errorExcerpt: 'Exit code 1\nINTERNAL_THING=zzzsecretzzz',
+      cause: 'error',
+    } as CanonicalEvent;
+    const byCommand = redactEvent(failed, createRedactor(), {
+      commandForCall: () => "cat $'\\x2eenv'; exit 1",
+    });
+    expect(JSON.stringify(byCommand.event)).not.toContain('zzzsecretzzz');
+    const byRead = redactEvent(failed, createRedactor(), {
+      inputForCall: () => ({ kind: 'fileRead', path: 'file:///repo/%2Eenv' }),
+    });
+    expect(JSON.stringify(byRead.event)).not.toContain('zzzsecretzzz');
+    const ordinary = redactEvent(failed, createRedactor(), {
+      commandForCall: () => 'cat src/a.ts; exit 1',
+    });
+    expect(JSON.stringify(ordinary.event)).toContain('zzzsecretzzz');
+  });
+
+  it('drops the hunks of a file moved out of an encoded sensitive path', () => {
+    const redacted = redactEvent(
+      event({
+        kind: 'fileChanges',
+        changes: [
+          {
+            path: '/repo/notes.txt',
+            movedFrom: '/repo/.%65nv',
+            change: 'move',
+            hunks: [
+              { oldStart: 1, oldLines: 0, newStart: 1, newLines: 1, lines: ['+zzzsecretzzz'] },
+            ],
+            linesAdded: 1,
+            linesRemoved: 0,
+            applied: true,
+          },
+        ],
+      }),
+      createRedactor(),
+    );
+    expect(JSON.stringify(redacted.event)).not.toContain('zzzsecretzzz');
+  });
+});
