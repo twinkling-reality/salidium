@@ -14,6 +14,7 @@ import {
 import { openCodeProvider } from '@salidium/adapter-opencode';
 import type { ExperimentalContractEntry } from '@salidium/consumer-contract';
 import type { RunState } from '@salidium/core';
+import { projectMapContractEntry } from '@salidium/project-map';
 import {
   type CollectionStatus,
   type DaemonInfo,
@@ -106,6 +107,8 @@ import {
 } from './operations/health.ts';
 import { readMaintenanceState, runQueueDrainMaintenance } from './operations/maintenance.ts';
 import { NativeAlertSink } from './operations/nativeNotifications.ts';
+import { createProjectMapRoutes } from './projectMap/routes.ts';
+import { DaemonProjectMapService } from './projectMap/service.ts';
 import { createHttpServer } from './server/httpServer.ts';
 import { HistoryWarmup } from './sessions/historyWarmup.ts';
 import { effectiveCadence } from './sessions/sessionCoordinator.ts';
@@ -651,7 +654,12 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
   let experimental: ExperimentalContractEntry[] | undefined;
   const discovery = () => {
     experimental ??= experimentalContracts(
-      () => overrides.experimentalContracts?.({ port }) ?? [],
+      () => {
+        // The project map's routes are always mounted, so its entry is always listed; which
+        // repositories it may read is `/project-map/v0/repositories`, empty until one is opted in.
+        const supplied = overrides.experimentalContracts?.({ port }) ?? [];
+        return Array.isArray(supplied) ? [projectMapContractEntry(port), ...supplied] : supplied;
+      },
       port,
       (reason) => log.warn(reason),
     );
@@ -666,10 +674,25 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
       now: (overrides.now ?? Date.now)(),
     });
   };
+  const consumerCredentials = new ConsumerCredentialVerifier(config.home, (reason) =>
+    log.warn(reason),
+  );
   const consumer = createConsumerRoutes({
     registry,
-    credentials: new ConsumerCredentialVerifier(config.home, (reason) => log.warn(reason)),
+    credentials: consumerCredentials,
     discovery,
+    ...(overrides.now ? { now: overrides.now } : {}),
+    log,
+  });
+  // Experimental: maps are built only when a request asks, and only for opted-in repositories.
+  const maps = new DaemonProjectMapService({
+    home: config.home,
+    log,
+    ...(overrides.now ? { now: overrides.now } : {}),
+  });
+  const projectMap = createProjectMapRoutes({
+    maps,
+    credentials: consumerCredentials,
     ...(overrides.now ? { now: overrides.now } : {}),
     log,
   });
@@ -682,6 +705,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
           .some((descriptor) => descriptor.adapter.id === provider && descriptor.storeSource),
       read: (provider, ref) => storeTailer.readRawRecord(provider, ref),
     },
+    projectMap,
     registry,
     hooks,
     token,
