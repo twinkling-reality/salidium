@@ -779,6 +779,67 @@ describe('consumer change feed', () => {
   });
 });
 
+/*
+ * The store keeps whatever id a provider wrote, but the contract's native identity is bounded: at
+ * most 512 characters and no control characters. A stored session outside that cannot be named in
+ * a valid document, so it is left out rather than allowed to make the whole list, or the feed a
+ * consumer reads with `readFeedMessage`, fail validation.
+ */
+describe('sessions the contract cannot identify', () => {
+  const UNREPRESENTABLE = [
+    `codex:${'x'.repeat(600)}`,
+    'codex:bad\u0001id',
+    'codex:bad\u007fid',
+    'codex:bad\nid',
+  ];
+  const NEIGHBOUR = 'codex:representable-neighbour';
+  const message = (sessionId: string) => ({
+    id: `${sessionId}#m1`,
+    sessionId,
+    ts: '2026-09-20T16:13:00.000Z',
+    tsSource: 'provider' as const,
+    source: { provider: 'codex' as const, channel: 'rollout' as const },
+    kind: 'agent.message' as const,
+    text: 'Checked the migration.',
+  });
+
+  it('leaves them out of the list and the feed, and does not report them', async () => {
+    const before = exactly(SessionListSchema, (await get('/consumer/v1/sessions?limit=2000')).body);
+    const feed = await openFeed(token);
+    expect(await feed.next()).toMatchObject({ type: 'resync' });
+    try {
+      for (const id of [...UNREPRESENTABLE, NEIGHBOUR]) {
+        daemon.registry.ingest(id, [message(id)], { cwd: CHECKOUT });
+        daemon.registry.flush(id);
+      }
+      for (const id of UNREPRESENTABLE)
+        expect(daemon.registry.summaryOf(id), 'stored as the provider wrote it').toBeDefined();
+
+      // The first message after resync is the neighbour: nothing was sent for the others.
+      expect(await feed.next()).toMatchObject({ type: 'session.changed', sessionId: NEIGHBOUR });
+
+      const after = exactly(
+        SessionListSchema,
+        (await get('/consumer/v1/sessions?limit=2000')).body,
+      );
+      expect(after.total).toBe(before.total + 1);
+      expect(after.sessions.map((s) => s.id)).toContain(NEIGHBOUR);
+      for (const id of UNREPRESENTABLE) expect(after.sessions.map((s) => s.id)).not.toContain(id);
+      const bounded = exactly(SessionListSchema, (await get('/consumer/v1/sessions?limit=1')).body);
+      expect(bounded.total).toBe(after.total);
+
+      for (const id of UNREPRESENTABLE) {
+        const report = await get(`/consumer/v1/sessions/${encodeURIComponent(id)}/report`);
+        expect(report.status, JSON.stringify(id)).toBe(404);
+        expect(exactly(ConsumerErrorSchema, report.body).error).toBe('not-found');
+      }
+    } finally {
+      feed.close();
+      for (const id of [...UNREPRESENTABLE, NEIGHBOUR]) daemon.registry.forget(id);
+    }
+  });
+});
+
 describe('consumer contract edges', () => {
   it('names the repository each revision anchor read, when the session moved into a clone', async () => {
     const { applyEvent, createInitialState, createRedactor, projectSession, summarizeSession } =

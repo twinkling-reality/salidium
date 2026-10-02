@@ -10,7 +10,12 @@ import {
   type SessionLookup,
 } from '@salidium/consumer-contract';
 import { createRedactor, projectSession } from '@salidium/core';
-import { makeSessionId, type ProviderId, parseSessionId } from '@salidium/protocol';
+import {
+  makeSessionId,
+  type ProviderId,
+  parseSessionId,
+  type SessionSummary,
+} from '@salidium/protocol';
 import type { Logger } from '../logging/logger.ts';
 import { startSse } from '../server/sse.ts';
 import { isUserSession, type SessionRegistry } from '../sessions/sessionRegistry.ts';
@@ -59,6 +64,30 @@ export function createConsumerRoutes(deps: ConsumerRouteDeps) {
       if (!credentials.stillValid(feed.credential.id)) feed.close('credential-revoked');
   }, FEED_REVOCATION_CHECK_MS);
   revocationTimer.unref();
+
+  /**
+   * The store keeps a provider's session id as the provider wrote it, but the contract's native
+   * identity is bounded (`NativeSessionIdSchema`). A session outside that cannot be named in a
+   * valid document, so it is left out of the list and the feed and its report is not found, rather
+   * than one such session making every list a consumer reads fail validation. The contract has no
+   * field that counts them, so each is logged once.
+   */
+  const unrepresentable = new Set<string>();
+  function representable(summary: SessionSummary): boolean {
+    if (
+      ProviderIdSchema.safeParse(summary.provider).success &&
+      NativeSessionIdSchema.safeParse(summary.providerSessionId).success
+    )
+      return true;
+    if (!unrepresentable.has(summary.id)) {
+      unrepresentable.add(summary.id);
+      log.warn('consumer contract cannot identify a stored session; it is left out', {
+        provider: summary.provider,
+        sessionIdLength: summary.providerSessionId.length,
+      });
+    }
+    return false;
+  }
 
   /** Every response under `/consumer`, failures included, is a contract document. */
   function handle(req: IncomingMessage, res: ServerResponse, url: URL): undefined {
@@ -117,7 +146,7 @@ export function createConsumerRoutes(deps: ConsumerRouteDeps) {
         `limit must be a whole number from 1 to ${MAX_CONSUMER_LIST_LIMIT}`,
       );
     const at = now();
-    const all = registry.listSessions();
+    const all = registry.listSessions().filter(representable);
     const body: SessionList = {
       format: 'salidium.session-list',
       version: 1,
@@ -165,7 +194,7 @@ export function createConsumerRoutes(deps: ConsumerRouteDeps) {
       return fail(res, 400, 'bad-request', 'the session id is not valid percent-encoding');
     }
     const read = registry.readSession(sessionId);
-    if (!read || !isUserSession(read.summary))
+    if (!read || !isUserSession(read.summary) || !representable(read.summary))
       return fail(res, 404, 'not-found', 'no such session');
     const at = now();
     json(
@@ -197,7 +226,7 @@ export function createConsumerRoutes(deps: ConsumerRouteDeps) {
     // changed nothing a consumer can see does not become a notification.
     const told = new Map<string, string>();
     const unsubscribeSummaries = registry.subscribeSummaries((summary) => {
-      if (!isUserSession(summary)) return;
+      if (!isUserSession(summary) || !representable(summary)) return;
       const entry = toSessionEntry(summary, now(), text);
       const key = `${entry.evidenceSeq}|${entry.status}|${entry.explanation}`;
       if (told.get(entry.id) === key) return;
