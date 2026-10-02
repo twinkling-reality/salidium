@@ -15,7 +15,10 @@ import type { HealthHistorySample, SalidiumStore } from '../storage/salidiumStor
 type DerivedEstimate = NonNullable<OperationsHealthSnapshot['estimates']['queueVelocity']>;
 type HookHealth = OperationsHealthSnapshot['hooks'][number];
 
-/** Manual or hostile files beyond the relay's hard ceiling do not turn a status read into a DoS. */
+/**
+ * Manual or hostile files beyond the relay's hard ceiling do not turn a status read into a DoS. The
+ * margin must exceed MAX_QUARANTINED_FILES, so a full quarantine beside a full queue stays exact.
+ */
 export const MAX_QUEUE_STATUS_FILES = MAX_HOOK_ABSOLUTE_PENDING_FILES + 1024;
 export const MAX_HEALTH_SAMPLES = 17_280;
 

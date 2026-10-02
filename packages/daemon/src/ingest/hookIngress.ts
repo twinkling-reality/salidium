@@ -1,6 +1,7 @@
 import {
   closeSync,
   existsSync,
+  linkSync,
   mkdirSync,
   openSync,
   readdirSync,
@@ -31,6 +32,7 @@ import {
   MAX_HOOK_SHED_SECOND_PENDING_FILES,
   MAX_HOOK_SPOOL_RECORD_BYTES,
   MAX_INGEST_PAYLOAD_BYTES,
+  MAX_QUARANTINED_FILES,
   MAX_SPOOL_DRAIN_BATCH,
   TRUNCATED_HOOK_PAYLOAD_KEY,
   UNATTRIBUTED_SUFFIX,
@@ -53,6 +55,12 @@ export class HookIngress {
   private readonly userHome: string;
   private readonly maxPayloadBytes: number;
   private readonly maxSpoolRecordBytes: number;
+  private readonly maxQuarantinedFiles: number;
+  /**
+   * Whether the current full-quarantine episode already has its gap. Held in memory, so a restart
+   * during one long episode records it once more; a durable marker would be the alternative.
+   */
+  private quarantineFullRecorded = false;
   private readonly collectionEnabled: () => boolean;
   private spoolTimer: NodeJS.Timeout | undefined;
   /** Set only while a capped drain pass has more of the same backlog still to read. */
@@ -73,6 +81,7 @@ export class HookIngress {
     /** Test seams; production uses the shared hostile-input ceilings. */
     maxPayloadBytes?: number;
     maxSpoolRecordBytes?: number;
+    maxQuarantinedFiles?: number;
     /** Dynamic collection gate shared with transcript ingest. */
     collectionEnabled?: () => boolean;
   }) {
@@ -87,6 +96,7 @@ export class HookIngress {
     this.log = args.log;
     this.maxPayloadBytes = args.maxPayloadBytes ?? MAX_INGEST_PAYLOAD_BYTES;
     this.maxSpoolRecordBytes = args.maxSpoolRecordBytes ?? MAX_HOOK_SPOOL_RECORD_BYTES;
+    this.maxQuarantinedFiles = args.maxQuarantinedFiles ?? MAX_QUARANTINED_FILES;
     this.collectionEnabled = args.collectionEnabled ?? (() => true);
   }
 
@@ -329,7 +339,8 @@ export class HookIngress {
     const pending = join(this.spoolDir, 'pending');
     if (!existsSync(pending)) return false;
     const cutoff = Date.now() - 10_000;
-    const all = readdirSync(pending)
+    const listing = readdirSync(pending);
+    const all = listing
       .filter(
         (f) =>
           f.endsWith('.ready.json') ||
@@ -352,12 +363,25 @@ export class HookIngress {
     //
     // A name that carries no valid provider id is different. No configuration change can ever make
     // it drainable, so retaining it as though its provider were merely disabled kept it waiting
-    // forever and pinned the queue's oldest item. It joins the batch only to be quarantined.
+    // forever and pinned the queue's oldest item. It joins the batch only to be quarantined, and
+    // only while the quarantine has room. Past that it stays where it is, still counted by the relay
+    // and still waiting, and is kept out of the batch so it cannot crowd out drainable work.
+    let quarantineRoom = Math.max(
+      0,
+      this.maxQuarantinedFiles - listing.filter((f) => quarantinedName(f)).length,
+    );
+    let unattributedLeft = 0;
     const drainable = all.filter((f) => {
       const provider = this.providerFromPendingName(f);
-      return !attributable(provider) || this.adapters.has(provider as ProviderId);
+      if (attributable(provider)) return this.adapters.has(provider as ProviderId);
+      if (quarantineRoom > 0) {
+        quarantineRoom -= 1;
+        return true;
+      }
+      unattributedLeft += 1;
+      return false;
     });
-    const retained = all.length - drainable.length;
+    const retained = all.length - drainable.length - unattributedLeft;
     if (retained > 0)
       this.log.debug('retaining envelopes for providers that are not enabled', { files: retained });
     const files = drainable.slice(0, MAX_SPOOL_DRAIN_BATCH);
@@ -367,6 +391,7 @@ export class HookIngress {
     const claimedBatch: { file: string; processing: string; sessionId?: string }[] = [];
     const touched = new Set<string>();
     let recovered = 0;
+    let earliestUnattributed: string | undefined;
     for (const f of files) {
       const path = join(pending, f);
       const alreadyProcessing = f.endsWith('.processing');
@@ -376,7 +401,12 @@ export class HookIngress {
         const ready = f.endsWith('.ready.json') || f.endsWith('.ready.json.processing');
         if (!ready && !alreadyProcessing && st.mtimeMs > cutoff) continue;
         if (!attributable(this.providerFromPendingName(f))) {
-          this.quarantineUnattributed(pending, f, st.mtime.toISOString());
+          const queuedAt = st.mtime.toISOString();
+          if (
+            this.quarantineUnattributed(pending, f) &&
+            (!earliestUnattributed || queuedAt < earliestUnattributed)
+          )
+            earliestUnattributed = queuedAt;
           continue;
         }
         if (!alreadyProcessing) {
@@ -421,6 +451,8 @@ export class HookIngress {
       }
     }
 
+    this.recordUnattributedGaps(earliestUnattributed, unattributedLeft);
+
     // One transaction per session in the batch rather than one per envelope. A large backlog
     // spread across a few sessions is the common shape, so this is the difference between one
     // commit per queued file and one per session.
@@ -460,18 +492,52 @@ export class HookIngress {
   /**
    * Sets aside an envelope whose name says nothing about which provider produced it. Its payload is
    * not read, because attributing it from untrusted content would be a guess presented as fact, and
-   * it is not deleted, because it may be the only copy of real evidence. The single rename is the
-   * claim, so a concurrent pass cannot quarantine it twice or record a second gap for it.
+   * it is not deleted, because it may be the only copy of real evidence. A hard link claims the
+   * quarantine name: unlike a rename it fails on an existing file instead of replacing it, so one
+   * quarantined envelope can never overwrite another. Returns whether the envelope was set aside.
    */
-  private quarantineUnattributed(pending: string, file: string, queuedAt: string): void {
-    const quarantined = join(pending, `${file}${UNATTRIBUTED_SUFFIX}`);
+  private quarantineUnattributed(pending: string, file: string): boolean {
+    const source = join(pending, file);
+    const quarantined = `${source}${UNATTRIBUTED_SUFFIX}`;
     try {
-      renameSync(join(pending, file), quarantined);
-    } catch {
-      return;
+      linkSync(source, quarantined);
+    } catch (err) {
+      this.log.warn('hook envelope without a provider was left in place', {
+        file,
+        err: String(err),
+      });
+      return false;
     }
-    this.recordObservedGap('hook-envelope-unattributed', null, queuedAt);
+    try {
+      unlinkSync(source);
+    } catch {
+      // Gone already. The quarantined link holds the same file, which is all that must survive.
+    }
     this.log.warn('hook envelope without a provider quarantined', { file, quarantined });
+    return true;
+  }
+
+  /**
+   * One gap per pass rather than one per file: the ledger keeps a bounded number of episodes, and a
+   * single pass of unattributed files must not evict the pressure gaps already in it. The files
+   * themselves are the exact count, in queue inspection. Gaps are recorded after the renames, so a
+   * crash between them leaves quarantined files without their gap. They are still counted there.
+   */
+  private recordUnattributedGaps(earliest: string | undefined, left: number): void {
+    try {
+      if (earliest) this.recordObservedGap('hook-envelope-unattributed', null, earliest);
+      if (left === 0) this.quarantineFullRecorded = false;
+      else if (!this.quarantineFullRecorded) {
+        this.recordObservedGap('hook-quarantine-full', null, null);
+        this.quarantineFullRecorded = true;
+        this.log.warn('hook quarantine is full; unattributed envelopes left in place', {
+          files: left,
+          limit: this.maxQuarantinedFiles,
+        });
+      }
+    } catch (err) {
+      this.log.warn('unattributed hook envelopes were not recorded as a gap', { err: String(err) });
+    }
   }
 
   private providerFromSpoolName(file: string): string {
@@ -526,6 +592,11 @@ export class HookIngress {
     if (this.catchUp) clearTimeout(this.catchUp);
     this.catchUp = undefined;
   }
+}
+
+/** Files set aside from the drain: oversized payloads and envelopes that name no provider. */
+function quarantinedName(file: string): boolean {
+  return file.endsWith('.oversized') || file.endsWith(UNATTRIBUTED_SUFFIX);
 }
 
 /** Whether a name-derived provider is one any adapter could ever own. */

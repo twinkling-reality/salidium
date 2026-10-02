@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CollectionStatus } from '@salidium/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
+import { MAX_HOOK_ABSOLUTE_PENDING_FILES, MAX_QUARANTINED_FILES } from '../ingest/limits.ts';
 import type { HealthHistorySample } from '../storage/salidiumStore.ts';
 import { SqliteStore } from '../storage/sqliteStore.ts';
 import { resolveOperationalConfig } from './configuration.ts';
@@ -10,6 +11,7 @@ import {
   calculateHealthEstimates,
   createHealthSnapshot,
   inspectQueue,
+  MAX_QUEUE_STATUS_FILES,
   oldestWaitingAt,
   retainHealthSample,
 } from './health.ts';
@@ -105,6 +107,12 @@ describe('bounded operational health', () => {
     expect(observed.totalFiles).toBe(2_250);
     expect(observed.entries).toHaveLength(3);
     expect(observed.entriesTruncated).toBe(true);
+  });
+
+  it('keeps a full queue beside a full quarantine inside the exact scan ceiling', () => {
+    expect(MAX_HOOK_ABSOLUTE_PENDING_FILES + MAX_QUARANTINED_FILES).toBeLessThan(
+      MAX_QUEUE_STATUS_FILES,
+    );
   });
 
   it('returns no partial total when the safety ceiling is crossed', () => {

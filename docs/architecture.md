@@ -112,8 +112,10 @@ daemon atomically claims ready files before ingestion. Legacy shared spool files
 upgrade recovery, but new senders never concurrently append to one record. The relay names each
 envelope by its provider without starting a subprocess, so a full process table cannot strip the
 provider from the name. An envelope whose name still carries no valid provider id is never read or
-deleted: the drain renames it with an `.unattributed` suffix and records one collection gap without
-a loss count. Quarantined files appear in queue inspection under their own count. They do not count
+deleted: the drain sets it aside under an `.unattributed` name, which never replaces an existing
+file, and records one collection gap without a loss count for each pass that sets any aside. At
+most 1,000 files are quarantined. Past that bound such envelopes stay in place, still counted by
+the relay against its ceiling, and one more gap records that the quarantine is full. Quarantined files appear in queue inspection under their own count. They do not count
 as waiting work, so they hold neither queue age nor the empty-queue precondition for storage
 optimization.
 

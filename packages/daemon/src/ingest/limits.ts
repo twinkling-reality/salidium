@@ -48,6 +48,14 @@ export const HOOK_SHED_RETAIN_FILE = 'hooks-shed-retain';
 export const UNATTRIBUTED_SUFFIX = '.unattributed';
 
 /**
+ * Quarantined files the drain will keep beside the queue. A quarantined file has left the relay's
+ * quota count, so without this bound quarantine would reopen the physical ceiling ADR 0003 closed.
+ * It also keeps the relay's hard bound plus every quarantined file inside the queue status scan
+ * ceiling, so queue totals stay exact. Past it, unattributed envelopes stay where they are.
+ */
+export const MAX_QUARANTINED_FILES = 1000;
+
+/**
  * Spool envelopes recovered in one drain pass before the daemon yields.
  *
  * The drain is synchronous and each payload reaches the reducer and SQLite, so an uncapped pass

@@ -38,8 +38,10 @@
   provider part of a queued file's name in a subprocess, and when that fork failed it wrote
   `_<time>-<pid>-<random>.json` and carried on. The drain read those as a disabled provider and
   kept them forever, which held the queue's oldest item at the day they were written. The relay now
-  names the provider without a subprocess. An envelope that still names no provider is quarantined
-  unread with an `.unattributed` suffix and recorded as a collection gap without a loss count.
+  names the provider without a subprocess, and refuses an id with more than one slash. An envelope
+  that still names no provider is quarantined unread with an `.unattributed` suffix, up to 1,000
+  quarantined files, and each drain pass that quarantines any records one collection gap without a
+  loss count.
 - Count quarantined files apart from waiting work in `salidium maintenance queue`, and measure queue
   age, the drain result, and the storage optimization precondition from waiting work only.
 

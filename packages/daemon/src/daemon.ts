@@ -1210,7 +1210,9 @@ PROVIDER="\${1:-claude-code}"
 # A provider id has at most one slash, so parameter expansion encodes it without a subprocess. The
 # earlier \`printf | tr\` substitution expanded to nothing when the process table was full, and the
 # envelope it named carried no provider the drain could ever attribute.
+# An id with a second slash is not a provider id; its encoding would keep a slash, so refuse it.
 case "$PROVIDER" in
+  */*/*) exit 0;;
   */*) PROVIDER_FILE="\${PROVIDER%%/*}~\${PROVIDER#*/}";;
   *) PROVIDER_FILE="$PROVIDER";;
 esac

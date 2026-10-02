@@ -28,7 +28,11 @@ afterEach(() => {
 
 function fixture(
   flush: () => boolean = () => true,
-  limits: { maxPayloadBytes?: number; maxSpoolRecordBytes?: number } = {},
+  limits: {
+    maxPayloadBytes?: number;
+    maxSpoolRecordBytes?: number;
+    maxQuarantinedFiles?: number;
+  } = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), 'salidium-hooks-'));
   dirs.push(dir);
@@ -224,7 +228,8 @@ describe('HookIngress durability and recovery', () => {
    * A relay that lost its provider to a failed fork named its envelopes `_<time>-<pid>-<random>`.
    * The drain read `_<time>` as the provider, found it disabled, and retained the envelope forever.
    * No configuration can enable a provider that is not a provider id, so these are quarantined:
-   * kept unread and undeleted, each one counted as an observed gap without a guessed loss count.
+   * kept unread and undeleted, and each pass that sets any aside records one observed gap without a
+   * guessed loss count.
    */
   it('quarantines an envelope whose name carries no provider instead of retaining it forever', () => {
     const { dir, hooks, seenPayloads } = fixture();
@@ -235,12 +240,14 @@ describe('HookIngress durability and recovery', () => {
       writeFileSync(join(pending, name), JSON.stringify({ synthetic: name }));
       if (at) utimesSync(join(pending, name), at, at);
     };
-    plant('_1788981330-49817-147de426.json', old);
+    plant('_1788981330-49817-147de426.json', new Date('2026-09-09T19:20:00.000Z'));
     plant('_1788981410-77997-13ca39bc.ready.json', old);
-    plant('_1788981852-8914-.json', old);
+    plant('_1788981852-8914-.json', new Date('2026-09-09T19:24:12.000Z'));
     // A plain envelope may still belong to a sender that is about to deliver or publish it.
     plant('_1790954716-15107-3aef6314.json', undefined);
     plant('claude-code_1790954716-11848-57f91d27.ready.json', undefined);
+    // A namespaced provider that is not enabled here is a provider id all the same. It waits.
+    plant('salidium~opencode_1790954716-2-ab.ready.json', old);
 
     hooks.drainSpool();
 
@@ -252,25 +259,91 @@ describe('HookIngress durability and recovery', () => {
       '_1788981410-77997-13ca39bc.ready.json.unattributed',
       '_1788981852-8914-.json.unattributed',
       '_1790954716-15107-3aef6314.json',
+      'salidium~opencode_1790954716-2-ab.ready.json',
     ]);
     expect(
       JSON.parse(readFileSync(join(pending, '_1788981852-8914-.json.unattributed'), 'utf8')),
     ).toEqual({ synthetic: '_1788981852-8914-.json' });
     const ledger = join(dir, 'collection-gaps.json');
-    const gap = {
-      reason: 'hook-envelope-unattributed',
-      provider: null,
-      event: null,
-      pressure: null,
-      firstDroppedAt: old.toISOString(),
-      exactCount: null,
-    };
-    expect(readCollectionGapLedger(ledger).episodes).toMatchObject([gap, gap, gap]);
+    expect(readCollectionGapLedger(ledger).episodes).toMatchObject([
+      {
+        reason: 'hook-envelope-unattributed',
+        provider: null,
+        event: null,
+        pressure: null,
+        firstDroppedAt: old.toISOString(),
+        exactCount: null,
+      },
+    ]);
 
     // Quarantine is the claim. Later passes neither retry the files nor count them again.
     hooks.drainSpool();
-    expect(readCollectionGapLedger(ledger).episodes).toHaveLength(3);
+    expect(readCollectionGapLedger(ledger).episodes).toHaveLength(1);
     expect(seenPayloads).toHaveLength(1);
+  });
+
+  it('bounds the quarantine and keeps envelopes past it in place and out of the batch', () => {
+    const { dir, hooks, seenPayloads } = fixture(() => true, { maxQuarantinedFiles: 3 });
+    const pending = join(dir, 'pending');
+    mkdirSync(pending);
+    const old = new Date('2026-09-09T19:15:30.000Z');
+    const plant = (name: string) => {
+      writeFileSync(join(pending, name), JSON.stringify({ synthetic: name }));
+      utimesSync(join(pending, name), old, old);
+    };
+    plant('claude-code_1-1-big.ready.json.processing.oversized');
+    plant('_1-2-a.ready.json.unattributed');
+    for (const name of ['_2-1-a.ready.json', '_2-2-b.ready.json', '_2-3-c.ready.json']) plant(name);
+    plant('claude-code_3-1-a.ready.json');
+
+    hooks.drainSpool();
+
+    expect(seenPayloads).toEqual([{ synthetic: 'claude-code_3-1-a.ready.json' }]);
+    expect(readdirSync(pending).sort()).toEqual([
+      '_1-2-a.ready.json.unattributed',
+      '_2-1-a.ready.json.unattributed',
+      '_2-2-b.ready.json',
+      '_2-3-c.ready.json',
+      'claude-code_1-1-big.ready.json.processing.oversized',
+    ]);
+    const ledger = join(dir, 'collection-gaps.json');
+    expect(readCollectionGapLedger(ledger).episodes.map((gap) => gap.reason)).toEqual([
+      'hook-envelope-unattributed',
+      'hook-quarantine-full',
+    ]);
+
+    // The full quarantine is one episode, and what it holds back cannot crowd out real work.
+    plant('claude-code_3-2-b.ready.json');
+    hooks.drainSpool();
+    expect(seenPayloads).toHaveLength(2);
+    expect(readCollectionGapLedger(ledger).episodes).toHaveLength(2);
+
+    // Once the owner clears room, the rest are set aside, and a later full quarantine is new.
+    rmSync(join(pending, 'claude-code_1-1-big.ready.json.processing.oversized'));
+    rmSync(join(pending, '_1-2-a.ready.json.unattributed'));
+    hooks.drainSpool();
+    expect(readdirSync(pending).filter((name) => !name.endsWith('.unattributed'))).toEqual([]);
+    expect(readCollectionGapLedger(ledger).episodes.map((gap) => gap.reason)).toEqual([
+      'hook-envelope-unattributed',
+      'hook-quarantine-full',
+      'hook-envelope-unattributed',
+    ]);
+  });
+
+  it('never overwrites a quarantined envelope that already holds the name', () => {
+    const { dir, hooks } = fixture();
+    const pending = join(dir, 'pending');
+    mkdirSync(pending);
+    writeFileSync(join(pending, '_1-1-a.ready.json'), '{"synthetic":"newer"}');
+    writeFileSync(join(pending, '_1-1-a.ready.json.unattributed'), '{"synthetic":"earlier"}');
+
+    hooks.drainSpool();
+
+    expect(readFileSync(join(pending, '_1-1-a.ready.json.unattributed'), 'utf8')).toBe(
+      '{"synthetic":"earlier"}',
+    );
+    expect(readFileSync(join(pending, '_1-1-a.ready.json'), 'utf8')).toBe('{"synthetic":"newer"}');
+    expect(readCollectionGapLedger(join(dir, 'collection-gaps.json')).episodes).toEqual([]);
   });
 
   it('preserves processing and pending files when persistence is deferred', () => {
