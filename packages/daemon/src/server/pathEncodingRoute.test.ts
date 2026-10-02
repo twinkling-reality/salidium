@@ -98,3 +98,39 @@ describe('malformed percent-encoding in an owner path', () => {
     expect((await send('GET', '/api/sessions/claude-code%3Anone/snapshot')).status).toBe(404);
   });
 });
+
+/*
+ * A session id that decodes cleanly but is long or holds control characters is simply one the
+ * daemon has not seen. Nothing between the route and the store validates its shape, so it must
+ * reach the same 404 as any other unknown id rather than a failure.
+ */
+describe('an unusual but well-encoded session id', () => {
+  const ids = {
+    'over 512 characters': `claude-code:${'a'.repeat(600)}`,
+    'over 512 with no provider': 'a'.repeat(513),
+    'a control character': 'claude-code:a\u0001b',
+    'a NUL': 'claude-code:a\u0000b',
+    'a DEL': 'a\u007fb',
+    'a newline': 'claude-code:a\nb',
+  };
+  const routes: [string, string, string][] = [
+    ['snapshot', '/snapshot', 'unknown session'],
+    ['view', '/view', 'unknown session'],
+    ['state', '/state', 'unknown session'],
+    ['state at a time', '/state?atTime=2026-08-01T00:00:00.000Z', 'unknown session'],
+    ['stream', '/stream', 'unknown session'],
+    ['raw record', '/raw/e1', 'unknown event'],
+  ];
+
+  for (const [name, id] of Object.entries(ids))
+    it(`answers an unknown session with ${name} as not found`, async () => {
+      warn.mockClear();
+      const segment = encodeURIComponent(id);
+      for (const [route, rest, error] of routes) {
+        const { status, body } = await send('GET', `/api/sessions/${segment}${rest}`);
+        expect(status, route).toBe(404);
+        expect(body, route).toEqual({ error });
+      }
+      expect(warn).not.toHaveBeenCalled();
+    });
+});

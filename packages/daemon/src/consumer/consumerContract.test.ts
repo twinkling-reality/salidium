@@ -632,6 +632,27 @@ describe('consumer documents', () => {
       expect((await get(`/consumer/v1/sessions/${segment}/report`)).status).toBe(404);
   });
 
+  it('answers a long session id or one with control characters in the contract’s own codes', async () => {
+    for (const id of [
+      `claude-code:${'a'.repeat(600)}`,
+      'a'.repeat(513),
+      'claude-code:a\u0001b',
+      'claude-code:a\u0000b',
+      'a\u007fb',
+      'claude-code:a\nb',
+    ]) {
+      const report = await get(`/consumer/v1/sessions/${encodeURIComponent(id)}/report`);
+      expect(report.status, JSON.stringify(id)).toBe(404);
+      expect(exactly(ConsumerErrorSchema, report.body).error).toBe('not-found');
+      const native = id.replace(/^claude-code:/, '');
+      const lookup = await get(
+        `/consumer/v1/sessions/lookup?provider=claude-code&sessionId=${encodeURIComponent(native)}`,
+      );
+      expect(lookup.status, JSON.stringify(id)).toBe(400);
+      expect(exactly(ConsumerErrorSchema, lookup.body).error).toBe('bad-request');
+    }
+  });
+
   it('answers a session id with malformed percent-encoding as a bad request, not a failure', async () => {
     for (const segment of ['%E0%A4%A', '%', 'claude-code%3A%ZZ']) {
       const { status, headers, body } = await get(`/consumer/v1/sessions/${segment}/report`);
