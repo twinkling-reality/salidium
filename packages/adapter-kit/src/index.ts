@@ -28,6 +28,14 @@ export {
   pathArgumentMetadata,
   safeJson,
 } from './recordHelpers.ts';
+export type {
+  StoreCursor,
+  StorePollBatch,
+  StorePollRequest,
+  StorePollResult,
+  StoreRawRecord,
+  StoreSource,
+} from './storeSource.ts';
 export {
   resolveSystemExecutable,
   resolveTrustedExecutable,
