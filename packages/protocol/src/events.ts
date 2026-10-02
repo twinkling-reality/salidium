@@ -398,6 +398,11 @@ export const NotificationEventSchema = Base.extend({
 /** Salidium's own read-only observation of the repository (enricher output). */
 export const GitSnapshotEventSchema = Base.extend({
   kind: z.literal('git.snapshot'),
+  /**
+   * What prompted the observation. Absent on snapshots recorded before it was written, which is
+   * why nothing may treat an absent trigger as any particular boundary.
+   */
+  trigger: z.enum(['session.started', 'turn.ended', 'commit']).optional(),
   repoRoot: z.string(),
   head: z.string().optional(),
   branch: z.string().optional(),
