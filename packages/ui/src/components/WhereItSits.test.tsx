@@ -45,9 +45,10 @@ function sample(): ExecutionLinks {
     generatedAt: '2026-10-02T12:00:00.000Z',
     sessionId: 'claude-code:s1',
     anchors: {
-      repository: REPO,
       atStart: null,
       atLatestTurnEnd: {
+        root: REPO,
+        repository: REPO,
         head: END,
         branch: 'main',
         at: '2026-10-02T11:00:00.000Z',

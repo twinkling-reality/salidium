@@ -181,9 +181,17 @@ function sampleMap(commit = END): ProjectMap {
 }
 
 const anchors = (overrides: Partial<SessionAnchors> = {}): SessionAnchors => ({
-  repository: REPO,
-  atStart: { head: START, branch: 'main', at: '2026-10-02T10:00:00.000Z', provenance: 'observed' },
+  atStart: {
+    root: REPO,
+    repository: REPO,
+    head: START,
+    branch: 'main',
+    at: '2026-10-02T10:00:00.000Z',
+    provenance: 'observed',
+  },
   atLatestTurnEnd: {
+    root: REPO,
+    repository: REPO,
     head: END,
     branch: 'main',
     at: '2026-10-02T11:00:00.000Z',
@@ -405,7 +413,7 @@ describe('linkExecution', () => {
   });
 
   test('a session imported from history has no anchors and no locations', () => {
-    const none: SessionAnchors = { repository: null, atStart: null, atLatestTurnEnd: null };
+    const none: SessionAnchors = { atStart: null, atLatestTurnEnd: null };
     const files: ChangedFile[] = [
       { path: `${REPO}/packages/core/src/a.ts`, location: undefined },
       { path: `${REPO}/README.md`, location: undefined },
@@ -532,16 +540,62 @@ describe('resolveRepository', () => {
     expect(maps.calls).toEqual([`isOptedIn ${OTHER}`]);
   });
 
+  test('a turn end read in another repository is not offered here, even when its commit exists', async () => {
+    // A clone holds the same commits: existence alone would misattribute the turn end.
+    const maps = fakeService({ optedIn: [REPO, OTHER], commits: { [REPO]: [START, END] } });
+    const moved = anchors({
+      atLatestTurnEnd: {
+        root: OTHER,
+        repository: OTHER,
+        head: END,
+        branch: 'main',
+        at: GENERATED_AT,
+        provenance: 'observed',
+      },
+    });
+    expect(await resolveRepository(maps, moved, REPO)).toMatchObject({
+      status: 'mapped',
+      commit: START,
+      chosen: 'session-start',
+    });
+    expect(maps.calls).not.toContain(`commitExists ${REPO} 2`);
+  });
+
+  test('a turn end read in a linked worktree counts for its main repository', async () => {
+    const maps = fakeService({ commits: { [REPO]: [START, END] } });
+    const lane = anchors({
+      atLatestTurnEnd: {
+        root: WORKTREE,
+        repository: REPO,
+        head: END,
+        branch: 'feature',
+        at: GENERATED_AT,
+        provenance: 'observed',
+      },
+    });
+    expect(await resolveRepository(maps, lane, REPO)).toMatchObject({
+      commit: END,
+      chosen: 'latest-turn-end',
+    });
+  });
+
   test('claims no revision for a session with no anchors', async () => {
     const maps = fakeService({ commits: { [REPO]: [END] } });
-    const none: SessionAnchors = { repository: REPO, atStart: null, atLatestTurnEnd: null };
+    const none: SessionAnchors = { atStart: null, atLatestTurnEnd: null };
     expect(await resolveRepository(maps, none, REPO)).toEqual({ status: 'no-revision' });
   });
 
   test('an unborn branch anchors nothing', async () => {
     const maps = fakeService({ commits: { [REPO]: [END] } });
     const unborn = anchors({
-      atStart: { head: null, branch: 'main', at: GENERATED_AT, provenance: 'observed' },
+      atStart: {
+        root: REPO,
+        repository: REPO,
+        head: null,
+        branch: 'main',
+        at: GENERATED_AT,
+        provenance: 'observed',
+      },
       atLatestTurnEnd: null,
     });
     expect(await resolveRepository(maps, unborn, REPO)).toEqual({ status: 'no-revision' });

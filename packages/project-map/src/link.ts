@@ -37,8 +37,7 @@ export interface ChangedFile {
 }
 
 export interface SessionAnchors {
-  /** Main root of the repository the session started in, where the anchors were read. */
-  repository: string | null;
+  /** Each anchor names the main repository it was read in. */
   atStart: RevisionAnchor | null;
   atLatestTurnEnd: RevisionAnchor | null;
 }
@@ -68,17 +67,17 @@ export function repositoryOf(location: ObservedLocation): string {
 
 /**
  * The revisions that may anchor a repository's map, best first: HEAD at the latest turn end, then
- * HEAD at session start. Anchors were read in the session's own repository and say nothing about
- * any other, so every other repository has none.
+ * HEAD at session start, each only if it was read in this repository. An anchor read anywhere else
+ * says nothing about this one, even when its commit happens to exist here, as in a clone.
  */
 export function revisionCandidates(
   anchors: SessionAnchors,
   repository: string,
 ): Array<{ commit: string; chosen: CommitChoice }> {
-  if (anchors.repository === null || anchors.repository !== repository) return [];
   const out: Array<{ commit: string; chosen: CommitChoice }> = [];
-  const end = anchors.atLatestTurnEnd?.head;
-  const start = anchors.atStart?.head;
+  const read = (a: RevisionAnchor | null) => (a?.repository === repository ? a.head : null);
+  const end = read(anchors.atLatestTurnEnd);
+  const start = read(anchors.atStart);
   if (end) out.push({ commit: end, chosen: 'latest-turn-end' });
   if (start && start !== end) out.push({ commit: start, chosen: 'session-start' });
   return out;

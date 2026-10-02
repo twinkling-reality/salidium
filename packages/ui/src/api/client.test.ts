@@ -101,7 +101,7 @@ describe('ApiClient.sessionLinks', () => {
     experimental: true,
     generatedAt: '2026-10-02T12:00:00.000Z',
     sessionId: 'codex:s1',
-    anchors: { repository: null, atStart: null, atLatestTurnEnd: null },
+    anchors: { atStart: null, atLatestTurnEnd: null },
     repositories: [],
     files: [],
     filesTotal: 0,

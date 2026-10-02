@@ -68,6 +68,12 @@ const RootSchema = AbsolutePathSchema.describe(
 
 export const RevisionAnchorSchema = z
   .object({
+    root: RootSchema.nullable().describe(
+      'The working tree the snapshot read, as Git reported its top level. Null when withheld because the redactor would alter it.',
+    ),
+    repository: RootSchema.nullable().describe(
+      "That working tree's main repository: the tree itself, or for a linked worktree the repository Salidium observed it belongs to while the session ran. A revision is offered only to this repository. Null when withheld.",
+    ),
     head: ObjectIdSchema.nullable().describe(
       'HEAD when Salidium looked; null on an unborn branch.',
     ),
@@ -76,12 +82,12 @@ export const RevisionAnchorSchema = z
       .max(EXECUTION_LINKS_LIMITS.branchLength)
       .regex(NO_CONTROL)
       .nullable()
-      .describe('The branch HEAD named, or null when detached or unknown.'),
+      .describe('The branch HEAD named, or null when detached, unknown or withheld.'),
     at: Timestamp,
     provenance: z.literal('observed'),
   })
   .describe(
-    "Salidium's own read of the session root's repository at one session boundary, while the session was live.",
+    "Salidium's own read of a repository at one session boundary, while the session was live. A session can move between repositories, so each anchor names the one it read.",
   );
 export type RevisionAnchor = z.infer<typeof RevisionAnchorSchema>;
 
@@ -94,7 +100,7 @@ export const RepositoryLinkStatusSchema = z
     [
       'mapped: the map at `commit` is the one every file of this repository was linked against.',
       'not-opted-in: the person has not allowed Salidium to read this repository, so it was not read and there is no map. `salidium map allow <repository>` opts it in.',
-      'no-revision: Salidium never observed a revision of this repository during the session: a session imported from history, or a repository other than the one the session started in. No revision is claimed.',
+      'no-revision: Salidium never observed a revision of this repository at a session boundary: a session imported from history, or a repository the session changed files in without starting or ending a turn there. No revision is claimed.',
       'revision-gone: Salidium observed revisions at the session boundaries, and none of them exists in the repository any more, for example after a rebase or a history rewrite.',
       'map-unavailable: there is no map now although the repository is opted in: the tree is over a bound version 0 maps, another build was running, or the repository cannot be read safely. `unavailable` says which, and `commit` names the revision when Salidium could confirm it exists.',
     ].join(' '),
@@ -255,9 +261,6 @@ export const ExecutionLinksSchema = z.object({
   generatedAt: Timestamp,
   sessionId: z.string().min(1).max(512).regex(NO_CONTROL),
   anchors: z.object({
-    repository: RootSchema.nullable().describe(
-      'Main root of the repository the session started in, where its revisions were read. Revisions say nothing about any other repository.',
-    ),
     atStart: RevisionAnchorSchema.nullable(),
     atLatestTurnEnd: RevisionAnchorSchema.nullable(),
   }),

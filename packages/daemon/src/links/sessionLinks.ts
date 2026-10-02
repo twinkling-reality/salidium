@@ -1,5 +1,3 @@
-import { realpathSync } from 'node:fs';
-import { isAbsolute, relative } from 'node:path';
 import type { Redactor, RunState, RevisionAnchor as RunStateAnchor } from '@salidium/core';
 import { createRedactor } from '@salidium/core';
 import {
@@ -100,11 +98,7 @@ export function createSessionLinks(deps: SessionLinksDeps) {
             unchanged(file.location.path) &&
             (file.location.mainRoot === undefined || unchanged(file.location.mainRoot)))),
     );
-    const observed = withheldBranches(sessionAnchors(state), unchanged);
-    const anchors =
-      observed.repository !== null && !unchanged(observed.repository)
-        ? { ...observed, repository: null }
-        : observed;
+    const anchors = withheldAnchorText(sessionAnchors(state), unchanged);
     const repositories = new Map<string, RepositoryResolution>();
     let mapElementsWithheld = 0;
     for (const root of repositoriesOf(files).slice(0, EXECUTION_LINKS_LIMITS.repositories)) {
@@ -162,24 +156,50 @@ export function changedFiles(state: RunState): ChangedFile[] {
     }));
 }
 
-/** A branch name the redactor would change is not carried; the anchor's HEAD still is. */
-function withheldBranches(anchors: SessionAnchors, unchanged: (value: string) => boolean) {
-  const keep = (a: RevisionAnchor | null) =>
-    a && a.branch !== null && !unchanged(a.branch) ? { ...a, branch: null } : a;
-  return {
-    ...anchors,
-    atStart: keep(anchors.atStart),
-    atLatestTurnEnd: keep(anchors.atLatestTurnEnd),
+/**
+ * Anchor text the redactor would change is not carried: a branch becomes null, and a root or
+ * repository becomes null too, which leaves that anchor offered to no repository. HEAD still is.
+ */
+function withheldAnchorText(
+  anchors: SessionAnchors,
+  unchanged: (value: string) => boolean,
+): SessionAnchors {
+  const keep = (a: RevisionAnchor | null): RevisionAnchor | null => {
+    if (!a) return a;
+    const place =
+      (a.root === null || unchanged(a.root)) && (a.repository === null || unchanged(a.repository));
+    return {
+      ...a,
+      root: place ? a.root : null,
+      repository: place ? a.repository : null,
+      branch: a.branch !== null && !unchanged(a.branch) ? null : a.branch,
+    };
   };
+  return { atStart: keep(anchors.atStart), atLatestTurnEnd: keep(anchors.atLatestTurnEnd) };
 }
 
-function anchor(value: RunStateAnchor | undefined): RevisionAnchor | null {
+/**
+ * One anchor, with the main repository it was read in.
+ *
+ * A snapshot names the working tree it read, which may be a linked worktree. Its main repository is
+ * taken only from what Salidium observed while the session ran, the location of a file changed in
+ * that tree; otherwise the tree stands for itself. Nothing is read from disk now, because the disk
+ * now says nothing about the disk then, and at worst a repository then reads `no-revision` rather
+ * than borrow a revision that is not its own.
+ */
+function anchor(state: RunState, value: RunStateAnchor | undefined): RevisionAnchor | null {
   if (!value) return null;
   const branch =
     value.branch !== undefined && value.branch.length <= EXECUTION_LINKS_LIMITS.branchLength
       ? value.branch
       : null;
+  const carriable = carriableRoot(value.root);
+  const observed = carriable
+    ? Object.values(state.fileLocations).find((location) => location?.root === value.root)
+    : undefined;
   return {
+    root: carriable ? value.root : null,
+    repository: !carriable ? null : observed ? repositoryOf(observed) : value.root,
     head: value.head && FULL_SHA.test(value.head) ? value.head : null,
     branch,
     at: value.at,
@@ -187,48 +207,21 @@ function anchor(value: RunStateAnchor | undefined): RevisionAnchor | null {
   };
 }
 
-/**
- * The session's revision anchors and the main repository they were read in.
- *
- * Snapshots name the working tree they read (`repoRoot`), which may be a linked worktree. Its main
- * repository is taken only from what Salidium observed while the session ran, the location of a
- * file changed in that tree; otherwise the root stands for itself. Nothing is read from disk now,
- * because the disk now says nothing about the disk then, and at worst a repository then reads
- * `no-revision` rather than borrow a revision that is not its own.
- *
- * Run state keeps one root, from the first snapshot, while a turn-end snapshot reads wherever the
- * session's directory is at that moment. A session whose directory has left its root may have a
- * turn-end HEAD from another repository, so that anchor is not used for it.
- */
-export function sessionAnchors(
-  state: RunState,
-  stillInRoot: (cwd: string, root: string) => boolean = within,
-): SessionAnchors {
-  const root = state.repoRoot;
-  const atStart = anchor(state.git.atStart);
-  const atLatestTurnEnd = root && stillInRoot(state.cwd, root) ? anchor(state.git.atTurnEnd) : null;
-  if (!root || (!atStart && !atLatestTurnEnd))
-    return { repository: null, atStart, atLatestTurnEnd };
-  const observed = Object.values(state.fileLocations).find((location) => location?.root === root);
-  return { repository: observed ? repositoryOf(observed) : root, atStart, atLatestTurnEnd };
+/** Each boundary's anchor names the repository it read, so a session that moved is not misread. */
+export function sessionAnchors(state: RunState): SessionAnchors {
+  return {
+    atStart: anchor(state, state.git.atStart),
+    atLatestTurnEnd: anchor(state, state.git.atTurnEnd),
+  };
 }
 
-/**
- * Whether a session directory lies in a working tree. Git reports its top level through symbolic
- * links (`/tmp` is `/private/tmp` on macOS) while a provider reports the directory it was given,
- * so the directory's real path is tried too. Resolving it reads no file.
- */
-function within(cwd: string, root: string): boolean {
-  const inside = (dir: string) => {
-    const rel = relative(root, dir);
-    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
-  };
-  if (inside(cwd)) return true;
-  try {
-    return inside(realpathSync(cwd));
-  } catch {
-    return false;
-  }
+// biome-ignore lint/suspicious/noControlCharactersInRegex: excluding control characters is the point.
+const CONTROL = /[\u0000-\u001f\u007f]/;
+
+function carriableRoot(root: string): boolean {
+  return (
+    root.startsWith('/') && root.length <= EXECUTION_LINKS_LIMITS.pathLength && !CONTROL.test(root)
+  );
 }
 
 /**

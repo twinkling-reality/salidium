@@ -40,6 +40,7 @@ const LANE_ROOT = 'claude-code:lane-root-session';
 const IMPORTED = 'claude-code:imported-session';
 const LANE_UNSEEN = 'claude-code:lane-unseen-session';
 const MOVED = 'claude-code:moved-session';
+const BACK = 'claude-code:moved-and-back-session';
 const INTERNAL = 'claude-code:internal-session';
 
 const edgeId = (from: string, kind: string, to: string) =>
@@ -225,8 +226,8 @@ function laneRootSession(id: string, inLane: boolean): CanonicalEvent[] {
  * Live, started in REPO, then its directory moved to another repository before the turn ended, so
  * the turn-end snapshot read that other repository's HEAD.
  */
-function movedSession(): CanonicalEvent[] {
-  const b = new EventBuilder(MOVED, '2026-10-02T10:00:00.000Z');
+function movedSession(id = MOVED, comeBack = false): CanonicalEvent[] {
+  const b = new EventBuilder(id, '2026-10-02T10:00:00.000Z');
   return provider([
     b.sessionStarted(REPO, 'model'),
     snapshot(b, 'git:1', REPO, START, 'session.started'),
@@ -239,8 +240,10 @@ function movedSession(): CanonicalEvent[] {
     } as never),
     b.raw({ id: 'moved', kind: 'session.updated', cwd: OTHER } as never),
     b.turnEnded('Done.'),
-    // In the fake service END exists in REPO too, as it would in a clone: the guard must still hold.
+    // In the fake service END exists in REPO too, as it would in a clone: the rule must still hold.
     snapshot(b, 'git:2', OTHER, END, 'turn.ended'),
+    // Back in REPO with no turn ending there since: its latest turn-end anchor is still OTHER's.
+    ...(comeBack ? [b.raw({ id: 'back', kind: 'session.updated', cwd: REPO } as never)] : []),
   ]);
 }
 
@@ -272,6 +275,7 @@ beforeAll(async () => {
     [LANE_ROOT, laneRootSession(LANE_ROOT, true)],
     [LANE_UNSEEN, laneRootSession(LANE_UNSEEN, false)],
     [MOVED, movedSession()],
+    [BACK, movedSession(BACK, true)],
     [IMPORTED, importedSession()],
   ] as const) {
     registry.ingest(id, events, { cwd: REPO });
@@ -329,9 +333,20 @@ describe('execution links from ingested sessions', () => {
   test('anchors to the latest turn end and places every changed file', async () => {
     const doc = await links(LIVE);
     expect(doc.anchors).toMatchObject({
-      repository: REPO,
-      atStart: { head: START, branch: 'main', provenance: 'observed' },
-      atLatestTurnEnd: { head: END, branch: 'main', provenance: 'observed' },
+      atStart: {
+        root: REPO,
+        repository: REPO,
+        head: START,
+        branch: 'main',
+        provenance: 'observed',
+      },
+      atLatestTurnEnd: {
+        root: REPO,
+        repository: REPO,
+        head: END,
+        branch: 'main',
+        provenance: 'observed',
+      },
     });
     const byPath = Object.fromEntries(doc.files.map((f) => [f.path, f]));
     expect(byPath[`${REPO}/src/pay.ts`]).toMatchObject({
@@ -378,7 +393,7 @@ describe('execution links from ingested sessions', () => {
 
   test('a session started in a linked worktree anchors its main repository, as observed', async () => {
     const doc = await links(LANE_ROOT);
-    expect(doc.anchors.repository).toBe(REPO);
+    expect(doc.anchors.atStart).toMatchObject({ root: LANE, repository: REPO });
     // Only a start HEAD was observed, and it exists.
     expect(doc.repositories).toMatchObject([
       { root: REPO, status: 'mapped', commit: { id: START, chosen: 'session-start' } },
@@ -388,21 +403,29 @@ describe('execution links from ingested sessions', () => {
 
   test('without an observed location in the worktree, its anchors are not lent to the repository', async () => {
     const doc = await links(LANE_UNSEEN);
-    expect(doc.anchors.repository).toBe(LANE);
+    expect(doc.anchors.atStart).toMatchObject({ root: LANE, repository: LANE });
     expect(doc.repositories).toMatchObject([{ root: REPO, status: 'no-revision', commit: null }]);
   });
 
-  test('a turn-end HEAD read after the directory left the repository is not used', async () => {
-    const doc = await links(MOVED);
-    expect(doc.anchors.atLatestTurnEnd).toBeNull();
-    expect(doc.repositories).toMatchObject([
-      { root: REPO, status: 'mapped', commit: { id: START, chosen: 'session-start' } },
-    ]);
+  test('a turn-end HEAD read in another repository is not offered to this one', async () => {
+    for (const id of [MOVED, BACK]) {
+      const doc = await links(id);
+      // Recorded as what it was: observed, in the other repository.
+      expect(doc.anchors.atLatestTurnEnd, id).toMatchObject({
+        root: OTHER,
+        repository: OTHER,
+        head: END,
+      });
+      // Its commit exists in REPO too, as in a clone, and still is not REPO's revision.
+      expect(doc.repositories, id).toMatchObject([
+        { root: REPO, status: 'mapped', commit: { id: START, chosen: 'session-start' } },
+      ]);
+    }
   });
 
   test('a history import has no anchors and no locations, and claims neither', async () => {
     const doc = await links(IMPORTED);
-    expect(doc.anchors).toEqual({ repository: null, atStart: null, atLatestTurnEnd: null });
+    expect(doc.anchors).toEqual({ atStart: null, atLatestTurnEnd: null });
     expect(doc.files.map((f) => f.status)).toEqual(['repository-unknown']);
     expect(doc.repositories).toEqual([]);
   });

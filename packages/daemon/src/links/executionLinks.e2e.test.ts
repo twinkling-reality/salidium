@@ -76,10 +76,13 @@ describe('execution links end to end', () => {
   });
 
   test('after opt-in, files link at the turn-end commit, worktree included', async () => {
-    allowRepository(daemon.config.home, scenario.repo.dir);
+    allowRepository(daemon.config.home, scenario.repo.dir, join(scenario.repo.dir, '.git'));
     const { body } = await links();
-    expect(body.anchors.repository).toBe(scenario.repo.dir);
-    expect(body.anchors.atLatestTurnEnd?.head).toBe(scenario.head);
+    expect(body.anchors.atLatestTurnEnd).toMatchObject({
+      root: scenario.repo.dir,
+      repository: scenario.repo.dir,
+      head: scenario.head,
+    });
     expect(body.repositories[0]).toMatchObject({
       root: scenario.repo.dir,
       status: 'mapped',
