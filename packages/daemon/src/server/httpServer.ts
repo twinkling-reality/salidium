@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { extname, join, normalize } from 'node:path';
+import type { StoreRawRecord } from '@salidium/adapter-kit';
 import {
   createRedactor,
   isCredentialDumpCommand,
@@ -14,6 +15,7 @@ import type {
   CollectionStatus,
   DaemonInfo,
   EffectiveOperationalConfig,
+  EventSource,
   ExplainerSettings,
   ExplainerSettingsRequest,
   LocalAlertState,
@@ -106,6 +108,14 @@ export interface HttpServerDeps {
    * `settings`; without it those paths are simply not found.
    */
   consumer?: ReturnType<typeof createConsumerRoutes>;
+  /**
+   * Raw records of providers whose durable record is a database. `read` answers undefined when the
+   * provider is not enabled, and then nothing is read, even for events already stored.
+   */
+  storeRecords?: {
+    isStoreProvider: (provider: string) => boolean;
+    read: (provider: string, ref: NonNullable<EventSource['ref']>) => StoreRawRecord | undefined;
+  };
   log: Logger;
 }
 
@@ -595,6 +605,25 @@ export function createHttpServer(deps: HttpServerDeps): Server {
         reason: 'suppressed: sensitive file contents or credential dump',
       });
     const ref = event.source.ref;
+    if (deps.storeRecords?.isStoreProvider(event.source.provider)) {
+      if (!ref?.path || !ref.recordId)
+        return json(res, 200, { event, raw: null, reason: 'no provider record (derived event)' });
+      const read = deps.storeRecords.read(event.source.provider, ref);
+      if (!read)
+        return json(res, 200, {
+          event,
+          raw: null,
+          reason: 'this provider is not enabled in Salidium, so its store is not read',
+        });
+      if (read.raw === undefined) return json(res, 200, { event, raw: null, reason: read.reason });
+      let record: unknown;
+      try {
+        record = JSON.parse(redactor.redact(read.raw).text);
+      } catch {
+        record = redactor.redact(read.raw).text;
+      }
+      return json(res, 200, { event, raw: record, path: ref.path, recordId: ref.recordId });
+    }
     if (!ref?.path || ref.line === undefined)
       return json(res, 200, {
         event,

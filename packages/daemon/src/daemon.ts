@@ -11,6 +11,7 @@ import {
   ProviderRegistry,
   trustedPathEntries,
 } from '@salidium/adapter-kit';
+import { openCodeProvider } from '@salidium/adapter-opencode';
 import type { ExperimentalContractEntry } from '@salidium/consumer-contract';
 import type { RunState } from '@salidium/core';
 import {
@@ -80,6 +81,7 @@ import {
   MAX_INGEST_PAYLOAD_BYTES,
   TRUNCATED_HOOK_PAYLOAD_KEY,
 } from './ingest/limits.ts';
+import { StoreTailer } from './ingest/storeTailer.ts';
 import { TranscriptTailer } from './ingest/transcriptTailer.ts';
 import { createLogger } from './logging/logger.ts';
 import {
@@ -162,7 +164,15 @@ export type StartDaemonOptions = Partial<DaemonConfig> & {
   now?: () => number;
 };
 
-const BUILT_IN_PROVIDERS: readonly ProviderDescriptor[] = [claudeCodeProvider, codexProvider];
+/*
+ * Every built-in is registered; `providers.enabled` in the operations config decides which are
+ * read. OpenCode is registered but not enabled by default.
+ */
+const BUILT_IN_PROVIDERS: readonly ProviderDescriptor[] = [
+  claudeCodeProvider,
+  codexProvider,
+  openCodeProvider,
+];
 const DEFAULT_RETENTION_SWEEP_INTERVAL_MS = 60 * 60_000;
 
 const require = createRequire(import.meta.url);
@@ -357,9 +367,30 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
   };
   registry.onPersistError = (sessionId, err) =>
     log.warn('persist failed; will retry', { sessionId, err: String(err) });
-  const tailer = new TranscriptTailer({ adapters, registry, store, log });
+  const tailer = new TranscriptTailer({
+    adapters,
+    registry,
+    store,
+    log,
+    storeProviders: providerRegistry
+      .list()
+      .filter((descriptor) => descriptor.storeSource)
+      .map((descriptor) => descriptor.adapter.id),
+  });
+  const storeTailer = new StoreTailer({
+    providers: config.providers.flatMap((id) => {
+      const source = providerRegistry.get(id)?.storeSource;
+      return source ? [{ id, source }] : [];
+    }),
+    registry,
+    store,
+    log,
+  });
   let collectionPaused = existsSync(paths.pauseFile);
-  if (collectionPaused) tailer.pause();
+  if (collectionPaused) {
+    tailer.pause();
+    storeTailer.pause();
+  }
   const hooks = new HookIngress({
     adapters,
     registry,
@@ -414,7 +445,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
         hooksInstalled: inspection?.status === 'configured',
         ...(inspection ? { hookStatus: inspection.status } : {}),
         hookTrust: a.id === 'codex' ? codexHookTrust : 'not-applicable',
-        sourcesWatched: tailer.countForProvider(a.id),
+        sourcesWatched: tailer.countForProvider(a.id) + storeTailer.countForProvider(a.id),
       };
     }),
   });
@@ -434,12 +465,14 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     pauseCollection(config.home, reason);
     collectionPaused = true;
     tailer.pause();
+    storeTailer.pause();
     return collectionStatus();
   };
   const setCollectionActive = (): CollectionStatus => {
     resumeCollection(config.home);
     collectionPaused = false;
     tailer.resume();
+    storeTailer.resume();
     hooks.drainSpool();
     return collectionStatus();
   };
@@ -642,6 +675,13 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
   });
   const server = createHttpServer({
     consumer,
+    storeRecords: {
+      isStoreProvider: (provider) =>
+        providerRegistry
+          .list()
+          .some((descriptor) => descriptor.adapter.id === provider && descriptor.storeSource),
+      read: (provider, ref) => storeTailer.readRawRecord(provider, ref),
+    },
     registry,
     hooks,
     token,
@@ -804,6 +844,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     trustRefreshController?.abort();
     if (collectionControlTimer) clearInterval(collectionControlTimer);
     tailer.stop();
+    storeTailer.stop();
     hooks.stop();
     git.stop();
     locations.stop();
@@ -859,7 +900,10 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     hooks.startSpoolWatcher();
     writePrivateJsonAtomic(paths.daemonJson, daemonJson);
     writeConsumerDiscovery(config.home, discovery());
-    const initialBackfill = tailer.start(config.userHome, config.historyDays);
+    const initialBackfill = Promise.all([
+      tailer.start(config.userHome, config.historyDays),
+      storeTailer.start(config.userHome, config.historyDays),
+    ]);
     log.info('salidium daemon listening', {
       port,
       home: config.home,
@@ -1017,6 +1061,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
       if (collectionPaused && markerExists && expireCollectionPause(config.home)) {
         collectionPaused = false;
         tailer.resume();
+        storeTailer.resume();
         hooks.drainSpool();
         log.info('collection pause expired');
         return;
@@ -1024,11 +1069,13 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
       if (collectionPaused && !markerExists) {
         collectionPaused = false;
         tailer.resume();
+        storeTailer.resume();
         hooks.drainSpool();
         log.info('collection resumed');
       } else if (!collectionPaused && markerExists) {
         collectionPaused = true;
         tailer.pause();
+        storeTailer.pause();
         log.info('collection paused', { expiresAt: readCollectionPause(config.home)?.expiresAt });
       }
     };

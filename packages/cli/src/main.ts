@@ -77,7 +77,12 @@ import { runConsumerCommand } from './consumerCommand.ts';
 import { explanationMode, parseExplanationMode } from './explanationMode.ts';
 import { explanationWriter } from './explanationWriter.ts';
 import type { IntegrationContext, IntegrationValidation } from './integrations.ts';
-import { integrationById, providerIntegrations } from './integrations.ts';
+import {
+  integrationById,
+  providerIntegrations,
+  storeIntegrationLines,
+  storeIntegrations,
+} from './integrations.ts';
 import {
   activateMacOSService,
   describeMacOSService,
@@ -828,7 +833,10 @@ async function main(argv: string[]): Promise<number> {
           return 1;
         }
         for (const s of matching) {
-          if (!existsSync(s.path)) missing++;
+          // A store-backed provider's cursor key is `<store path>#<session id>`, not a file.
+          const hash = s.path.lastIndexOf('#');
+          const file = hash > 0 && !existsSync(s.path) ? s.path.slice(0, hash) : s.path;
+          if (!existsSync(file)) missing++;
           store.enqueueReingest(s);
           queued++;
         }
@@ -2630,6 +2638,23 @@ async function doctor(options: {
     lines.push(`Codex hook trust ${hookTrustLabel(trust.trust).toLowerCase()}`);
     if (trust.trust === 'untrusted' || trust.trust === 'modified') problems++;
   }
+  // Providers read from their own database have nothing to install; say whether each is found
+  // and whether it is observed. A config that cannot be read leaves the shipped defaults.
+  let enabledProviders: readonly string[] = ['claude-code', 'codex'];
+  try {
+    enabledProviders = (await readEffectiveOperationalConfig(d, presence)).values.providers.enabled
+      .value;
+  } catch {
+    /* defaults */
+  }
+  lines.push(...storeIntegrationLines(context, enabledProviders));
+  const storeResults = storeIntegrations.map((integration) => ({
+    id: integration.id,
+    name: integration.name,
+    experimental: integration.experimental,
+    detected: integration.detect(context),
+    observed: enabledProviders.includes(integration.id),
+  }));
   const collection = await collectionStatus(d, presence, configuredHookPresent());
   lines.push(`collection ${collectionStatusLabel(collection).toLowerCase()}`);
   lines.push(`queue ${queueLabel(collection)}`);
@@ -2702,6 +2727,7 @@ async function doctor(options: {
         validations,
         settingsProblem: settingsProblem ?? null,
         providers: providerResults,
+        stores: storeResults,
         collection,
         diagnosticBundle: bundle ?? null,
       })}\n`,

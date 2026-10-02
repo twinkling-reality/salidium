@@ -1,5 +1,5 @@
 {
-  "name": "@salidium/daemon",
+  "name": "@salidium/adapter-opencode",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -8,6 +8,11 @@
       "types": "./src/index.ts",
       "development": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./src/testing/syntheticStore.ts",
+      "development": "./src/testing/syntheticStore.ts",
+      "default": "./dist/testing/syntheticStore.js"
     }
   },
   "files": [
@@ -19,12 +24,9 @@
   },
   "dependencies": {
     "@salidium/protocol": "workspace:*",
-    "@salidium/core": "workspace:*",
-    "@salidium/adapter-kit": "workspace:*",
-    "@salidium/adapter-claude-code": "workspace:*",
-    "@salidium/adapter-codex": "workspace:*",
-    "@salidium/adapter-opencode": "workspace:*",
-    "@salidium/consumer-contract": "workspace:*",
-    "zod": "^4.4.3"
+    "@salidium/adapter-kit": "workspace:*"
+  },
+  "devDependencies": {
+    "@salidium/core": "workspace:*"
   }
 }

@@ -71,6 +71,7 @@ export class TranscriptTailer {
   private readonly sweepIntervalMs: number;
   private readonly sourceIdleMs: number;
   private readonly watchRoot: typeof watch;
+  private readonly storeProviders: ReadonlySet<string>;
   private readonly sources = new Map<string, TrackedSource>();
   private readonly watchers = new Map<string, FSWatcher>();
   private readonly watcherRetryAfter = new Map<string, number>();
@@ -100,6 +101,8 @@ export class TranscriptTailer {
     sourceIdleMs?: number;
     /** Test seam for filesystems where recursive watch attachment is unavailable. */
     watchRoot?: typeof watch;
+    /** Providers read from a database by the store tailer, whose re-ingest jobs are not files. */
+    storeProviders?: readonly string[];
   }) {
     this.adapters = args.adapters;
     this.registry = args.registry;
@@ -110,6 +113,7 @@ export class TranscriptTailer {
     this.sweepIntervalMs = args.sweepIntervalMs ?? 2000;
     this.sourceIdleMs = args.sourceIdleMs ?? SOURCE_IDLE_EVICT_MS;
     this.watchRoot = args.watchRoot ?? watch;
+    this.storeProviders = new Set(args.storeProviders ?? []);
   }
 
   get watchedCount(): number {
@@ -422,7 +426,9 @@ export class TranscriptTailer {
   }
 
   private async processReingestJobs(): Promise<void> {
-    const jobs = this.store.pendingReingestJobs();
+    const jobs = this.store
+      .pendingReingestJobs()
+      .filter((job) => !this.storeProviders.has(job.provider));
     if (jobs.length) this.log.info('re-ingesting transcript evidence', { files: jobs.length });
     for (const job of jobs) {
       if (this.stopped || this.paused) return;
