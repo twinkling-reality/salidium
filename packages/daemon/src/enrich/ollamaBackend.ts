@@ -18,6 +18,24 @@ export const DEFAULT_OLLAMA_ENDPOINT = `http://127.0.0.1:${DEFAULT_OLLAMA_PORT}`
 /** A model list is metadata, not generated text, but it is still bounded. */
 export const MAX_OLLAMA_TAGS_BYTES = 256 * 1024;
 const TAGS_TIMEOUT_MS = 2_000;
+/** `/api/show` carries the modelfile and licence text, so it gets more room than the tag list. */
+export const MAX_OLLAMA_SHOW_BYTES = 1024 * 1024;
+
+/**
+ * Ollama can run a model on ollama.com and present it locally under a `cloud` tag, proxying every
+ * request through the loopback server. Such a model would carry the evidence off the machine, so
+ * it is neither offered nor used: by name here, and by what Ollama says of it in `/api/show`.
+ */
+export function isOllamaCloudModelName(model: string): boolean {
+  const tag = model.includes(':') ? model.slice(model.lastIndexOf(':') + 1) : '';
+  return /(^|-)cloud$/i.test(tag) || /-cloud$/i.test(model);
+}
+
+function describesRemoteModel(entry: unknown): boolean {
+  if (!entry || typeof entry !== 'object') return false;
+  const record = entry as Record<string, unknown>;
+  return record.remote_host !== undefined || record.remote_model !== undefined;
+}
 
 export type OllamaEndpoint =
   | { ok: true; host: '127.0.0.1' | '::1'; port: number; label: string }
@@ -239,6 +257,8 @@ export function createOllamaExplainerBackend(
     async generate(request) {
       const model = request.model;
       if (!model) throw new Error('the Ollama route needs a model; none is chosen');
+      if (isOllamaCloudModelName(model))
+        throw new Error('Ollama cloud models leave this machine and are refused');
       const endpoint = resolveOllamaEndpoint(environment);
       if (!endpoint.ok) throw new Error(endpoint.reason);
       const release = acquireExplainerSlot();
@@ -261,6 +281,24 @@ export function createOllamaExplainerBackend(
               signal: request.signal,
             },
           );
+        // Ask Ollama what the model is before sending it anything. A missing model, an answer that
+        // cannot be read, or a model that runs remotely ends the attempt here.
+        const show = await loopbackRequest(
+          endpoint,
+          'POST',
+          '/api/show',
+          JSON.stringify({ model }),
+          { timeoutMs: remaining(), maxBytes: MAX_OLLAMA_SHOW_BYTES, signal: request.signal },
+        );
+        if (show.status !== 200) throw new Error(`ollama does not have model ${model} installed`);
+        let shown: unknown;
+        try {
+          shown = JSON.parse(show.body);
+        } catch {
+          throw new Error('ollama described the model in something other than JSON');
+        }
+        if (describesRemoteModel(shown))
+          throw new Error('the model runs on ollama.com, not on this machine; it is refused');
         const key = `${endpoint.label} ${model}`;
         if (!structuredOutputUnavailable.has(key)) {
           const first = await chat(true);
@@ -305,8 +343,9 @@ export async function listOllamaModels(
     };
     const names = new Set<string>();
     for (const entry of Array.isArray(parsed.models) ? parsed.models : []) {
+      if (describesRemoteModel(entry)) continue;
       const name = typeof entry?.name === 'string' ? entry.name : entry?.model;
-      if (typeof name !== 'string') continue;
+      if (typeof name !== 'string' || isOllamaCloudModelName(name)) continue;
       const trimmed = name.trim();
       // The same shape a stored model must have, so every offered name can be chosen.
       if (

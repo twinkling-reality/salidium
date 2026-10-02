@@ -255,7 +255,10 @@ in between. The address is the literal `127.0.0.1` or `::1`, from the default or
 only when that names a loopback address (`localhost` is mapped to `127.0.0.1`, never resolved).
 Redirects are refused, the response body is bounded by the CLI routes' output ceiling, and the call
 shares their concurrency limit, timeout, and cancellation. A model is required and is chosen from
-the installed list in `/api/tags`; Salidium never pulls one. The request asks for the JSON Schema
+the installed list in `/api/tags`; Salidium never pulls one. Ollama cloud models, which Ollama
+proxies to ollama.com, are excluded: `cloud`-tagged names are refused, and each call first asks
+`/api/show` and refuses a model described as remote. The guarantee is about Salidium's connection;
+whatever listens on the loopback port is trusted as Ollama. The request asks for the JSON Schema
 as Ollama's `format` first; on the 501 "structured output is unavailable" answer that MLX builds
 give, it retries once with the schema stated in a system message and remembers that per model. The
 runtime validation is unchanged, and the explanation's generator label names the model.

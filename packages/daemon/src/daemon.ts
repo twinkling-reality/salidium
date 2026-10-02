@@ -657,6 +657,14 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     settings: {
       explainer: explainerSettings,
       ollamaModels: async (): Promise<OllamaModels> => {
+        // Ollama is asked only while it is the writer in force, not whenever the route is called.
+        if (activeExplainer().mode !== 'ollama')
+          return {
+            state: 'refused',
+            endpoint: null,
+            models: [],
+            reason: 'The local model route is not selected.',
+          };
         const list = await listOllamaModels(process.env);
         return list.state === 'ready'
           ? { state: 'ready', endpoint: list.endpoint, models: list.models, reason: null }

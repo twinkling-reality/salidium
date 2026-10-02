@@ -28,7 +28,8 @@
   only when it names a loopback address, refuses redirects, and bounds the reply like the CLI routes.
   `auto` never chooses it, and when it cannot run nothing else is tried in its place. Builds that
   cannot hold an answer to a JSON Schema (Ollama's 501, as MLX builds give) are asked once more with
-  the schema in the request. Personalize uses the same route when it is selected.
+  the schema in the request. Ollama cloud models, which Ollama forwards to ollama.com, are neither
+  offered nor used. Personalize uses the same route when it is selected.
 - Downgrade note: once the explainer backend is set to `ollama`, Salidium 0.6.x cannot read
   `operations-config.json`. It uses the previous saved copy when that is readable and otherwise
   falls back to safe defaults for every setting, with explanations off. Set the backend back to

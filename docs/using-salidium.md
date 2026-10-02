@@ -274,6 +274,12 @@ that wrote it, for example `qwen3.6:35b-a3b-nvfp4 · Ollama`.
 
 - There is no default model. **Choose a model** lists the models Ollama already has installed, read
   from its `/api/tags` only while this route is selected. Salidium never pulls a model.
+- Ollama cloud models are excluded. Ollama can present a model that runs on ollama.com under a
+  `cloud` tag and forward requests to it, so Salidium neither offers nor uses one: it refuses
+  `cloud`-tagged names, and before each call it asks Ollama's `/api/show` about the model and
+  refuses one Ollama describes as remote.
+- The promise covers Salidium's own connection. Whatever answers on that loopback port is trusted
+  as Ollama; a proxy or tunnel you run there would receive the summary.
 - `OLLAMA_HOST` may move the port, and is accepted only when it names a loopback address:
   `127.0.0.1`, `::1`, or `localhost`, which Salidium reads as `127.0.0.1` without consulting a name
   server. Any other value, including `0.0.0.0`, is refused, the panel says why, and nothing is called.
@@ -282,7 +288,8 @@ that wrote it, for example `qwen3.6:35b-a3b-nvfp4 · Ollama`.
   cancellation.
 - **Same as coding** never chooses the local model, and choosing it never falls back to Claude or
   Codex. When Ollama is not running or the model is missing, nothing is sent anywhere.
-- Personalize uses the same route when it is selected, so personalized wording stays local too.
+- Personalize uses the same route when it is selected, so the saved terms and the generated wording
+  are sent to the same local model and nowhere else.
 
 Salidium first asks Ollama to constrain the answer to the explanation's JSON Schema. Some local builds,
 including MLX ones, answer HTTP 501 "structured output is unavailable". Salidium then asks once more
@@ -322,7 +329,8 @@ The call sends the saved terms with the existing generated Why and How; it does 
 transcript, prompts, commands, diffs, or raw records. Personalized presentations are never folded
 into Verified, Left, Review, history, checkpoints, raw evidence, session exports, or the intelligence
 sync outbox. The selected agent CLI may contact its provider when you explicitly personalize, under
-that provider's own data policy. Deleting the saved terms cannot delete a record kept by that agent.
+that provider's own data policy; with **Local model** selected, the call goes to the local Ollama
+only. Deleting the saved terms cannot delete a record kept by that agent.
 
 Set `SALIDIUM_EXPLAINER` to `auto`, `claude`, `codex`, `ollama`, or `off` to enforce a helper choice when the
 daemon starts. `SALIDIUM_EXPLAIN_MODEL` similarly enforces a model override. Environment choices

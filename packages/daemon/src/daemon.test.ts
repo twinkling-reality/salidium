@@ -447,6 +447,14 @@ describe('daemon', () => {
     expect(outcome).toBe('stopped');
   });
 
+  it('does not ask Ollama for its models while the local route is not selected', async () => {
+    const { status, body } = await api<{ state: string; models: string[] }>(
+      '/api/settings/explainer/ollama-models',
+    );
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ state: 'refused', models: [] });
+  });
+
   it('rejects unauthenticated, wrong-host and cross-origin requests', async () => {
     const base = `http://127.0.0.1:${daemon.port}`;
     expect((await fetch(`${base}/api/sessions`)).status).toBe(401);

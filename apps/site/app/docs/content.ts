@@ -450,6 +450,8 @@ const RAW: Array<Omit<Page, "n">> = [
       ),
       list(
         "There is no default model. Choose a model lists only the models Ollama already has installed, and Salidium never downloads one.",
+        "Ollama cloud models are left out. Ollama can run a model on ollama.com and forward requests to it, so Salidium refuses `cloud`-tagged names and asks Ollama about each model before using it.",
+        "The promise covers Salidium's own connection. Whatever answers on that loopback port is trusted as Ollama, so a proxy or tunnel you run there would receive the summary.",
         "`OLLAMA_HOST` can move the port, but only to a loopback address: `127.0.0.1`, `::1` or `localhost`, which is read as `127.0.0.1` without asking a name server. Any other address is refused and nothing is called.",
         "A redirect from that address is refused rather than followed, and a reply larger than the same 128 KB limit the CLI routes have is cut off and counted as a failure.",
         "Same as coding never picks the local model, and choosing it never falls back to Claude or Codex. If Ollama is not running, or the model is missing, nothing is sent anywhere.",

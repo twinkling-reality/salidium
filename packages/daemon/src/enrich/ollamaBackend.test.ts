@@ -50,6 +50,9 @@ let server: Server;
 let port: number;
 let seen: Seen[];
 let handler: Handler;
+/** `/api/show` is asked before every chat; kept apart so `seen` stays the chat and tag requests. */
+let shows: string[];
+let showHandler: (res: ServerResponse) => void;
 const sockets = new Set<import('node:net').Socket>();
 
 function env(): NodeJS.ProcessEnv {
@@ -78,6 +81,8 @@ const request = (overrides: Partial<ExplainerBackendRequest> = {}): ExplainerBac
 beforeEach(async () => {
   resetOllamaStructuredOutputMemory();
   seen = [];
+  shows = [];
+  showHandler = (res) => reply(res, 200, { details: { format: 'gguf' }, capabilities: [] });
   handler = (_req, res) => reply(res, 200, chat(VALID));
   server = createServer((req, res) => {
     let body = '';
@@ -85,6 +90,11 @@ beforeEach(async () => {
       body += chunk;
     });
     req.on('end', () => {
+      if (req.url === '/api/show') {
+        shows.push(body ? String((JSON.parse(body) as { model?: unknown }).model) : '');
+        showHandler(res);
+        return;
+      }
       const index = seen.length;
       seen.push({
         method: req.method ?? '',
@@ -329,6 +339,54 @@ describe('the Ollama explainer backend', () => {
       for (const release of held) release();
     }
     await createOllamaExplainerBackend(env()).generate(request());
+  });
+});
+
+describe('Ollama cloud models', () => {
+  it('asks Ollama what the model is before sending it anything', async () => {
+    await createOllamaExplainerBackend(env()).generate(request());
+    expect(shows).toEqual([MODEL]);
+    expect(seen).toHaveLength(1);
+  });
+
+  it('refuses a model that Ollama says runs remotely, before any chat request', async () => {
+    showHandler = (res) =>
+      reply(res, 200, { remote_host: 'https://ollama.com:443', remote_model: 'gpt-oss:120b' });
+    const backend = createOllamaExplainerBackend(env());
+    await expect(backend.generate(request())).rejects.toThrow(/ollama\.com/);
+    expect(seen).toHaveLength(0);
+  });
+
+  it('refuses a cloud-tagged name without asking Ollama at all', async () => {
+    for (const model of ['gpt-oss:120b-cloud', 'deepseek-v3.1:671b-cloud', 'kimi:cloud']) {
+      await expect(
+        createOllamaExplainerBackend(env()).generate(request({ model })),
+      ).rejects.toThrow(/cloud/);
+    }
+    expect(shows).toHaveLength(0);
+    expect(seen).toHaveLength(0);
+  });
+
+  it('records a model Ollama does not have as a failure without a chat request', async () => {
+    showHandler = (res) => reply(res, 404, { error: 'model not found' });
+    await expect(createOllamaExplainerBackend(env()).generate(request())).rejects.toThrow(
+      /not have model/,
+    );
+    expect(seen).toHaveLength(0);
+  });
+
+  it('never offers a cloud model in the installed list', async () => {
+    handler = (_req, res) =>
+      reply(res, 200, {
+        models: [
+          { name: 'local:7b' },
+          { name: 'gpt-oss:120b-cloud' },
+          { name: 'sneaky:latest', remote_host: 'https://ollama.com:443' },
+          { name: 'other:1b', remote_model: 'x' },
+        ],
+      });
+    const list = await listOllamaModels(env());
+    expect(list).toMatchObject({ state: 'ready', models: ['local:7b'] });
   });
 });
 
