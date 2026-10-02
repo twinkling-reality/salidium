@@ -28,7 +28,12 @@ export interface ProjectMapService {
 
 export type MapRefusalCode = Extract<
   ProjectMapErrorCode,
-  'not-opted-in' | 'commit-unknown' | 'over-bound' | 'busy' | 'bad-request'
+  | 'not-opted-in'
+  | 'commit-unknown'
+  | 'over-bound'
+  | 'busy'
+  | 'bad-request'
+  | 'repository-unsupported'
 >;
 
 export interface MapRefusal {
@@ -50,7 +55,7 @@ export type CommitExistsResult = { ok: true; exists: boolean } | { ok: false; re
  */
 export type RouteResult =
   | { status: 200; body: unknown }
-  | { status: 400 | 404 | 413 | 429 | 500; error: ProjectMapErrorCode; message: string };
+  | { status: 400 | 404 | 413 | 422 | 429 | 500; error: ProjectMapErrorCode; message: string };
 
 /**
  * The slot for `GET /project-map/v0/sessions/{id}/links`. The router authenticates the consumer

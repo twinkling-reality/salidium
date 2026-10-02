@@ -124,7 +124,9 @@ export const FileNodeSchema = z.object({
   path: RepositoryPathSchema,
   entry: FileEntrySchema,
   language: LanguageSchema,
-  bytes: Count,
+  bytes: Count.nullable().describe(
+    'Null when the object store does not hold the blob, as in a partial clone; see coverage.',
+  ),
   blob: ObjectIdSchema,
   role: RoleSchema.nullable().describe('Null when no rule suggests a role.'),
 });
@@ -220,6 +222,9 @@ export const LanguageCoverageSchema = z.object({
     overBudget: Count.describe('Not scanned because the build reached its total byte bound.'),
     declaration: Count.describe('TypeScript declaration files, which hold no runtime imports.'),
     symlink: Count,
+    missing: Count.describe(
+      'The blob is not in the object store (a partial clone, or a damaged repository).',
+    ),
   }),
   withModule: Count.describe('Files a module contains or compiles.'),
 });
@@ -260,7 +265,7 @@ export const CoverageSchema = z.object({
   complete: z
     .boolean()
     .describe(
-      'False when any bound was reached or any file was omitted. The lists below say which, so a partial map is never silent.',
+      'False when any bound was reached, any file was omitted, or any blob was missing. The fields below say which, so a partial map is never silent.',
     ),
   bounds: z.object({
     files: Count,
@@ -359,6 +364,8 @@ export type RepositoryList = z.infer<typeof RepositoryListSchema>;
  * - commit-unknown (404): the object store has no commit with that id.
  * - over-bound (413): the tree is over a bound this version refuses to map; `message` names it.
  * - busy (429): another build is running or the build rate was reached. Retry later.
+ * - repository-unsupported (422): the repository cannot be read safely or at all, for example its
+ *   object store borrows from another directory through alternates, or the commit's tree is gone.
  */
 export const ProjectMapErrorCodeSchema = z.enum([
   'host-not-allowed',
@@ -371,6 +378,7 @@ export const ProjectMapErrorCodeSchema = z.enum([
   'commit-unknown',
   'over-bound',
   'busy',
+  'repository-unsupported',
   'internal',
 ]);
 export type ProjectMapErrorCode = z.infer<typeof ProjectMapErrorCodeSchema>;

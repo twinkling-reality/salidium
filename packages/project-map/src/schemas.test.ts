@@ -44,7 +44,7 @@ function sample(): ProjectMap {
           files: 2,
           bytes: 20,
           parsed: 2,
-          notParsed: { tooLarge: 0, overBudget: 0, declaration: 0, symlink: 0 },
+          notParsed: { tooLarge: 0, overBudget: 0, declaration: 0, symlink: 0, missing: 0 },
           withModule: 0,
         },
       ],
