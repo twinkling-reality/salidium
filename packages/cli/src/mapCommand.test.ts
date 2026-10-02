@@ -118,6 +118,23 @@ describe('salidium map', () => {
     ]);
   });
 
+  it('does not read HEAD through a .git repointed since the repository was allowed', async () => {
+    const other = join(root, 'other');
+    mkdirSync(other);
+    execFileSync('git', ['-C', other, 'init', '-q'], { env });
+    writeFileSync(join(other, '.git', 'HEAD'), 'ref: refs/heads/other\n');
+    const moved = join(root, 'moved');
+    mkdirSync(moved);
+    execFileSync('git', ['-C', moved, 'init', '-q'], { env });
+    expect((await run('allow', moved)).code).toBe(0);
+    rmSync(join(moved, '.git'), { recursive: true, force: true });
+    writeFileSync(join(moved, '.git'), `gitdir: ${join(other, '.git')}\n`);
+    const shownResult = await run('show', moved);
+    expect(shownResult.code).toBe(1);
+    expect(shownResult.err).toContain('now resolves to a different git directory');
+    expect(shownResult.err).not.toContain('HEAD does not name a commit');
+  });
+
   it('is enforced the same way by a running daemon', async () => {
     const daemon: DaemonHandle = await startDaemon({
       home,

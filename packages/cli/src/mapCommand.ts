@@ -169,7 +169,17 @@ export async function runMapCommand(
     let commit = commitArgument;
     if (commit === undefined || commit === 'HEAD') {
       try {
-        commit = (await readHeadCommit((await locateObjectStore(root)).gitDir)) ?? undefined;
+        // HEAD is read only from the git directory the opt-in was granted for, the same check the
+        // service makes before reading objects: a `.git` repointed since then is not followed.
+        const granted = listOptedInRepositories(home).find((r) => r.root === root);
+        const { gitDir } = await locateObjectStore(root);
+        if (!granted || gitDir !== granted.gitDir) {
+          io.err(
+            `${shown(root)} now resolves to a different git directory than when it was allowed; allow it again with: salidium map allow ${quote(shown(root))}\n`,
+          );
+          return 1;
+        }
+        commit = (await readHeadCommit(gitDir)) ?? undefined;
       } catch (error) {
         io.err(`${messageOf(error)}\n`);
         return 1;
