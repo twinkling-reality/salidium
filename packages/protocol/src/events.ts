@@ -125,6 +125,13 @@ export const FileChangeSchema = z.object({
   hunks: z.array(HunkSchema).optional(),
   linesAdded: z.number().int().nonnegative(),
   linesRemoved: z.number().int().nonnegative(),
+  /**
+   * The provider replaced the file's content without recording what it held before, so the number
+   * of removed lines is unknown. `linesRemoved` stays 0 alongside it for readers that predate this
+   * field; a reader that knows the field treats the count as unknown, never as zero. Absent means
+   * the count is known.
+   */
+  linesRemovedUnknown: z.literal(true).optional(),
   /** False when the provider reports the patch was not applied (declined/failed). */
   applied: z.boolean(),
   /** The user edited the file between the agent's read and its write (Claude Code `userModified`). */
