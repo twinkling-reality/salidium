@@ -172,9 +172,11 @@ The published package's affected major is deprecated on npm with a pointer to it
 
 `@salidium/consumer-contract` holds the types, runtime schemas, JSON Schema, and retained fixtures.
 It depends on zod only; it does not depend on or re-export `@salidium/protocol`, canonical events,
-reducer state, or any daemon code. Its version is `1.0.0-rc.0`: a candidate for wire version 1,
-not yet frozen. CI packs it and consumes it outside the workspace. A manual-only release workflow
-mirrors the sync contract's. Nothing is published without the owner's explicit approval.
+reducer state, or any daemon code. Its version was `1.0.0-rc.0`, a candidate for wire version 1,
+until a real consumer had exercised the wire; wire 1.0 was then frozen unchanged as `1.0.0`. CI
+packs it and consumes it outside the workspace. A manual-only release workflow mirrors the sync
+contract's, except that it stages the version for a maintainer's 2FA approval rather than
+publishing it. Nothing is published without the owner's explicit approval.
 
 ## Consequences
 

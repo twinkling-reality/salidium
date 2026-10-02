@@ -8,6 +8,11 @@
       "types": "./src/index.ts",
       "development": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./src/testing/providerIsolation.ts",
+      "development": "./src/testing/providerIsolation.ts",
+      "default": "./dist/testing/providerIsolation.js"
     }
   },
   "files": [

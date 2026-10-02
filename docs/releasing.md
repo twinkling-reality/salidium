@@ -101,14 +101,28 @@ unreleased checkout, branch, or copied source.
 ### Consumer contract
 
 The consumer contract's package version tracks its wire version: `1.x` is wire version 1, and the
-package stays at a `1.0.0-rc.N` prerelease until a real consumer has exercised the wire. Its tag is
+package minor version is the contract minor version that discovery reports. Wire 1.0 was frozen as
+`1.0.0`, identical to the `1.0.0-rc.0` a real consumer exercised. Its tag is
 `consumer-contract-v<version>` and its workflow is **Release consumer contract**, dispatched from
-current `main` with the exact confirmation `publish @salidium/consumer-contract@<version>` (or
-`bootstrap ...` for the first version, with the same short-lived token process as above). The
+current `main` with the exact confirmation `publish @salidium/consumer-contract@<version>`. The
 verification job packs the library, installs it outside the monorepo, checks that every `exports`
 target is shipped, that each shipped JSON Schema file equals what the shipped runtime generates, and
 that every retained fixture validates both under the runtime schemas and under the JSON Schema files
 alone, under both resolution conditions. CI runs the same check on every push.
+
+The package's npm trusted publisher is staged-only ("Allow npm publish" is off), so the workflow
+runs `npm stage publish`, which first shipped in npm 12.0.0. The unprivileged verification job
+fetches that npm at a pinned version, before any dependency code runs, and checks it against the
+registry's published integrity; the publish job, which holds the OIDC identity, receives it beside
+the package, checks it again against the same pin read from the workflow file rather than against
+anything the verification job reported, and runs it from the tarball without installing or fetching
+anything. To move to a newer npm, change `NPM_CLI_VERSION` and `NPM_CLI_INTEGRITY` (the pinned
+`npm view npm@<version> dist.integrity`) together. A staged version is not installable. Every release therefore needs a second,
+human step: a maintainer signs in to npmjs.com, opens **Staged Packages**, checks the staged version
+and its provenance against the workflow run, and approves it with 2FA (or runs
+`npm stage approve <stage-id>`, which also prompts for 2FA). Reject a staged version that does not
+match. The package's first version was bootstrapped with a short-lived token that has been revoked;
+the workflow no longer has a token path.
 
 Before tagging:
 
@@ -119,10 +133,12 @@ Before tagging:
    version. They are write-once from publication. Before the first publication only, they may be
    removed and regenerated with `--fixtures`, which boots a real daemon on a temporary home and
    records what it serves from synthetic sessions.
-3. After publishing a minor version, copy its `schema/v1/*.schema.json` unchanged into
-   `schema/v1/released/<major.minor>/`. The contract tests then require every later document to
-   validate against every released copy, which is how "an older consumer keeps working" is
-   enforced rather than promised.
+3. When a minor version is frozen for publication, copy its `schema/v1/*.schema.json` unchanged
+   into `schema/v1/released/<major.minor>/` in the same change that sets the package version. The
+   contract tests then require every retained fixture and every document the daemon serves in its
+   tests to validate against every released copy, which is how "an older consumer keeps working"
+   is enforced rather than promised. The same change records the SHA-256 of that version's
+   fixtures in the contract tests, which fail if a released fixture's bytes ever change.
 
 A breaking change is a new major version at a new path, served alongside the old one under the
 deprecation policy in ADR 0005.

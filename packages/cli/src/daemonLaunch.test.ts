@@ -3,9 +3,26 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { isolateProviders, type ProviderIsolation } from '@salidium/adapter-kit/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const temporaryDirectories: string[] = [];
+/*
+ * Provider state per Salidium home, so the daemon a test starts and the commands that inspect it
+ * see the same empty Claude Code and Codex state, and none of them see the developer's. These
+ * daemons turn explanations on, and must neither observe a live session nor find a `claude` to
+ * explain it with.
+ */
+const isolatedProviders = new Map<string, ProviderIsolation>();
+
+function providers(home: string): ProviderIsolation {
+  let isolation = isolatedProviders.get(home);
+  if (!isolation) {
+    isolation = isolateProviders();
+    isolatedProviders.set(home, isolation);
+  }
+  return isolation;
+}
 const entry = join(import.meta.dirname, 'main.ts');
 
 /*
@@ -44,13 +61,12 @@ function run(home: string, args: string[], port: string, historyDays = '0') {
      * that genuinely hung is still cut short here rather than waited out.
      */
     timeout: 9_000,
-    env: {
-      ...process.env,
+    env: providers(home).environment({
       SALIDIUM_HOME: home,
       SALIDIUM_PORT: port,
       SALIDIUM_HISTORY_DAYS: historyDays,
       SALIDIUM_NO_GIT: '1',
-    },
+    }),
   });
   return { ...result, elapsed: Date.now() - began };
 }
@@ -121,6 +137,8 @@ function processExists(pid: number): boolean {
 
 afterEach(() => {
   for (const path of temporaryDirectories.splice(0)) rmSync(path, { recursive: true, force: true });
+  for (const isolation of isolatedProviders.values()) isolation.dispose();
+  isolatedProviders.clear();
 });
 
 describe('detached daemon launch failures', () => {
@@ -289,13 +307,12 @@ describe('detached daemon launch failures', () => {
       ['--conditions=development', entry, 'status', '--watch', '--interval=60'],
       {
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: {
-          ...process.env,
+        env: providers(home).environment({
           SALIDIUM_HOME: home,
           SALIDIUM_PORT: '0',
           SALIDIUM_HISTORY_DAYS: '0',
           SALIDIUM_NO_GIT: '1',
-        },
+        }),
       },
     );
     let stdout = '';

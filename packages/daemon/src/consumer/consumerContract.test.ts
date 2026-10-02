@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -12,7 +12,7 @@ import {
   SessionReportSchema,
 } from '@salidium/consumer-contract';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { z } from 'zod';
+import { z } from 'zod';
 import { type DaemonHandle, startDaemon } from '../daemon.ts';
 import {
   consumerCredentialPath,
@@ -87,7 +87,33 @@ async function get(path: string, credential: string | null = token, init: Reques
 function exactly<T extends z.ZodType>(schema: T, value: unknown): z.infer<T> {
   const parsed = schema.parse(value);
   expect(parsed).toEqual(value);
+  matchesReleased(value);
   return parsed;
+}
+
+/*
+ * What this daemon serves today must still be accepted by every published minor version's JSON
+ * Schema, copied unchanged into `schema/v1/released/<major.minor>/`: that is what lets a consumer
+ * built against an older minor keep reading a newer Salidium.
+ */
+const releasedRoot = new URL('../../../consumer-contract/schema/v1/released/', import.meta.url);
+const releasedValidators = new Map<string, z.ZodType>();
+function matchesReleased(value: unknown): void {
+  const format = (value as { format?: unknown }).format;
+  if (typeof format !== 'string') throw new Error('a consumer document always names its format');
+  const name = format.replace(/^salidium\./, '');
+  const versions = readdirSync(releasedRoot);
+  expect(versions).toContain('1.0');
+  for (const version of versions) {
+    const key = `${version}/${name}`;
+    let validator = releasedValidators.get(key);
+    if (!validator) {
+      const file = new URL(`${version}/${name}.schema.json`, releasedRoot);
+      validator = z.fromJSONSchema(JSON.parse(readFileSync(file, 'utf8')));
+      releasedValidators.set(key, validator);
+    }
+    expect(validator.safeParse(value).success, `${name} under released ${version}`).toBe(true);
+  }
 }
 
 beforeAll(async () => {
@@ -434,7 +460,10 @@ async function openFeed(credential: string) {
           .join('\n');
         if (!data) continue;
         const message = readFeedMessage(data);
-        if (message) return message;
+        if (message) {
+          matchesReleased(message);
+          return message;
+        }
         continue;
       }
       const chunk = await reader.read();
@@ -572,7 +601,6 @@ describe('consumer contract edges', () => {
 
 describe('retained fixtures', () => {
   it('carry none of the planted content, because they are what other products copy', async () => {
-    const { readdirSync } = await import('node:fs');
     const dir = new URL('../../../consumer-contract/fixtures/v1/', import.meta.url);
     const files = readdirSync(dir).filter((file) => file.endsWith('.json'));
     expect(files.length).toBeGreaterThan(0);
