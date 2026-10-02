@@ -244,6 +244,20 @@ describe('WhereItSits', () => {
     }
   });
 
+  it('claims no commit in its footer when nothing was mapped', () => {
+    const links = sample();
+    const out = text(
+      render({
+        ...links,
+        repositories: links.repositories.filter((r) => r.status !== 'mapped'),
+        files: links.files.filter((f) => f.status !== 'linked'),
+        modules: [],
+      }),
+    );
+    expect(out).toContain('No repository was mapped for this session, so nothing here is placed.');
+    expect(out).not.toContain('commit named above');
+  });
+
   it('has a clear empty state for a session that changed nothing', () => {
     const out = text(render({ ...sample(), files: [], filesTotal: 0, modules: [] }));
     expect(out).toContain('This session changed no files, so there is nothing to place.');

@@ -158,8 +158,9 @@ export function WhereItSits({
       )}
 
       <footer className="where-foot">
-        Observed in the committed tree at the commit named above, never the working tree. Test roles
-        are inferred from file names. Experimental.
+        {mapped.length > 0
+          ? 'Observed in the committed tree at the commit named above, never the working tree. Test roles are inferred from file names. Experimental.'
+          : 'No repository was mapped for this session, so nothing here is placed. Experimental.'}
       </footer>
     </div>
   );
