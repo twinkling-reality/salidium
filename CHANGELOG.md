@@ -1,26 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 - 2026-10-02
 
-- Show each command a Codex code-mode cell runs once. Live sessions with hooks showed it twice:
-  as the cell and as the hook's nested command. From Codex 0.149, which records every process as
-  a `CommandExecution` item, each process is its own command with its own exit code and output,
-  and the cell is a step. So `npm test` and `npm run lint` in one cell now pass or fail separately
-  instead of reading unknown together. Rollouts from earlier or unversioned builds are read as
-  before. Sessions stored before this release keep their cells as commands. `salidium reingest
-  --all` adds each process's exit code without adding a second row, except where a hook had
-  already recorded the process: those older sessions keep the duplicate they had.
-- Consumer contract 1.1, additive: a report's `revision` says which commit the session started
-  from and stood at after its latest turn, each changed file says which Git working tree holds
-  it, including a linked worktree outside the session's directory, and discovery lists the
-  providers the daemon observes. Salidium finds a file's repository from Git's own pointer files
-  while the change is live, without running git or reading file contents, under the same setting
-  as git snapshots. A file's and a session's `linesRemovedExact` says when a removed line count is
-  only a lower bound, because a provider replaced a file without recording what it held.
-- Git snapshots now record which boundary triggered them, and a turn end that closely follows a
-  commit is no longer skipped.
-- Every store replays its sessions once after upgrading, because session state gained revision
-  anchors, file locations, and the code-cell rule (reducer 1.14.0).
+- Each command in a Codex code-mode session shows once. With hooks on, a command used to appear
+  twice, as the code cell and as the hook's own record. From Codex 0.149, which records every
+  process it starts, each process is its own command with its own exit code and output, and the
+  cell that ran it is a step. So `npm test` and `npm run lint` in one cell pass or fail separately,
+  where together they read unknown. Rollouts from Codex builds before 0.149, or that name no
+  version, read as before.
 - Let a local Ollama model write the Why and How explanation, with nothing leaving the machine.
   Choose **Local model** under Models & Usage, or `salidium config set explainer.backend ollama`,
   then pick one of the models Ollama already has installed; there is no default model and Salidium
@@ -30,10 +17,22 @@
   cannot hold an answer to a JSON Schema (Ollama's 501, as MLX builds give) are asked once more with
   the schema in the request. Ollama cloud models, which Ollama forwards to ollama.com, are neither
   offered nor used. Personalize uses the same route when it is selected.
-- Downgrade note: once the explainer backend is set to `ollama`, Salidium 0.6.x cannot read
-  `operations-config.json`. It uses the previous saved copy when that is readable and otherwise
-  falls back to safe defaults for every setting, with explanations off. Set the backend back to
-  `auto`, `claude` or `codex` before downgrading to keep your choices.
+- Opening an older session right after upgrading no longer holds Salidium up. A new release that
+  changes how sessions are read used to replay a stored session in one piece the first time it was
+  opened, and a large one could stall hooks, the CLI and `salidium stop` for seconds. Salidium now
+  brings stored sessions up to date in the background after it starts, newest first, in small
+  slices that let everything else run between them, pausing while collection is paused or
+  maintenance runs. `salidium status` shows it as "Updating session history: n of m". A session
+  you open before it is reached is updated on opening, as before. Checkpoints left by the older
+  release are removed as each session is updated, which returns their space to the store.
+  REPLAY COST: the coordinator fills in the measured background duration and first-open times
+  here before release.
+- Salidium no longer runs `git status` in the repositories agents work in. A repository's own
+  configuration can make `git status` run commands, so a repository an agent was working in could
+  have run code as Salidium. Repository snapshots now read only the top-level directory, HEAD and
+  branch, with an environment that passes no `GIT_` variable, and no longer list uncommitted files.
+- A turn end that came right after a commit could go without a repository snapshot. Every turn end
+  now gets one, and each snapshot records which boundary it was taken at.
 - Stop a full process table from writing hook envelopes that name no provider. The relay built the
   provider part of a queued file's name in a subprocess, and when that fork failed it wrote
   `_<time>-<pid>-<random>.json` and carried on. The drain read those as a disabled provider and
@@ -52,6 +51,24 @@
   overlap another, which at worst puts a few files over the pending ceiling and never loses data.
 - Count quarantined files apart from waiting work in `salidium maintenance queue`, and measure queue
   age, the drain result, and the storage optimization precondition from waiting work only.
+- Consumer contract 1.1, for tools that read Salidium's reports (`@salidium/consumer-contract`
+  1.1.0, additive to 1.0). A report says which commit a session started from and stood at after
+  its latest turn, in which repository, and which Git working tree holds each changed file,
+  including a linked worktree outside the directory the session started in. Salidium reads that
+  from Git's own pointer files while the change happens, without running git or reading file
+  contents, under the same setting as git snapshots. Line counts say when a removed count is only
+  a lower bound. Discovery lists the agents the daemon watches and any experimental local
+  contracts it serves.
+- To bring sessions recorded before this release in line, run `salidium reingest --all`. For Codex
+  code-mode sessions it adds each process's exit code without adding a second row. Sessions
+  stored before this release keep their cells as commands, and where a hook had already recorded a
+  process, those older sessions keep the duplicate they had: removing it would mean retracting
+  checks and history already derived from it. If you use the macOS always-on service, run
+  `salidium service install` first so the service runs the new copy.
+- Downgrade note: once the explainer backend is set to `ollama`, Salidium 0.6.x cannot read
+  `operations-config.json`. It uses the previous saved copy when that is readable and otherwise
+  falls back to safe defaults for every setting, with explanations off. Set the backend back to
+  `auto`, `claude` or `codex` before downgrading to keep your choices.
 
 ## 0.6.1 - 2026-10-02
 

@@ -8,8 +8,7 @@ This package holds the contract, not a client: TypeScript types, zod runtime sch
 truth), JSON Schema files generated from them, and retained example documents. It has no I/O and no
 network code, and it does not expose Salidium's internal events or state.
 
-Status: `1.1.0-rc.0`, a release candidate for wire version 1.1. Wire 1.0 was published as `1.0.0`,
-unchanged from its release candidate; 1.1 only adds to it.
+Status: `1.1.0`, wire version 1.1, which only adds to wire 1.0 (published as `1.0.0`).
 
 ## Consent first
 
@@ -96,9 +95,13 @@ rendering.
 
 Check that your discovery entry's `minor` is at least 1 before relying on any of these.
 
-- `report.revision`: the commit `HEAD` named and the branch when the session started
-  (`atStart`, kept from the first start) and when its latest turn ended (`atLatestTurnEnd`), in
-  `session.repositoryRoot`. Each is `null` when Salidium did not watch that boundary live.
+- `report.revision`: the repository read (`root`), the commit `HEAD` named and the branch when the
+  session started (`atStart`, kept from the first start; a resume is not a start) and when its
+  latest turn ended (`atLatestTurnEnd`). A session can move between repositories, so compare
+  `root`, not only `session.repositoryRoot`. Each anchor is `null` when Salidium did not watch that
+  boundary live.
+- Paths, roots and branches in these fields cross whole or not at all: one that redaction would
+  change, or that is too long, is `null` rather than altered.
 - `changes.files[].repository`: the Git working tree that holds the file (`root`), the file's
   path inside it (`path`), and for a linked worktree the repository it belongs to (`mainRoot`).
   Agents often write outside the directory the session started in, so this can differ from

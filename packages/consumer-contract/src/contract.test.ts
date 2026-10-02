@@ -247,6 +247,47 @@ describe('retained fixtures', () => {
       expect(createHash('sha256').update(bytes).digest('hex')).toBe(sha256);
     },
   );
+
+  /** The bytes published in `@salidium/consumer-contract@1.1.0`, under the same rule. */
+  const RELEASED_FIXTURES_1_1: Record<string, string> = {
+    'consumer-discovery.json': '3c4ce2d67b85ece97f61dbd70abfb63a207e8aae7788448b2998219ccc7e9923',
+    'consumer-error-session-not-observed.json':
+      'f31c050a650e111e847271fe1af272231787a5c39d9ae5ed3a7cdd9957cbe0a8',
+    'consumer-error-unauthorized.json':
+      '8f747fcd5f9e3ffcd720c10f016165b481dcc994f30bf19bbcf7650d7d4750d6',
+    'session-feed-closing.json': '7ab6b205e72b574b37c822b46fec4358844ded74db855f54b2e2825d45915f0f',
+    'session-feed-heartbeat.json':
+      'd65965476e3184a8057e7ad5b86a6b86dffb49b2c43400e52d74fa0f6d24062e',
+    'session-feed-resync.json': '35bd6e7b681099e196653e5c2866452b678d1aee8606412ea13a588f86e54022',
+    'session-feed-session-changed.json':
+      '98a7cdca73af22c6613b69438bb68ea583a3d9e740b3ff772974714a6092cd05',
+    'session-feed-session-removed.json':
+      '9ee2d78035aadff1daae449e3fff24eb6907e9b1dab761d5007b1fb32f593eba',
+    'session-list.json': 'fbfc7d4f00f3189f7fdb30647f5ebc907afcb577095184da77f3473849b19d30',
+    'session-lookup.json': 'a02ae0fb45f83a20685ad80eaaf9257d690954572c217dbdee682141dfb60f2d',
+    'session-report-failing.json':
+      '23ed53cb5970d44c82a9083ee3b52417cc59595ef89f744715980cf5ee60e22f',
+    'session-report-verified.json':
+      'e44d39c508a7122e6d90e095de80818bc23efde8995241c365ccca1bfbfc7e53',
+    'session-report-working.json':
+      '41dc43b26c2ac1a97613f40209c9a0cc235e97481b2d04828c6d70a8f9e3f7a0',
+  };
+
+  it('pins every 1.1 fixture, so none can be added or changed after publication unseen', () => {
+    expect(
+      readdirSync(new URL('1.1/', fixtureDir))
+        .filter((f) => f.endsWith('.json'))
+        .sort(),
+    ).toEqual(Object.keys(RELEASED_FIXTURES_1_1).sort());
+  });
+
+  it.each(Object.entries(RELEASED_FIXTURES_1_1))(
+    '%s is still the fixture published with 1.1',
+    (file, sha256) => {
+      const bytes = readFileSync(new URL(`1.1/${file}`, fixtureDir));
+      expect(createHash('sha256').update(bytes).digest('hex')).toBe(sha256);
+    },
+  );
 });
 
 describe('reading the feed', () => {

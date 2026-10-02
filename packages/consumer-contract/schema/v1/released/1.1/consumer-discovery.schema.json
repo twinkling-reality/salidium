@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:salidium:consumer:1:consumer-discovery",
+  "title": "salidium.consumer-discovery",
+  "type": "object",
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "salidium.consumer-discovery"
+    },
+    "version": {
+      "type": "number",
+      "const": 1
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+      "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+    },
+    "contracts": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^salidium\\.[a-z][a-z0-9-]{0,62}$",
+            "description": "Use entries named salidium.consumer; ignore any other."
+          },
+          "major": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "minor": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "baseUrl": {
+            "type": "string",
+            "pattern": "^http:\\/\\/127\\.0\\.0\\.1:\\d{1,5}\\/consumer\\/v\\d+$",
+            "description": "Loopback only. The endpoints under it are fixed by that major version."
+          }
+        },
+        "required": [
+          "name",
+          "major",
+          "minor",
+          "baseUrl"
+        ]
+      },
+      "description": "Every major version this daemon serves. Use the entry whose major you implement and ignore the rest, so a later major never hides this one."
+    },
+    "salidium": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "version"
+      ]
+    },
+    "providers": {
+      "maxItems": 32,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^(?:claude-code|codex|[a-z][a-z0-9-]{0,62}\\/[a-z][a-z0-9-]{0,62})$",
+            "description": "claude-code, codex, or a namespaced owner/name extension provider."
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "description": "Providers this daemon instance observes, by the id lookup's provider= takes. An id not listed is not observed by this instance until it restarts with a new instanceId. Sorted by id, each once. Added in 1.1: check minor in your contract entry first; a 1.0 daemon does not send it."
+    },
+    "experimental": {
+      "maxItems": 8,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^salidium\\.[a-z][a-z0-9-]{0,40}$"
+          },
+          "major": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "minor": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "baseUrl": {
+            "type": "string",
+            "pattern": "^http:\\/\\/127\\.0\\.0\\.1:\\d{1,5}\\/[a-z][a-z0-9-]{0,40}\\/v\\d+$",
+            "description": "Loopback only."
+          }
+        },
+        "required": [
+          "name",
+          "major",
+          "minor",
+          "baseUrl"
+        ]
+      },
+      "description": "Experimental local contracts this instance serves. No compatibility promise; consumers must not depend on them without checking. Sorted by name, each once. Added in 1.1."
+    },
+    "instanceId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$",
+      "description": "New on every daemon start. Compare the file with the endpoint before sending a credential to a port."
+    },
+    "pid": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "startedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+      "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+    },
+    "authentication": {
+      "type": "object",
+      "properties": {
+        "scheme": {
+          "type": "string",
+          "const": "bearer"
+        },
+        "credential": {
+          "type": "string",
+          "const": "consumer"
+        },
+        "create": {
+          "type": "string",
+          "const": "salidium consumer create <label>"
+        }
+      },
+      "required": [
+        "scheme",
+        "credential",
+        "create"
+      ]
+    }
+  },
+  "required": [
+    "format",
+    "version",
+    "generatedAt",
+    "contracts",
+    "salidium",
+    "providers",
+    "experimental",
+    "instanceId",
+    "pid",
+    "startedAt",
+    "authentication"
+  ]
+}

@@ -147,6 +147,17 @@ startup transaction. After the listener starts, a separate worker advances that 
 batches. A crash or deliberate stop leaves the cursor resumable. Historical retention, compaction,
 and storage optimization remain deferred or blocked until preparation is complete.
 
+A reducer change invalidates every checkpoint. After the listener starts, a background pass replays
+stored sessions without a checkpoint at the current reducer version, newest activity first, on the
+main event loop in slices of at most 2,000 events or about 150 ms with a yield between slices and
+between sessions. Each finished session is written as its first load would write it, the
+checkpoint and the rewritten change log, and its checkpoints from other reducer versions are
+dropped in the same transaction, as every checkpoint write now does. The pass creates no
+coordinator, so it neither marks a session loaded for retention nor schedules an explanation; it
+skips sessions a coordinator holds, pauses during collection pause and maintenance, and resumes
+after a restart from what remains, since a current checkpoint marks a session done. Its progress
+is the operations snapshot's `historyUpdate`.
+
 New physical stores use 16 KiB pages. `events` is an ordinary rowid table with a unique
 `(session_id, seq)` primary-key index, and JSON payloads at or above 1 KiB use a versioned fast gzip
 BLOB. Checkpoints use binary plaintext or gzip BLOBs while retaining legacy text decoding. An
@@ -368,16 +379,27 @@ records the decision; this is the durable shape.
 - **No side effects.** Consumer reads never load a session coordinator, write a checkpoint, count a
   session as loaded for retention, or schedule an explanation.
 - **Discovery.** The daemon writes `consumer.json` beside `daemon.json`, listing every major
-  version it serves with its base URL, plus a per-start instance id, and removes it on a clean stop.
-  It holds no secret. Everything under `/consumer`, refusals included, answers with contract
+  version it serves with its minor version and base URL, plus a per-start instance id, and removes
+  it on a clean stop. Since 1.1 it also lists the providers the instance observes, which are fixed
+  for its life because enabling one needs a restart, and an `experimental` list of local contracts
+  it serves without a compatibility promise, which an embedding application supplies once the port
+  is known. The file and the endpoint are produced by the same function and agree. It holds no
+  secret. Everything under `/consumer`, refusals included, answers with contract
   documents.
 - **Feed.** Notifications, not state: `resync` on every connection, then `session.changed` with the
   new evidence sequence, `session.removed`, `heartbeat`, and `closing`. No replay; a reader more than
   1 MiB behind is disconnected.
+- **Revisions and repositories (1.1).** A report's `revision` carries HEAD, the branch and the
+  repository read at the first session start and the latest turn end, from git snapshots that name
+  the boundary that triggered them; a resume, clear or compaction is not a start. Each changed file carries the Git working tree that holds it, resolved while the
+  change is live from `.git` pointer files alone: no git process, no file contents, bounded work,
+  files owned by the user only, and nothing under another user's home. Anything not established
+  is `null`.
 - **Compatibility.** The zod schemas in `@salidium/consumer-contract` are the source of truth; the
   committed JSON Schema is generated from them and checked in tests. Within a major version changes
   are additive only, consumers ignore what they do not know, and the producer is held to the exact
-  declared shape.
+  declared shape. Each published minor's schemas are kept unchanged in `schema/v1/released/`, and
+  every document the daemon serves in tests must validate against all of them.
 
 The consumer credential file is the authority, not the daemon. The CLI edits it under a lock whether
 or not the daemon is running, and the daemon re-reads it when its metadata changes.

@@ -1,0 +1,299 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:salidium:consumer:1:session-list",
+  "title": "salidium.session-list",
+  "type": "object",
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "salidium.session-list"
+    },
+    "version": {
+      "type": "number",
+      "const": 1
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+      "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+    },
+    "sessions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 1100,
+            "description": "Salidium's session id. Opaque: use it only to build report URLs, percent-encoded as one path segment."
+          },
+          "native": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string",
+                "pattern": "^(?:claude-code|codex|[a-z][a-z0-9-]{0,62}\\/[a-z][a-z0-9-]{0,62})$",
+                "description": "claude-code, codex, or a namespaced owner/name extension provider."
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                "description": "The provider's own session id, exactly as the provider wrote it."
+              }
+            },
+            "required": [
+              "provider",
+              "sessionId"
+            ],
+            "description": "The key any tool that launched a session already has. Look a session up by it with the lookup endpoint."
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The provider's own session title. Null when the provider gave none: Salidium's interface falls back to the first line of the prompt, and prompts are not part of this contract."
+          },
+          "cwd": {
+            "type": "string",
+            "maxLength": 4096,
+            "description": "Working directory the provider recorded for the session."
+          },
+          "repositoryRoot": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Git repository root, when Salidium observed one. Null is not \"not a repository\"."
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "working",
+              "idle",
+              "waiting",
+              "ended",
+              "unknown"
+            ],
+            "description": "As of generatedAt. A working session silent for fifteen minutes reads idle, so status can change with time alone."
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+                "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastEventAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+                "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "endedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+                "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidenceSeq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Sequence of the newest evidence this entry reflects. It only grows for a given session; a larger value means the report changed."
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "turns": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "toolCalls": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "filesChanged": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "linesAdded": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "linesRemoved": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "linesRemovedExact": {
+                "type": "boolean",
+                "description": "False when a provider replaced some file without recording what it held, so linesRemoved is a lower bound rather than a count. Added in 1.1."
+              },
+              "reviewOpen": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Open review items above informational severity."
+              },
+              "remaining": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Plan steps still pending or in progress."
+              }
+            },
+            "required": [
+              "turns",
+              "toolCalls",
+              "filesChanged",
+              "linesAdded",
+              "linesRemoved",
+              "linesRemovedExact",
+              "reviewOpen",
+              "remaining"
+            ]
+          },
+          "lastVerification": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "pass",
+                      "fail",
+                      "partial",
+                      "unknown"
+                    ]
+                  },
+                  "at": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$",
+                    "description": "UTC, millisecond precision, trailing Z. Lexicographic order is time order."
+                  },
+                  "provenance": {
+                    "type": "string",
+                    "enum": [
+                      "observed",
+                      "reported",
+                      "inferred",
+                      "planned",
+                      "explained"
+                    ],
+                    "description": "How Salidium knows this value. Render the classes differently; never merge them."
+                  }
+                },
+                "required": [
+                  "outcome",
+                  "at",
+                  "provenance"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The most recent check Salidium recognized, in run order. Null when none ran."
+          },
+          "explanation": {
+            "type": "string",
+            "enum": [
+              "generated",
+              "generating",
+              "disabled",
+              "unavailable",
+              "failed",
+              "none"
+            ],
+            "description": "Outcome of the most recent explanation attempt; none when there has been no attempt. Whether an explanation covers the newest evidence is the report field explanation.current."
+          }
+        },
+        "required": [
+          "id",
+          "native",
+          "title",
+          "cwd",
+          "repositoryRoot",
+          "model",
+          "status",
+          "startedAt",
+          "lastEventAt",
+          "endedAt",
+          "evidenceSeq",
+          "counts",
+          "lastVerification",
+          "explanation"
+        ]
+      },
+      "description": "Most recent activity first."
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "Sessions available, before the limit."
+    },
+    "truncated": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "format",
+    "version",
+    "generatedAt",
+    "sessions",
+    "total",
+    "truncated"
+  ]
+}

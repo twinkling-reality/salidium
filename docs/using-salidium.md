@@ -24,7 +24,9 @@ should not open.
 The browser tab is a control panel, not the background service. Closing it does not stop Salidium
 or collection. Run `salidium open` to return to the same local service, `salidium status` to see its
 process ID, loopback address, state directory, queue, store size, and alerts, or
-`salidium status --watch` for a live terminal view. Pause, resume, drain, restart, and stop remain
+`salidium status --watch` for a live terminal view. After an upgrade that changes how sessions are
+read, status also shows "Updating session history: n of m" while Salidium brings stored sessions
+up to date in the background. Pause, resume, drain, restart, and stop remain
 available from the CLI without a browser window.
 
 ### Always-on mode on macOS
@@ -363,10 +365,17 @@ salidium consumer revoke <id>
 Revoking takes effect on the tool's next request and closes an open change feed within seconds.
 
 A report read this way carries Salidium's findings: the verdict, changed files, checks, review items,
-what remains, and the optional generated Why and How, each labelled with how Salidium knows it. It
-does not carry your prompts, the agent's full messages, command lines, command output, or raw
-records. While Salidium runs, the tool finds it through `~/.salidium/consumer.json`, which contains
-no secret. The contract itself is described in
+what remains, and the optional generated Why and How, each labelled with how Salidium knows it.
+Since contract version 1.1 it also says which commit the session started from and stood at after
+its latest turn, and which Git working tree holds each changed file, including a worktree outside
+the directory the session started in. Salidium reads that from Git's own files while the change
+happens, without running git or reading file contents, and only when Git observation is on. It does
+not carry your prompts, the agent's full messages, command lines, command output, or raw records.
+
+While Salidium runs, the tool finds it through `~/.salidium/consumer.json`, which contains no
+secret. That file also lists the agents this Salidium watches, so the tool knows which sessions it
+can expect to find, and any experimental local contracts it serves, which carry no compatibility
+promise. Enabling or disabling an agent shows there after Salidium restarts. The contract itself is described in
 [ADR 0005](decisions/0005-read-only-consumer-contract.md) and in the
 `@salidium/consumer-contract` package.
 
