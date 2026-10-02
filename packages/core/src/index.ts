@@ -34,6 +34,7 @@ export {
   isCredentialDumpCommand,
   isSensitiveMcpFileRead,
   isSensitivePath,
+  isSensitiveUri,
 } from './redaction/sensitivePaths.ts';
 export { basename, clip, shortSha } from './state/changeLog.ts';
 export { createInitialState, REDUCER_VERSION, reviveState } from './state/createInitialState.ts';

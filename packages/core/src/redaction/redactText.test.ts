@@ -136,3 +136,281 @@ describe('token terminators', () => {
     expect(r).toBeDefined();
   });
 });
+
+/**
+ * Agent transcripts and tool output are often JSON, YAML, HTTP, or environment files. The key rules
+ * used to need the separator right after the key, so the closing quote of a JSON key hid every one.
+ */
+describe('credentials in structured text', () => {
+  const redact = (text: string) => createRedactor().redact(text).text;
+
+  it('redacts JSON values after quoted keys, and the document still parses', () => {
+    for (const [text, expected] of [
+      ['{"Authorization":"Bearer abc123"}', '{"Authorization":"Bearer [BEARER_TOKEN#1]"}'],
+      ['{"api_key": "sk-abc123def456ghi789"}', '{"api_key": "[SECRET#1]"}'],
+      ['{"password":"hunter2"}', '{"password":"[SECRET#1]"}'],
+      ['{"X-Api-Key":"q8Zr2LmP0x"}', '{"X-Api-Key":"[BEARER_TOKEN#1]"}'],
+      ['{ "client_secret" : "GOCSPX-4bX9qL2m" }', '{ "client_secret" : "[SECRET#1]" }'],
+      [
+        '{"headers":{"Authorization":["Bearer abc123"]}}',
+        '{"headers":{"Authorization":["Bearer [BEARER_TOKEN#1]"]}}',
+      ],
+      [
+        '{"aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}',
+        '{"aws_secret_access_key": "[AWS_SECRET#1]"}',
+      ],
+    ]) {
+      expect(redact(text)).toBe(expected);
+      expect(() => JSON.parse(redact(text))).not.toThrow();
+    }
+  });
+
+  it('replaces a value with escaped quotes whole, so no tail leaks and JSON still parses', () => {
+    const text = JSON.stringify({ password: 'hun"ter\\2x', user: 'bob' });
+    expect(text).toBe('{"password":"hun\\"ter\\\\2x","user":"bob"}');
+    const out = redact(text);
+    expect(out).toBe('{"password":"[SECRET#1]","user":"bob"}');
+    expect(JSON.parse(out)).toEqual({ password: '[SECRET#1]', user: 'bob' });
+  });
+
+  it('reads JSON inside a JSON string, as a raw provider record holds tool output', () => {
+    const inner = JSON.stringify({ password: 'hun"ter2x', Authorization: 'Bearer abc123' });
+    const record = JSON.stringify({ type: 'tool_result', content: inner });
+    const out = redact(record);
+    expect(out).not.toContain('hun');
+    expect(out).not.toContain('abc123');
+    expect(JSON.parse(JSON.parse(out).content)).toEqual({
+      password: '[SECRET#1]',
+      Authorization: 'Bearer [BEARER_TOKEN#2]',
+    });
+    // And an environment file read by a tool, one escaped line break in.
+    expect(redact(JSON.stringify({ content: 'NODE_ENV=test\nDB_PASSWORD=hunter2\n' }))).toBe(
+      '{"content":"NODE_ENV=test\\nDB_PASSWORD=[SECRET#1]\\n"}',
+    );
+  });
+
+  it('redacts YAML, TOML, Python and PHP forms', () => {
+    expect(redact('password: "hunter2"')).toBe('password: "[SECRET#1]"');
+    expect(redact("password: 'hunter2'")).toBe("password: '[SECRET#1]'");
+    expect(redact('  api_key: sk-abc123def456ghi789')).toBe('  api_key: [SECRET#1]');
+    expect(redact('services:\n  db:\n    environment:\n      POSTGRES_PASSWORD: hunter2')).toBe(
+      'services:\n  db:\n    environment:\n      POSTGRES_PASSWORD: [SECRET#1]',
+    );
+    expect(redact('password = "hunter2"')).toBe('password = "[SECRET#1]"');
+    expect(redact("connect(user='bob', password='hunter2')")).toBe(
+      "connect(user='bob', password='[SECRET#1]')",
+    );
+    expect(redact("config['password'] = 'hunter2'")).toBe("config['password'] = '[SECRET#1]'");
+    expect(redact('os.environ["API_KEY"] = "hunter2x"')).toBe(
+      'os.environ["API_KEY"] = "[SECRET#1]"',
+    );
+    expect(redact("'password' => 'hunter2',")).toBe("'password' => '[SECRET#1]',");
+  });
+
+  it('redacts HTTP headers in curl commands and logs', () => {
+    expect(redact('curl -H "Authorization: Bearer abc123" https://api.test/v1')).toBe(
+      'curl -H "Authorization: Bearer [BEARER_TOKEN#1]" https://api.test/v1',
+    );
+    expect(redact("curl -H 'X-Api-Key: q8Zr2LmP0x' https://api.test/v1")).toBe(
+      "curl -H 'X-Api-Key: [BEARER_TOKEN#1]' https://api.test/v1",
+    );
+    expect(redact('> Authorization: Basic dXNlcjpwYXNz\n> Accept: */*')).toBe(
+      '> Authorization: Basic [BEARER_TOKEN#1]\n> Accept: */*',
+    );
+    expect(redact('Proxy-Authorization: Basic dXNlcjpwYXNzd29yZDE=')).toBe(
+      'Proxy-Authorization: Basic [BEARER_TOKEN#1]',
+    );
+    expect(redact('X-Auth-Token: 7f3k9q2m1z')).toBe('X-Auth-Token: [BEARER_TOKEN#1]');
+    expect(redact('PRIVATE-TOKEN: q8Zr2LmP0x')).toBe('PRIVATE-TOKEN: [BEARER_TOKEN#1]');
+  });
+
+  it('redacts environment forms', () => {
+    expect(redact('DB_PASSWORD=hunter2')).toBe('DB_PASSWORD=[SECRET#1]');
+    expect(redact('export API_TOKEN="hunter2"')).toBe('export API_TOKEN="[SECRET#1]"');
+    expect(redact('STRIPE_SECRET_KEY=whsec9f8e7d6c')).toBe('STRIPE_SECRET_KEY=[SECRET#1]');
+    expect(redact('GITHUB_TOKEN=q8Zr2LmP0x pnpm release')).toBe(
+      'GITHUB_TOKEN=[SECRET#1] pnpm release',
+    );
+  });
+
+  it('gives a repeated secret one placeholder whatever form it is written in', () => {
+    const r = createRedactor();
+    const nested = JSON.stringify({ content: JSON.stringify({ password: 'hun"ter2x' }) });
+    const out = [
+      '{"password":"hun\\"ter2x"}',
+      'PASSWORD="hun\\"ter2x"',
+      nested,
+      '{"Authorization":"Bearer abc123"}',
+      'curl -H "Authorization: Bearer abc123"',
+      '{"password":"another1"}',
+    ].map((text) => r.redact(text).text);
+    expect(out[0]).toContain('[SECRET#1]');
+    expect(out[1]).toContain('[SECRET#1]');
+    expect(out[2]).toContain('[SECRET#1]');
+    expect(out[3]).toContain('[BEARER_TOKEN#2]');
+    expect(out[4]).toContain('[BEARER_TOKEN#2]');
+    expect(out[5]).toContain('[SECRET#3]');
+  });
+
+  it('redacts a value whose closing quote was clipped off', () => {
+    expect(redact('{"api_key": "sk-abc123def4')).toBe('{"api_key": "[SECRET#1]');
+    expect(redact('{"Authorization": "Bearer abc123def')).toBe(
+      '{"Authorization": "Bearer [BEARER_TOKEN#1]',
+    );
+  });
+
+  it('leaves its own placeholders alone, because text that crosses the boundary is redacted twice', () => {
+    const once = redact(
+      '{"password":"hunter2","token":"ghp_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8","Authorization":"Bearer abc123"} DB_PASSWORD=hunter2',
+    );
+    expect(createRedactor().redact(once).findings).toHaveLength(0);
+    // A placeholder the sync outbox has stripped of its number is still one.
+    expect(createRedactor().redact('{"password":"[SECRET]"}').findings).toHaveLength(0);
+  });
+
+  it('leaves a private key in JSON to the private key rule, and its id to the generic one', () => {
+    const out = redact(
+      JSON.stringify({
+        private_key_id: '3f9a2c1d8e7b6a5f4c3d2e1f0a9b8c7d6e5f4a3b',
+        private_key: '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg\n-----END PRIVATE KEY-----\n',
+      }),
+    );
+    expect(out).toBe('{"private_key_id":"[SECRET#1]","private_key":"[PRIVATE_KEY#2]\\n"}');
+  });
+
+  it('keeps everything the earlier rules caught', () => {
+    // A header name after a prefix: the header rule never had a left anchor.
+    expect(redact('HTTP_AUTHORIZATION=Bearer 4f8a9c2d7e1b3a6f5c8d')).toBe(
+      'HTTP_AUTHORIZATION=Bearer [BEARER_TOKEN#1]',
+    );
+    expect(redact('X-Authorization: Bearer 4f8a9c2d7e1b3a6f5c8d')).toBe(
+      'X-Authorization: Bearer [BEARER_TOKEN#1]',
+    );
+    // Git's per-command header, unquoted and quoted.
+    expect(redact('git -c http.extraheader=Authorization: Bearer tk9f8e7d6c5b4a3f2e fetch')).toBe(
+      'git -c http.extraheader=Authorization: Bearer [BEARER_TOKEN#1] fetch',
+    );
+    expect(redact('git -c http.extraheader="Authorization: Bearer tk9f8e7d6c5b4a3f2e" fetch')).toBe(
+      'git -c http.extraheader="Authorization: Bearer [BEARER_TOKEN#1]" fetch',
+    );
+    expect(redact('{"HTTP_AUTHORIZATION": "Bearer abc123"}')).toBe(
+      '{"HTTP_AUTHORIZATION": "Bearer [BEARER_TOKEN#1]"}',
+    );
+    // A quoted value with whitespace still has its leading run read, at the original bar.
+    expect(redact('password: "Xk9mP2vL7qR4wT6y x"')).toBe('password: "[SECRET#1] x"');
+    // A template inside a value does not excuse the rest of it.
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a template is the input under test.
+    expect(redact('password: "a1B2c3D4e5F6g7H8i9J0${x}"')).not.toContain('a1B2c3D4');
+    // A camelCase header name, which the unanchored rule always caught.
+    expect(redact('requestAuthorization: Bearer Zq8rL0xStagingAB12')).toBe(
+      'requestAuthorization: Bearer [BEARER_TOKEN#1]',
+    );
+    expect(redact('proxyAuthorization=Bearer Zq8rL0xStagingAB12')).toBe(
+      'proxyAuthorization=Bearer [BEARER_TOKEN#1]',
+    );
+  });
+
+  it('reads a value whole whatever punctuation it holds', () => {
+    // A double quote inside a single-quoted value is part of it.
+    expect(redact(`PGPASSWORD='Zq8r"L0xStagingAB'`)).toBe("PGPASSWORD='[SECRET#1]'");
+    expect(redact(`password: 'Zq8rL0x"StagingAB12'`)).toBe("password: '[SECRET#1]'");
+    // So is JSON punctuation at its start.
+    expect(redact('{"password":":Zq8rL0xStagingAB12"}')).toBe('{"password":"[SECRET#1]"}');
+    expect(redact('token: "}Zq8rL0xStagingAB12"')).toBe('token: "[SECRET#1]"');
+    // ...but the gap between two strings of a compact JSON array is not a value.
+    for (const text of ['["password: ",1234567,false,"x"]', '{"a":["token=",98765,43210,"x"]}'])
+      expect(redact(text)).toBe(text);
+    // ...but in a raw record, a double quote followed by JSON punctuation ends the string around it.
+    const raw = JSON.stringify({ cmd: "login --token='Zq8rL0x", next: 'abc' });
+    expect(JSON.parse(redact(raw))).toEqual({ cmd: "login --token='[SECRET#1]", next: 'abc' });
+  });
+
+  it('reads an environment value to its end and a long quoted value to its quote', () => {
+    expect(redact('DB_PASSWORD=S3cret@2024!x')).toBe('DB_PASSWORD=[SECRET#1]');
+    expect(redact('DB_PASSWORD=Zq8r?L0xStaging npm start')).toBe(
+      'DB_PASSWORD=[SECRET#1] npm start',
+    );
+    // ...and no further than the pair it belongs to.
+    expect(redact('DB_PASSWORD=Zq8rL0xS,OTHER=1')).toBe('DB_PASSWORD=[SECRET#1],OTHER=1');
+    expect(redact('{env: DB_PASSWORD=Zq8rL0xS}')).toBe('{env: DB_PASSWORD=[SECRET#1]}');
+    const long = `Zq8rL0x"${'a1B2c3D4'.repeat(600)}`;
+    const out = redact(JSON.stringify({ password: long }));
+    expect(out).toBe('{"password":"[SECRET#1]"}');
+  });
+
+  it('numbers past the placeholders already in the text, and decodes escapes before numbering', () => {
+    // The consumer boundary redacts stored text with a fresh redactor.
+    expect(redact('{"api_key":"[SECRET#1]"} DB_PASSWORD=Zq8rL0xS')).toBe(
+      '{"api_key":"[SECRET#1]"} DB_PASSWORD=[SECRET#2]',
+    );
+    const r = createRedactor();
+    expect(r.redact('{"api_key":"Zq8r\\u004c0xS"}').text).toBe('{"api_key":"[SECRET#1]"}');
+    expect(r.redact('{"api_key":"Zq8rL0xS"}').text).toBe('{"api_key":"[SECRET#1]"}');
+    expect(r.redact('{"api_key": ["Zq8rL0xS"]}').text).toBe('{"api_key": ["[SECRET#1]"]}');
+  });
+
+  it('stays linear on input shaped to make a key match backtrack', () => {
+    // A header-name boundary that let every `-` or `_` start a match took 558 ms at 16 KB and grew
+    // fourfold with each doubling; base64url data has one of those every few characters. Linear
+    // time is a few milliseconds here and quadratic several seconds, so the budget sits between.
+    // The fastest of a few runs is what counts, because a busy machine can stall any single one.
+    const size = 64 * 1024;
+    const base64url = Array.from({ length: size }, (_, i) =>
+      'aZ09-_xQ'.charAt((i * 7 + (i >> 3)) % 8),
+    ).join('');
+    for (const text of [
+      `${'a-'.repeat(size / 2)} Authorization`,
+      `${'a_'.repeat(size / 2)} password`,
+      base64url,
+      `${base64url} Authorization: Bearer x`,
+      `${base64url}-api-key password token`,
+    ]) {
+      let fastest = Number.POSITIVE_INFINITY;
+      for (let attempt = 0; attempt < 5 && fastest >= 50; attempt++) {
+        const started = performance.now();
+        createRedactor().redact(text);
+        fastest = Math.min(fastest, performance.now() - started);
+        if (fastest > 1000) break;
+      }
+      expect(fastest, text.slice(-40)).toBeLessThan(50);
+    }
+  });
+
+  it('does not take prose, code, or non-secret JSON values for credentials', () => {
+    for (const text of [
+      // The word in a sentence.
+      'Enter your password: it must be at least 8 characters',
+      'the password is hunter2',
+      'Authorization: required for every call to this endpoint',
+      'Use an Authorization: Bearer token for each request',
+      // Code that names credentials.
+      'const token = getToken(user1)',
+      'function getToken() { return cache.token }',
+      'password = user.password2',
+      'const tokenizer = createTokenizer(options)',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a template is the input under test.
+      'headers: { Authorization: `Bearer ${this.token}` }',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a template is the input under test.
+      '{"Authorization": "Bearer ${token}"}',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a template is the input under test.
+      'GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}',
+      '{"Authorization": "Bearer {token}"}',
+      'API_TOKEN=$API_TOKEN pnpm release',
+      // JSON keys with empty or plainly non-secret values.
+      '{"password": ""}',
+      '{"password": null, "token": false}',
+      '{"password": "Password", "passwordHint": "Must be at least 8 characters"}',
+      '{"token": "Use the refresh token here"}',
+      '{"max_tokens": 4096, "input_tokens": 1234, "cache_read_input_tokens": 98765}',
+      '{"token_type": "Bearer", "secretName": "tls-cert-2024"}',
+      '{"password": {"type": "string", "minLength": 8}}',
+      '{"password": "********", "api_key": "<your-api-key>", "secret": "REDACTED"}',
+      '{"authorization_url": "https://x.test/oauth/authorize"}',
+      '{"api_key": "sk-...", "token": "xxxxxxxx"}',
+      'password_reset_token_expiry = 3600',
+      'MAX_TOKEN=4096',
+    ]) {
+      expect(createRedactor().redact(text).findings, text).toHaveLength(0);
+    }
+  });
+});

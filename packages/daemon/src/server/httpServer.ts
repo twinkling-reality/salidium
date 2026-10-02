@@ -8,6 +8,7 @@ import {
   isCredentialDumpCommand,
   isSensitiveMcpFileRead,
   isSensitivePath,
+  isSensitiveUri,
   projectSession,
 } from '@salidium/core';
 import type { SessionLinksHandler } from '@salidium/project-map';
@@ -651,7 +652,11 @@ export function createHttpServer(deps: HttpServerDeps): Server {
         });
       if (read.raw === undefined) return json(res, 200, { event, raw: null, reason: read.reason });
       // The source names the paths and commands in what it returned; suppress as for events.
-      if (read.paths.some(isSensitivePath) || read.commands.some(isCredentialDumpCommand))
+      if (
+        read.paths.some(isSensitivePath) ||
+        read.uris?.some(isSensitiveUri) ||
+        read.commands.some(isCredentialDumpCommand)
+      )
         return json(res, 200, {
           event,
           raw: null,
@@ -797,14 +802,23 @@ function isSuppressedRecord(event: StoredEvent): boolean {
       return true;
     if (i.kind === 'command' && isCredentialDumpCommand(i.command)) return true;
     if (i.kind === 'mcp' && isSensitiveMcpFileRead(i)) return true;
+    if (i.kind === 'search' && i.path !== undefined && isSensitivePath(i.path)) return true;
     return false;
   }
+  if (event.kind === 'tool.failed') return event.errorExcerpt.startsWith('[contents suppressed');
   if (event.kind === 'tool.completed') {
     const r = event.result;
     if (r.kind === 'fileRead' && (r.suppressed || isSensitivePath(r.path))) return true;
     if (r.kind === 'command' && r.outputExcerpt.startsWith('[contents suppressed')) return true;
     if (r.kind === 'generic' && r.excerpt?.startsWith('[contents suppressed')) return true;
-    if (r.kind === 'fileChanges' && r.changes.some((c) => isSensitivePath(c.path))) return true;
+    if (
+      r.kind === 'fileChanges' &&
+      r.changes.some(
+        (c) =>
+          isSensitivePath(c.path) || (c.movedFrom !== undefined && isSensitivePath(c.movedFrom)),
+      )
+    )
+      return true;
   }
   return false;
 }

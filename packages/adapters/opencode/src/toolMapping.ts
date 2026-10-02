@@ -81,6 +81,7 @@ function mcpInput(name: string, input: Record<string, unknown>): McpToolInput | 
       tool: name.slice(i + 1),
       pathArgs: paths.paths.length ? paths.paths : undefined,
       pathArgsTruncated: paths.truncated || undefined,
+      pathArgsUndecodable: paths.undecodable || undefined,
       argsExcerpt: excerpt(JSON.stringify(input), 300, 0).text,
     });
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeProviderTimestamp } from './recordHelpers.ts';
+import { normalizeProviderTimestamp, pathArgumentMetadata } from './recordHelpers.ts';
 
 describe('normalizeProviderTimestamp', () => {
   it('normalizes explicit RFC 3339 offsets and precision to UTC milliseconds', () => {
@@ -22,5 +22,31 @@ describe('normalizeProviderTimestamp', () => {
     ]) {
       expect(normalizeProviderTimestamp(value), String(value)).toBeUndefined();
     }
+  });
+});
+
+describe('pathArgumentMetadata', () => {
+  it('marks a path it had to shorten as truncated, since the cut can hide what it names', () => {
+    const long = `/home/me/${'x/../'.repeat(97)}.aws/${'y/../'.repeat(98)}cli/cache/abc.json`;
+    expect(long.length).toBeGreaterThan(1000);
+    const metadata = pathArgumentMetadata({ path: long });
+    expect(metadata.truncated).toBe(true);
+    expect(metadata.paths[0]?.length).toBeLessThanOrEqual(1000);
+    expect(pathArgumentMetadata({ path: '/repo/src/a.ts' })).toEqual({
+      paths: ['/repo/src/a.ts'],
+      truncated: false,
+      undecodable: false,
+    });
+  });
+
+  it('records a malformed escape under a URI key, and not under a path key', () => {
+    expect(pathArgumentMetadata({ uri: '/repo/%ZZ/a.md' }).undecodable).toBe(true);
+    expect(
+      pathArgumentMetadata({ request: { hrefs: ['file:///repo/%E0%A4%A'] } }).undecodable,
+    ).toBe(true);
+    expect(pathArgumentMetadata({ path: '/repo/100%.md' }).undecodable).toBe(false);
+    expect(pathArgumentMetadata({ uri: 'file:///repo/100%25.md' }).undecodable).toBe(false);
+    expect(pathArgumentMetadata({ url: 'https://x/?q=100%' }).undecodable).toBe(false);
+    expect(pathArgumentMetadata({ url: 'file:///repo/100%' }).undecodable).toBe(true);
   });
 });

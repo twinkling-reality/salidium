@@ -87,7 +87,9 @@ export function asObject(v: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-const PATH_ARGUMENT = /^(?:path|paths|file|files|file_?path|file_?paths|uri|uris)$/i;
+const PATH_ARGUMENT = /^(?:path|paths|file|files|file_?path|file_?paths)$/i;
+/** Keys whose values are URIs, which whatever opens them percent-decodes. */
+const URI_ARGUMENT = /^(?:uri|uris|url|urls|href|hrefs)$/i;
 const MAX_PATH_ARGUMENTS = 32;
 const MAX_PATH_ARGUMENT_CHARS = 1000;
 
@@ -96,37 +98,66 @@ const MAX_PATH_ARGUMENT_CHARS = 1000;
  * Keeping this small, structured list lets downstream redaction make a security decision from
  * the original argument shape without retaining an unbounded duplicate of the tool input.
  */
-export function pathArgumentMetadata(value: unknown): { paths: string[]; truncated: boolean } {
+export function pathArgumentMetadata(value: unknown): {
+  paths: string[];
+  truncated: boolean;
+  undecodable: boolean;
+} {
   const paths: string[] = [];
   const seen = new Set<string>();
   let truncated = false;
-  const visit = (current: unknown, pathContext: boolean, root = false): void => {
+  let undecodable = false;
+  type Context = 'none' | 'path' | 'uri';
+  const visit = (current: unknown, context: Context, root = false): void => {
     if (typeof current === 'string') {
+      // A URI's opener decodes it, so a malformed escape leaves what it names unknown. The list
+      // below keeps no key, so this is recorded beside it. A web address (`https:`) is not a
+      // file a tool opens; only a `file:` or scheme-less value counts.
+      if (
+        context === 'uri' &&
+        !undecodable &&
+        !/^(?!file:)[a-z][a-z0-9+.-]+:/i.test(current.trim())
+      ) {
+        try {
+          decodeURIComponent(current);
+        } catch {
+          undecodable = true;
+        }
+      }
       // Some filesystem MCPs accept a bare path instead of an object.
-      if ((pathContext || root) && current && !seen.has(current)) {
+      if ((context !== 'none' || root) && current && !seen.has(current)) {
         seen.add(current);
         if (paths.length >= MAX_PATH_ARGUMENTS) {
           truncated = true;
         } else {
           // Preserve the basename as well as the head when a hostile or malformed path is huge.
-          const bounded =
-            current.length <= MAX_PATH_ARGUMENT_CHARS
-              ? current
-              : `${current.slice(0, 490)}…${current.slice(-490)}`;
-          paths.push(bounded);
+          // The cut can hide what the path names (a `..` run around `.aws/`), so it also counts
+          // as truncated metadata and the read is suppressed rather than trusted.
+          if (current.length <= MAX_PATH_ARGUMENT_CHARS) paths.push(current);
+          else {
+            truncated = true;
+            paths.push(`${current.slice(0, 490)}…${current.slice(-490)}`);
+          }
         }
       }
       return;
     }
     if (Array.isArray(current)) {
-      for (const item of current) visit(item, pathContext);
+      for (const item of current) visit(item, context);
       return;
     }
     if (current === null || typeof current !== 'object') return;
     for (const [key, child] of Object.entries(current)) {
-      visit(child, pathContext || PATH_ARGUMENT.test(key));
+      const next: Context = URI_ARGUMENT.test(key)
+        ? 'uri'
+        : context !== 'none'
+          ? context
+          : PATH_ARGUMENT.test(key)
+            ? 'path'
+            : 'none';
+      visit(child, next);
     }
   };
-  visit(value, false, true);
-  return { paths, truncated };
+  visit(value, 'none', true);
+  return { paths, truncated, undecodable };
 }

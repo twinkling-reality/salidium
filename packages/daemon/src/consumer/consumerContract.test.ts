@@ -25,6 +25,7 @@ import {
 import { consumerDiscovery, consumerDiscoveryPath, experimentalContracts } from './discovery.ts';
 import {
   CONSUMER_CANARIES,
+  CONSUMER_JSON_SECRET,
   CONSUMER_SECRET,
   consumerScenario,
   SCENARIO_CLOCK,
@@ -502,6 +503,11 @@ describe('consumer documents', () => {
     for (const canary of Object.values(CONSUMER_CANARIES)) expect(serialized).not.toContain(canary);
     expect(serialized).not.toContain(CONSUMER_SECRET);
     expect(serialized).toContain('ghp_[GITHUB_TOKEN#');
+    // The password has no vendor shape; only the JSON key around it says what it is.
+    expect(serialized).not.toContain(CONSUMER_JSON_SECRET);
+    expect(report.verification.statements.map((statement) => statement.text)).toContainEqual(
+      expect.stringMatching(/nor was \{"password":"\[SECRET#\d+\]"\}\.$/),
+    );
 
     expect(report.session.native).toEqual(SCENARIO_SESSIONS.verified);
     expect(report.session.title).toBe('Fix double charge on retry');
@@ -1311,6 +1317,49 @@ describe('consumer contract edges', () => {
   });
 });
 
+describe('text stored before a rule existed', () => {
+  it('is redacted at the boundary, JSON and header forms included', async () => {
+    // State built from events that never passed ingest redaction, as rows stored by an older
+    // build are: only the boundary's own pass stands between them and a consumer.
+    const { applyEvent, createInitialState, createRedactor, projectSession, summarizeSession } =
+      await import('@salidium/core');
+    const { EventBuilder } = await import('@salidium/core/testing');
+    const { consumerText, toSessionReport } = await import('./report.ts');
+    const b = new EventBuilder('claude-code:stored', '2026-09-20T16:00:00.000Z');
+    const state = createInitialState({
+      sessionId: 'claude-code:stored',
+      provider: 'claude-code',
+      providerSessionId: 'stored',
+      cwd: '/repo',
+    });
+    const header = 'q8Zr2LmP0xStored';
+    for (const event of [
+      b.sessionStarted('/repo'),
+      b.turnStarted('Deploy the preview'),
+      b.message(`All tests pass. The deploy used {"password":"${CONSUMER_JSON_SECRET}"}.`),
+      b.turnEnded(`Deployed with {"Authorization":"Bearer ${header}"} and it answered.`),
+    ])
+      applyEvent(state, event);
+    const at = Date.parse('2026-09-20T16:01:00.000Z');
+    const report = exactly(
+      SessionReportSchema,
+      toSessionReport(
+        state,
+        projectSession(state, at),
+        summarizeSession(state, at),
+        at,
+        consumerText(createRedactor()),
+      ),
+    );
+    const serialized = JSON.stringify(report);
+    expect(serialized).not.toContain(CONSUMER_JSON_SECRET);
+    expect(serialized).not.toContain(header);
+    expect(report.latestStatement?.text).toBe(
+      'Deployed with {"Authorization":"Bearer [BEARER_TOKEN#1]"} and it answered.',
+    );
+  });
+});
+
 describe('identifiers at the boundary', () => {
   it('redacts a located path like any text that crosses, and never clips or reflows it', async () => {
     const { createRedactor } = await import('@salidium/core');
@@ -1348,6 +1397,7 @@ describe('retained fixtures', () => {
       const text = readFileSync(new URL(file, dir), 'utf8');
       for (const canary of Object.values(CONSUMER_CANARIES)) expect(text).not.toContain(canary);
       expect(text).not.toContain(CONSUMER_SECRET);
+      expect(text).not.toContain(CONSUMER_JSON_SECRET);
     }
   });
 });

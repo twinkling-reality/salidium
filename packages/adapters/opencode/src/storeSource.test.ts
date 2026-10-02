@@ -7,6 +7,7 @@ import {
   applyEvent,
   createInitialState,
   isSensitiveMcpFileRead,
+  isSensitiveUri,
   projectSession,
 } from '@salidium/core';
 import {
@@ -853,7 +854,7 @@ describe('OpenCode raw records', () => {
     );
     expect(prompt.raw).toBeDefined();
     expect(prompt.raw).not.toContain(Buffer.from('SYNTHETIC_SECRET=not-real').toString('base64'));
-    expect(prompt).toMatchObject({ paths: [`${PROJECT}/.env`, '.env'] });
+    expect(prompt).toMatchObject({ paths: ['.env'], uris: [`file://${PROJECT}/.env`] });
 
     expect(
       source.readRawRecord(path, {
@@ -998,6 +999,44 @@ describe('OpenCode raw records', () => {
     const { input } = mapToolInput(name, { path: `${PROJECT}/.env` }, '');
     expect(input).toMatchObject({ kind: 'mcp', server, tool });
     expect(input.kind === 'mcp' && isSensitiveMcpFileRead(input)).toBe(true);
+  });
+
+  it.each([
+    `file://${PROJECT}/%2Eenv`,
+    `file://localhost${PROJECT}/.%65nv`,
+    `${PROJECT}//./.ENV.`,
+    `file://${PROJECT}/%ZZ/notes`,
+  ])('splits an MCP read of the encoded path %s where the file read is', (uri) => {
+    const { input } = mapToolInput('file_system_read_file', { uri }, '');
+    expect(input).toMatchObject({ kind: 'mcp', server: 'file_system', tool: 'read_file' });
+    expect(input.kind === 'mcp' && isSensitiveMcpFileRead(input)).toBe(true);
+  });
+
+  it.each([
+    [`file://${PROJECT}/%2Eenv`, '%2Eenv'],
+    [`file://${PROJECT}/.%65nv.local`, 'notes.txt'],
+    [`file://${PROJECT}/%2essh/ID_RSA`, 'key'],
+    [`file://${PROJECT}/%E0%A4%A`, 'odd'],
+  ])('names the attached file %s so the raw view can suppress it', (uri, name) => {
+    const id = store.session({ directory: PROJECT });
+    const withFile = store.message(id, 'user', {
+      time: { created: T0 + 1 },
+      text: 'see attached',
+      files: [
+        {
+          data: Buffer.from('SYNTHETIC_SECRET=not-real').toString('base64'),
+          mime: 'text/plain',
+          source: { type: 'uri', uri },
+          name,
+        },
+      ],
+    });
+    const ref = harness()
+      .poll()
+      .find((e) => e.source.ref?.recordId === `${id}/${withFile.id}`)?.source.ref;
+    const read = createOpenCodeStoreSource().readRawRecord(path, ref ?? {});
+    expect(read).toMatchObject({ paths: [name], uris: [uri] });
+    expect(read.uris?.some(isSensitiveUri)).toBe(true);
   });
 
   it('splits an MCP name at its first underscore when nothing sensitive is read', () => {

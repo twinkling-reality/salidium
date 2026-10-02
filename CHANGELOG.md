@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.8.1 - 2026-10-02
+
+- Redact credentials written as JSON, YAML, HTTP headers, and environment variables. The key
+  rules needed the separator right after the key, so the closing quote of a JSON key hid
+  `{"password":"..."}`, `"api_key": "..."` and `{"Authorization":"Bearer ..."}` from them. Now
+  covered: quoted keys, including JSON escaped inside a JSON string as a raw provider record holds
+  it; quoted values with escaped quotes, replaced whole so a redacted JSON document still parses;
+  `Authorization` with a Bearer, Basic or Token scheme, `Proxy-Authorization`, `X-Api-Key`,
+  `X-Auth-Token`, `X-Access-Token`, `Private-Token` and `X-Goog-Api-Key` headers, also after a
+  prefix such as `HTTP_AUTHORIZATION=`, `requestAuthorization:` or `http.extraheader=`, in curl commands and logs; and
+  `NAME=value`, `export NAME="value"` and compose `NAME: value` forms, read to the end of the
+  value. A key that names a credential with a quoted value, or an environment variable's name, is
+  enough evidence for a value of six characters, so `{"password":"hunter2"}` and
+  `DB_PASSWORD=hunter2` are redacted. Other values keep the earlier bar. A repeated secret keeps
+  one placeholder whether it is bare, quoted, or escaped, though a header and a key-value pair
+  still get separate placeholders. A placeholder already in a text keeps its number when that text
+  is redacted again. The consumer boundary redacts a document's fields one at a time, though, so a
+  secret it finds first can still share a number with a placeholder stored in a later field.
+  Not covered: an unquoted lowercase key with a short value (`password: hunter2` in YAML,
+  `password=hunter2` in an ini file); a quoted value containing whitespace beyond the leading run
+  the earlier rules read; the part of an unquoted environment value after a `,` or an unclosed
+  `[`, which reads as the end of the pair; values made only of letters, `.`, `_` and `-` other
+  than a Basic credential; keys after a colon, as in an `.npmrc` `//host/:_authToken=`; YAML
+  block scalars; URL query parameters; command-line flags such as `--password value`; and
+  cookies.
+- Events stored before this release are not redacted again. Stored events are immutable, and
+  `salidium reingest --all` re-reads provider files but never rewrites an event it already holds,
+  so older rows keep their earlier redaction in the session view, search, the owner API, and what
+  the explainer is sent. Text that crosses the consumer contract and raw records opened as
+  evidence are redacted with the current rules when they are read, so they are covered. A
+  reingested record whose redaction now differs from its stored event is not fingerprinted, and
+  its raw evidence may keep asking to be re-ingested. `salidium forget <id>` removes a session
+  whose stored text holds a secret.
+- Reads of sensitive files stay out of stored events and the raw view however a tool spells the
+  path. Salidium used to compare a path as given, so `file:///repo/%2Eenv`, `.ENV`, `.env.`,
+  `/repo//./.env`, `src/../.ssh/id_rsa` or `.env::$DATA` read the file without suppression. It now
+  compares every spelling a tool might open: as a `file:` URI's path, percent-decoded, with
+  separators, `.` and `..` segments, trailing dots and whitespace, NTFS streams and Windows drive
+  prefixes normalized, and without regard to case. The comparison is lexical and never touches the
+  filesystem. A URI (a `file:` value, or a `uri`, `url` or `href` argument) that cannot be decoded
+  counts as sensitive; in an ordinary path a `%` that is not a valid escape is literal, so
+  `docs/100%.md` stays visible. This applies to Claude Code, Codex and OpenCode alike.
+- More reads count as reads of a sensitive file: a search inside one (Grep over `.env`), a command
+  that fails after printing one (`cat .env; exit 1`), a file moved out of a sensitive path, a Codex
+  `view_image`, the MCP filesystem tool `read_media_file`, and an MCP path argument too long to keep
+  whole.
+- More shell commands count as printing a sensitive file: through `sudo`, `env`, `command`, `nice`,
+  `time`, `timeout`, `nohup` or `xargs` (option clusters such as `sudo -Eu root` included); with
+  readers such as `tac`, `nl`, `base64`, `xxd`, `od`, `hexdump` and `strings`; by input
+  redirection (`< .env cat`); across a line continuation; by a glob that carries enough of a
+  sensitive name (`.env*`, `.e*`, `*.pem`, `cred*`, `id_*`, `~/.kube/*`, but not `*.json` or
+  `package*.json`); as `git show <rev>:.env` or `git cat-file -p <rev>:.env`; and inside `$(...)`,
+  `bash -c` or `find -exec`. A grep, sed or awk pattern, `git log -S` or `--grep`, and filters such
+  as `--exclude=.env` are not read as paths, and `set -e` or `export FOO=1` no longer hide a
+  command's output; only a bare `set` or `export` counts as a dump.
+- Known limits: a recursive search of a directory that merely contains a sensitive file
+  (`grep -r KEY .`), output lines whose `path:` prefix names a sensitive file, names reached by
+  indirection (`f=.env; cat "$f"`), PowerShell, `cmd` and interpreter readers, `yq` given only a
+  file (`yq secrets.yaml`, `yq .env`), Claude Code's Grep `glob` argument, `git show :0:.env`, and Windows 8.3
+  short names are not recognized.
+
 ## 0.8.0 - 2026-10-02
 
 - Experimental: see where a session's work sits in its repository. A session's report gains
