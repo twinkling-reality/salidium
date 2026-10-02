@@ -39,6 +39,7 @@ export {
 export { basename, clip, shortSha } from './state/changeLog.ts';
 export { createInitialState, REDUCER_VERSION, reviveState } from './state/createInitialState.ts';
 export { deriveStatus } from './state/deriveStatus.ts';
+export { ownEntry, setEntry } from './state/keyedRecord.ts';
 export { applyEvent, describeVerification } from './state/reducer.ts';
 export * from './state/runState.ts';
 export {

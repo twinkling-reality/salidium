@@ -12,14 +12,13 @@ import type {
 import type {
   FileLocation,
   Line,
-  Redactor,
   RunState,
   RevisionAnchor as RunStateAnchor,
   SessionView,
   VerificationRow,
   WaitingState,
 } from '@salidium/core';
-import { clip, WORKING_STALE_MS } from '@salidium/core';
+import { clip, createRedactor, ownEntry, WORKING_STALE_MS } from '@salidium/core';
 import type { Epistemic, SessionSummary, ToolKind } from '@salidium/protocol';
 import { explanationIsCurrent } from '../sessions/sessionCoordinator.ts';
 
@@ -34,7 +33,8 @@ import { explanationIsCurrent } from '../sessions/sessionCoordinator.ts';
  * activity lists, event ids, and provider file references. There is no field for any of them.
  *
  * Text that does cross passes the redactor again. Events were redacted at ingest; running it at the
- * boundary covers records ingested before a rule existed, and costs little.
+ * boundary covers records ingested before a rule existed, and costs little. Each document gets its
+ * own redactor; see `redactedDocument`.
  *
  * The mappings below are exhaustive over Salidium's internal vocabularies, so a new internal value
  * fails the type check here instead of leaking an unlisted value into a closed contract enum.
@@ -91,7 +91,7 @@ const ACTIVITY: Record<ToolKind, string> = {
 };
 
 function workingHeadline(state: RunState, callId: string | undefined): string {
-  const activity = callId ? state.activities[callId] : undefined;
+  const activity = callId ? ownEntry(state.activities, callId) : undefined;
   if (!activity) return 'Working';
   const input = activity.input;
   if (input.kind === 'fileEdit' || input.kind === 'fileWrite')
@@ -107,11 +107,50 @@ export interface ConsumerText {
 }
 
 /** Redact, then clip: clipping first could cut a secret in half and hide it from the redactor. */
-export function consumerText(redactor: Redactor): ConsumerText {
+function consumerText(redact: (value: string) => string): ConsumerText {
   const text = ((value: string | undefined, max: number) =>
-    value === undefined ? null : clip(redactor.redact(value).text, max)) as ConsumerText;
-  text.exact = (value: string) => redactor.redact(value).text;
+    value === undefined ? null : clip(redact(value), max)) as ConsumerText;
+  text.exact = redact;
   return text;
+}
+
+/**
+ * Builds one document, a report or one session's entry, with all of its text passing one fresh
+ * redactor.
+ *
+ * Stored text was redacted at ingest by the session's own redactor and holds its placeholders.
+ * Text stored before a rule existed is redacted here for the first time, and the number it gets
+ * must not be one that another field of the same document already holds for a different secret.
+ * `redact` skips the numbers in the text it is given, but fields are redacted one at a time, so a
+ * number handed out for an early field could be one a later field holds. When that can have
+ * happened, the document is built again by a redactor that reserves the highest stored number
+ * first. Most documents hold no new finding, or no stored placeholder, and are built once. A secret
+ * found here never takes a stored number, even one that stands for the same secret, because the
+ * stored text no longer holds the secret to compare.
+ *
+ * A redactor never outlives its document. One shared across documents would number a secret by
+ * whichever session or request reached it first, and would carry a number it had handed out in
+ * one session into another session whose stored text uses that number for something else.
+ */
+export function redactedDocument<T>(build: (text: ConsumerText) => T): T {
+  // The text holding the highest stored number found so far, reserved before the next attempt.
+  let highestIn = '';
+  for (;;) {
+    const redactor = createRedactor();
+    const reserved = redactor.reserve(highestIn);
+    let highest = reserved;
+    const document = build(
+      consumerText((value) => {
+        const held = redactor.reserve(value);
+        if (held > highest) {
+          highest = held;
+          highestIn = value;
+        }
+        return redactor.redact(value).text;
+      }),
+    );
+    if (redactor.findingsCount === 0 || highest === reserved) return document;
+  }
 }
 
 /**
@@ -318,16 +357,11 @@ export function toSessionReport(
         if (path === undefined) return [];
         return {
           path,
-          repository: repository(
-            Object.hasOwn(state.fileLocations, file.path)
-              ? state.fileLocations[file.path]
-              : undefined,
-            text,
-          ),
+          repository: repository(ownEntry(state.fileLocations, file.path), text),
           changeCount: file.changeCount,
           linesAdded: file.linesAdded,
           linesRemoved: file.linesRemoved,
-          linesRemovedExact: !state.files[file.path]?.linesRemovedUnknown,
+          linesRemovedExact: !ownEntry(state.files, file.path)?.linesRemovedUnknown,
           kinds: [...file.kinds],
           lastChangedAt: file.lastChangedAt,
           coverage: {

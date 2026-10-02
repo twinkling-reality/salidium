@@ -106,6 +106,13 @@ const GENERIC_VALUE = /[A-Za-z0-9_+/=.~!#$%^&*-]*/y;
 const ENV_VALUE = /(?:[^\s"'`\\;|()<>,}[\]]|\[[^\s"'`\\[\]]*\])*/y;
 /** A placeholder already in the text, whose number a fresh redactor must not hand out again. */
 const PLACEHOLDER_NUMBER = /\[[A-Z_]+#(\d+)\]/g;
+/**
+ * The highest number a placeholder is taken to hold. Ours count the secrets in one session and
+ * never come near it. A larger one is not ours, and reserving it would carry the counter past
+ * 2^53, where `++counter` stops changing and every new secret shares one number, or to 1e21,
+ * where the number prints as `1e+21`.
+ */
+const MAX_PLACEHOLDER_NUMBER = 1e9;
 
 const RULES: Rule[] = [
   {
@@ -477,6 +484,12 @@ function keyedValue(
 
 export interface Redactor {
   redact(text: string): RedactionResult;
+  /**
+   * Takes every placeholder number already in `text`, so this redactor never hands one of them out
+   * for a different secret, and returns the highest, or 0. `redact` does this for its own text; a
+   * caller redacting several texts into one document reserves the later ones first.
+   */
+  reserve(text: string): number;
   readonly findingsCount: number;
 }
 
@@ -497,10 +510,21 @@ export function createRedactor(): Redactor {
     }
     return n;
   };
+  const reserve = (text: string): number => {
+    let highest = 0;
+    if (text.includes('#'))
+      for (const placeholder of text.matchAll(PLACEHOLDER_NUMBER)) {
+        const n = Number(placeholder[1]);
+        if (n <= MAX_PLACEHOLDER_NUMBER) highest = Math.max(highest, n);
+      }
+    counter = Math.max(counter, highest);
+    return highest;
+  };
   return {
     get findingsCount() {
       return findingsCount;
     },
+    reserve,
     redact(text: string): RedactionResult {
       if (!text) return { text, findings: [] };
       const lower = text.toLowerCase();
@@ -562,9 +586,7 @@ export function createRedactor(): Redactor {
       if (spans.length === 0) return { text, findings: [] };
       // Text redacted at ingest is redacted again where it crosses a boundary, by a fresh redactor.
       // A number already in the text is taken, or two different secrets would share a placeholder.
-      if (text.includes('#'))
-        for (const placeholder of text.matchAll(PLACEHOLDER_NUMBER))
-          counter = Math.max(counter, Number(placeholder[1]));
+      reserve(text);
       spans.sort((a, b) => a.start - b.start || b.end - a.end);
       const merged: typeof spans = [];
       for (const s of spans) {

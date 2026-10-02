@@ -2,6 +2,7 @@ import type { StoredEvent } from '@salidium/protocol';
 import { detectDestructiveCommand, detectGitCommand } from '../verification/classifyCommand.ts';
 import type { ChangeLog } from './changeLog.ts';
 import { clip } from './changeLog.ts';
+import { ownEntry } from './keyedRecord.ts';
 import type { ReviewItem, ReviewSeverity, RunState } from './runState.ts';
 
 /**
@@ -167,7 +168,7 @@ export function applyReviewRulesAfterEvent(
         !event.isError &&
         !event.result.gitOperation?.push
       ) {
-        const a = state.activities[event.callId];
+        const a = ownEntry(state.activities, event.callId);
         if (a?.input.kind === 'command' && detectGitCommand(a.input.command) === 'push') {
           open(state, event, log, {
             id: `push:${event.callId}`,

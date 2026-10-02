@@ -4,6 +4,7 @@ import {
   applyEvent,
   createInitialState,
   createRedactor,
+  ownEntry,
   REDUCER_VERSION,
   type RunState,
   redactEvent,
@@ -415,12 +416,12 @@ export class SessionCoordinator {
   private commandForCall(callId: string): string | undefined {
     const remembered = this.commands.get(callId);
     if (remembered !== undefined) return remembered;
-    const input = this.state.activities[callId]?.input;
+    const input = ownEntry(this.state.activities, callId)?.input;
     return input?.kind === 'command' ? input.command : undefined;
   }
 
   private inputForCall(callId: string): ToolInput | undefined {
-    return this.state.activities[callId]?.input;
+    return ownEntry(this.state.activities, callId)?.input;
   }
 
   /**

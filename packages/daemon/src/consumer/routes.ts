@@ -16,7 +16,7 @@ import {
   SessionLookupSchema,
   SessionReportSchema,
 } from '@salidium/consumer-contract';
-import { createRedactor, projectSession } from '@salidium/core';
+import { projectSession } from '@salidium/core';
 import {
   makeSessionId,
   type ProviderId,
@@ -29,9 +29,9 @@ import { startSse } from '../server/sse.ts';
 import { isUserSession, type SessionRegistry } from '../sessions/sessionRegistry.ts';
 import type { ConsumerCredential, ConsumerCredentialVerifier } from './credentials.ts';
 import {
-  consumerText,
   currentStatus,
   MAX_CONSUMER_PATH,
+  redactedDocument,
   toSessionEntry,
   toSessionReport,
 } from './report.ts';
@@ -77,7 +77,6 @@ interface OpenFeed {
 export function createConsumerRoutes(deps: ConsumerRouteDeps) {
   const { registry, credentials, log } = deps;
   const now = deps.now ?? Date.now;
-  const text = consumerText(createRedactor());
   const feeds = new Set<OpenFeed>();
 
   const revocationTimer = setInterval(() => {
@@ -129,7 +128,7 @@ export function createConsumerRoutes(deps: ConsumerRouteDeps) {
       );
       return undefined;
     }
-    const entry = toSessionEntry(summary, at, text);
+    const entry = redactedDocument((text) => toSessionEntry(summary, at, text));
     if (entry.cwd.length > MAX_CONSUMER_PATH) {
       warnOnce(
         `cwd:${summary.id}`,
@@ -311,13 +310,11 @@ export function createConsumerRoutes(deps: ConsumerRouteDeps) {
     if (!read || !isUserSession(read.summary) || !entryOf(read.summary, at))
       return fail(res, 404, 'not-found', 'no such session');
     const omitted = new Set<number>();
-    const body = toSessionReport(
-      read.state,
-      projectSession(read.state, at),
-      read.summary,
-      at,
-      text,
-      (pathLength) => omitted.add(pathLength),
+    const view = projectSession(read.state, at);
+    const body = redactedDocument((text) =>
+      toSessionReport(read.state, view, read.summary, at, text, (pathLength) =>
+        omitted.add(pathLength),
+      ),
     );
     if (omitted.size > 0)
       warnOnce(

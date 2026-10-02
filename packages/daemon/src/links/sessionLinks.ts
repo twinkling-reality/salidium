@@ -1,5 +1,5 @@
 import type { Redactor, RunState, RevisionAnchor as RunStateAnchor } from '@salidium/core';
-import { createRedactor } from '@salidium/core';
+import { createRedactor, ownEntry } from '@salidium/core';
 import {
   type ChangedFile,
   EXECUTION_LINKS_LIMITS,
@@ -167,9 +167,7 @@ export function changedFiles(state: RunState): ChangedFile[] {
     .map((file) => ({
       path: file.path,
       // Absent means Salidium never looked; null means it looked and found no repository.
-      location: Object.hasOwn(state.fileLocations, file.path)
-        ? state.fileLocations[file.path]
-        : undefined,
+      location: ownEntry(state.fileLocations, file.path),
     }));
 }
 

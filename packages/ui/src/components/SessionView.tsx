@@ -1,7 +1,9 @@
 import {
+  ownEntry,
   type SessionView as ProjectedSessionView,
   projectSession,
   type RunState,
+  reviveState,
 } from '@salidium/core';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLiveSession } from '../hooks/useLiveSession.ts';
@@ -139,7 +141,7 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
       if (!s) return;
       const eventId = ref.includes('#')
         ? ref
-        : (s.activities[ref]?.eventIds[0] ??
+        : (ownEntry(s.activities, ref)?.eventIds[0] ??
           s.claims.find((c) => c.id === ref)?.eventId ??
           s.claims.find((c) => c.id === ref)?.id);
       if (eventId) openRaw(sessionId, eventId);
@@ -159,7 +161,8 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
       api.stateAtTime(sessionId, ts).then(
         (r) => {
           if (scrubRequest.current !== req) return;
-          setScrub(sessionId, { ts, seq, state: r.state as RunState, loading: false });
+          // A replay crosses as JSON, so its records are revived like the live state's are.
+          setScrub(sessionId, { ts, seq, state: reviveState(r.state as RunState), loading: false });
         },
         () => {
           if (scrubRequest.current !== req) return;

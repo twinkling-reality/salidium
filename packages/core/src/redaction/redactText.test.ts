@@ -349,6 +349,29 @@ describe('credentials in structured text', () => {
     expect(r.redact('{"api_key": ["Zq8rL0xS"]}').text).toBe('{"api_key": ["[SECRET#1]"]}');
   });
 
+  it('reserves the numbers of text it will redact later', () => {
+    const r = createRedactor();
+    expect(r.reserve('no placeholder here')).toBe(0);
+    expect(r.reserve('ghp_[GITHUB_TOKEN#2] and [SECRET#4]')).toBe(4);
+    expect(r.reserve('[SECRET#3]')).toBe(3);
+    expect(r.redact('DB_PASSWORD=Zq8rL0xS').text).toBe('DB_PASSWORD=[SECRET#5]');
+    expect(r.findingsCount).toBe(1);
+  });
+
+  it('does not reserve a number too large to be one of its own', () => {
+    // Past 2^53 a counter stops counting, so two secrets would share a number, and from 1e21 the
+    // number prints in exponent form.
+    const r = createRedactor();
+    expect(r.reserve('[SECRET#99999999999999999999] [SECRET#9007199254740993]')).toBe(0);
+    expect(r.reserve('[SECRET#1000000000] [SECRET#1000000001]')).toBe(1_000_000_000);
+    const fresh = createRedactor();
+    const huge = '[SECRET#99999999999999999999]';
+    expect(fresh.redact(`${huge} DB_PASSWORD=Zq8rL0xS`).text).toBe(
+      `${huge} DB_PASSWORD=[SECRET#1]`,
+    );
+    expect(fresh.redact(`${huge} DB_TOKEN=Yp7qK9wR`).text).toBe(`${huge} DB_TOKEN=[SECRET#2]`);
+  });
+
   it('stays linear on input shaped to make a key match backtrack', () => {
     // A header-name boundary that let every `-` or `_` start a match took 558 ms at 16 KB and grew
     // fourfold with each doubling; base64url data has one of those every few characters. Linear

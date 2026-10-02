@@ -40,8 +40,12 @@ let token: string;
 
 const CHECKOUT = '/Users/dev/acme/checkout';
 const LANE = '/Users/dev/acme/checkout-refunds';
-/** The scenario's scratch repository, whose name holds the secret, as it crosses: redacted. */
-const SCRATCH = '/Users/dev/scratch-ghp_[GITHUB_TOKEN#1]';
+/**
+ * The scenario's scratch repository, whose name holds the secret, as it crosses: redacted. Paths
+ * are first redacted at the boundary, and the report's statements already hold #1 and #2 from
+ * ingest, so the path takes the next number. The boundary cannot tell that #1 is the same secret.
+ */
+const SCRATCH = '/Users/dev/scratch-ghp_[GITHUB_TOKEN#3]';
 const VERIFIED_ID = `claude-code:${SCENARIO_SESSIONS.verified.sessionId}`;
 const WORKING_ID = `claude-code:${SCENARIO_SESSIONS.working.sessionId}`;
 const FAILING_ID = `codex:${SCENARIO_SESSIONS.failing.sessionId}`;
@@ -1092,10 +1096,11 @@ describe('values a stored session holds that the contract cannot carry', () => {
 
 describe('consumer contract edges', () => {
   it('names the repository each revision anchor read, when the session moved into a clone', async () => {
-    const { applyEvent, createInitialState, createRedactor, projectSession, summarizeSession } =
-      await import('@salidium/core');
+    const { applyEvent, createInitialState, projectSession, summarizeSession } = await import(
+      '@salidium/core'
+    );
     const { EventBuilder } = await import('@salidium/core/testing');
-    const { consumerText, toSessionReport } = await import('./report.ts');
+    const { redactedDocument, toSessionReport } = await import('./report.ts');
     const b = new EventBuilder('claude-code:moved', '2026-09-20T16:00:00.000Z');
     const state = createInitialState({
       sessionId: 'claude-code:moved',
@@ -1118,12 +1123,8 @@ describe('consumer contract edges', () => {
     const at = Date.parse('2026-09-20T16:01:00.000Z');
     const report = exactly(
       SessionReportSchema,
-      toSessionReport(
-        state,
-        projectSession(state, at),
-        summarizeSession(state, at),
-        at,
-        consumerText(createRedactor()),
+      redactedDocument((text) =>
+        toSessionReport(state, projectSession(state, at), summarizeSession(state, at), at, text),
       ),
     );
     expect(report.session.repositoryRoot).toBe('/work/a');
@@ -1132,10 +1133,11 @@ describe('consumer contract edges', () => {
   });
 
   it('says a removed line count is a floor when a provider did not record what it replaced', async () => {
-    const { applyEvent, createInitialState, createRedactor, projectSession, summarizeSession } =
-      await import('@salidium/core');
+    const { applyEvent, createInitialState, projectSession, summarizeSession } = await import(
+      '@salidium/core'
+    );
     const { EventBuilder } = await import('@salidium/core/testing');
-    const { consumerText, toSessionReport } = await import('./report.ts');
+    const { redactedDocument, toSessionReport } = await import('./report.ts');
     const b = new EventBuilder('claude-code:overwrite', '2026-09-20T16:00:00.000Z');
     const state = createInitialState({
       sessionId: 'claude-code:overwrite',
@@ -1166,12 +1168,8 @@ describe('consumer contract edges', () => {
     const at = Date.parse('2026-09-20T16:01:00.000Z');
     const report = exactly(
       SessionReportSchema,
-      toSessionReport(
-        state,
-        projectSession(state, at),
-        summarizeSession(state, at),
-        at,
-        consumerText(createRedactor()),
+      redactedDocument((text) =>
+        toSessionReport(state, projectSession(state, at), summarizeSession(state, at), at, text),
       ),
     );
     expect(report.session.counts).toMatchObject({ linesRemoved: 1, linesRemovedExact: false });
@@ -1183,10 +1181,11 @@ describe('consumer contract edges', () => {
   });
 
   it('describes a running code cell in Salidium’s words, never its script', async () => {
-    const { applyEvent, createInitialState, createRedactor, projectSession, summarizeSession } =
-      await import('@salidium/core');
+    const { applyEvent, createInitialState, projectSession, summarizeSession } = await import(
+      '@salidium/core'
+    );
     const { codexAdapter } = await import('@salidium/adapter-codex');
-    const { consumerText, toSessionReport } = await import('./report.ts');
+    const { redactedDocument, toSessionReport } = await import('./report.ts');
     const thread = '01a00001-0000-7000-8000-00000000c0de';
     const script = `const r = await tools.exec_command({"cmd":"npm test ${CONSUMER_CANARIES.command}"});\ntext("${CONSUMER_CANARIES.output}");\n`;
     const records = (cliVersion: string | undefined) => [
@@ -1236,12 +1235,8 @@ describe('consumer contract edges', () => {
       const at = Date.parse('2026-09-20T16:01:00.000Z');
       const report = exactly(
         SessionReportSchema,
-        toSessionReport(
-          state,
-          projectSession(state, at),
-          summarizeSession(state, at),
-          at,
-          consumerText(createRedactor()),
+        redactedDocument((text) =>
+          toSessionReport(state, projectSession(state, at), summarizeSession(state, at), at, text),
         ),
       );
       expect(report.verdict).toMatchObject({ tone: 'working', headline });
@@ -1255,8 +1250,8 @@ describe('consumer contract edges', () => {
   it('labels a question read from the agent’s message as reported, and the verdict follows', async () => {
     const { applyEvent, createInitialState, projectSession } = await import('@salidium/core');
     const { EventBuilder } = await import('@salidium/core/testing');
-    const { consumerText, toSessionReport } = await import('./report.ts');
-    const { createRedactor, summarizeSession } = await import('@salidium/core');
+    const { redactedDocument, toSessionReport } = await import('./report.ts');
+    const { summarizeSession } = await import('@salidium/core');
     const b = new EventBuilder('claude-code:asks', '2026-09-20T16:00:00.000Z');
     const state = createInitialState({
       sessionId: 'claude-code:asks',
@@ -1271,12 +1266,8 @@ describe('consumer contract edges', () => {
     ])
       applyEvent(state, event);
     const at = Date.parse('2026-09-20T16:01:00.000Z');
-    const report = toSessionReport(
-      state,
-      projectSession(state, at),
-      summarizeSession(state, at),
-      at,
-      consumerText(createRedactor()),
+    const report = redactedDocument((text) =>
+      toSessionReport(state, projectSession(state, at), summarizeSession(state, at), at, text),
     );
     exactly(SessionReportSchema, report);
     expect(report.waiting).toMatchObject({ kind: 'question', provenance: 'reported' });
@@ -1321,10 +1312,11 @@ describe('text stored before a rule existed', () => {
   it('is redacted at the boundary, JSON and header forms included', async () => {
     // State built from events that never passed ingest redaction, as rows stored by an older
     // build are: only the boundary's own pass stands between them and a consumer.
-    const { applyEvent, createInitialState, createRedactor, projectSession, summarizeSession } =
-      await import('@salidium/core');
+    const { applyEvent, createInitialState, projectSession, summarizeSession } = await import(
+      '@salidium/core'
+    );
     const { EventBuilder } = await import('@salidium/core/testing');
-    const { consumerText, toSessionReport } = await import('./report.ts');
+    const { redactedDocument, toSessionReport } = await import('./report.ts');
     const b = new EventBuilder('claude-code:stored', '2026-09-20T16:00:00.000Z');
     const state = createInitialState({
       sessionId: 'claude-code:stored',
@@ -1343,12 +1335,8 @@ describe('text stored before a rule existed', () => {
     const at = Date.parse('2026-09-20T16:01:00.000Z');
     const report = exactly(
       SessionReportSchema,
-      toSessionReport(
-        state,
-        projectSession(state, at),
-        summarizeSession(state, at),
-        at,
-        consumerText(createRedactor()),
+      redactedDocument((text) =>
+        toSessionReport(state, projectSession(state, at), summarizeSession(state, at), at, text),
       ),
     );
     const serialized = JSON.stringify(report);
@@ -1358,13 +1346,182 @@ describe('text stored before a rule existed', () => {
       'Deployed with {"Authorization":"Bearer [BEARER_TOKEN#1]"} and it answered.',
     );
   });
+
+  it('never gives a secret it finds a number a later field already holds', async () => {
+    // The raw password is in the latest statement, which is redacted before the remaining items,
+    // and a remaining item holds placeholders the session's ingest redactor handed out.
+    const { applyEvent, createInitialState, projectSession, summarizeSession } = await import(
+      '@salidium/core'
+    );
+    const { EventBuilder } = await import('@salidium/core/testing');
+    const { redactedDocument, toSessionReport } = await import('./report.ts');
+    const b = new EventBuilder('claude-code:numbered', '2026-09-20T16:00:00.000Z');
+    const state = createInitialState({
+      sessionId: 'claude-code:numbered',
+      provider: 'claude-code',
+      providerSessionId: 'numbered',
+      cwd: '/repo',
+    });
+    for (const event of [
+      b.sessionStarted('/repo'),
+      b.turnStarted('Deploy the preview'),
+      b.plan([{ id: 'a', text: 'Rotate [SECRET#1] and ghp_[GITHUB_TOKEN#2]', status: 'pending' }]),
+      b.turnEnded(`Deployed with {"password":"${CONSUMER_JSON_SECRET}"} and it answered.`),
+    ])
+      applyEvent(state, event);
+    const at = Date.parse('2026-09-20T16:01:00.000Z');
+    const build = () =>
+      exactly(
+        SessionReportSchema,
+        redactedDocument((text) =>
+          toSessionReport(state, projectSession(state, at), summarizeSession(state, at), at, text),
+        ),
+      );
+    const report = build();
+    const statement = report.latestStatement?.text ?? '';
+    const remaining = report.remaining.items.map((item) => item.text).join('\n');
+    expect(statement).not.toContain(CONSUMER_JSON_SECRET);
+    expect(remaining).toBe('Rotate [SECRET#1] and ghp_[GITHUB_TOKEN#2]');
+    // Each placeholder names one secret wherever it appears in the document.
+    const found = [...statement.matchAll(/\[[A-Z_]+#\d+\]/g)].map((m) => m[0]);
+    expect(found).toEqual(['[SECRET#3]']);
+    expect(remaining).not.toContain('#3]');
+    // A redactor lives for one document, so the number does not depend on what was asked before.
+    expect(build()).toEqual(report);
+  });
+
+  it('gives one session the same entry in the list, its lookup, its report, and the feed', async () => {
+    // The title holds a password no ingest redactor saw, and the later cwd a stored placeholder.
+    const { createServer } = await import('node:http');
+    const { applyEvent, createInitialState, summarizeSession } = await import('@salidium/core');
+    const { EventBuilder } = await import('@salidium/core/testing');
+    const { createConsumerRoutes } = await import('./routes.ts');
+    const { ConsumerCredentialVerifier } = await import('./credentials.ts');
+    const b = new EventBuilder('claude-code:entry', '2026-09-20T16:00:00.000Z');
+    const state = createInitialState({
+      sessionId: 'claude-code:entry',
+      provider: 'claude-code',
+      providerSessionId: 'entry',
+      cwd: '/repo/[SECRET#1]',
+    });
+    for (const event of [
+      b.sessionStarted('/repo/[SECRET#1]'),
+      b.turnStarted('Deploy the preview'),
+      b.turnEnded('Deployed.'),
+    ])
+      applyEvent(state, event);
+    const at = Date.parse('2026-09-20T16:01:00.000Z');
+    const summary = {
+      ...summarizeSession(state, at),
+      title: `Deploy with {"password":"${CONSUMER_JSON_SECRET}"}`,
+      titleSource: 'provider' as const,
+      cwd: '/repo/[SECRET#1]',
+    };
+    let changed: ((summary: typeof summary) => void) | undefined;
+    const entryHome = mkdtempSync(join(tmpdir(), 'salidium-consumer-entry-'));
+    const { token: entryToken } = createConsumerCredential(entryHome, 'entry test');
+    const routes = createConsumerRoutes({
+      registry: {
+        listSessions: () => [summary],
+        summaryOf: (id: string) => (id === summary.id ? summary : undefined),
+        readSession: (id: string) => (id === summary.id ? { state, summary } : undefined),
+        subscribeSummaries: (sub: typeof changed) => {
+          changed = sub;
+          return () => {};
+        },
+        subscribeRemovals: () => () => {},
+      } as never,
+      credentials: new ConsumerCredentialVerifier(entryHome),
+      discovery: () => ({}) as never,
+      now: () => at,
+      log: { info: () => {}, warn: () => {}, debug: () => {} },
+    });
+    const server = createServer((req, res) =>
+      routes.handle(req, res, new URL(req.url ?? '/', 'http://127.0.0.1')),
+    );
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as { port: number };
+    const headers = { Authorization: `Bearer ${entryToken}` };
+    const read = async (path: string) => {
+      const response = await fetch(`http://127.0.0.1:${port}/consumer/v1${path}`, { headers });
+      expect(response.status).toBe(200);
+      return response.json();
+    };
+    const controller = new AbortController();
+    try {
+      // The first list builds the entry and the second reads it from the cache.
+      const missed = exactly(SessionListSchema, await read('/sessions')).sessions[0];
+      const hit = exactly(SessionListSchema, await read('/sessions')).sessions[0];
+      const looked = exactly(
+        SessionLookupSchema,
+        await read('/sessions/lookup?provider=claude-code&sessionId=entry'),
+      ).session;
+      const reported = exactly(
+        SessionReportSchema,
+        await read(`/sessions/${encodeURIComponent(summary.id)}/report`),
+      ).session;
+      expect(missed?.title).toBe('Deploy with {"password":"[SECRET#2]"}');
+      expect(missed?.cwd).toBe('/repo/[SECRET#1]');
+      const bytes = JSON.stringify(missed);
+      for (const entry of [hit, looked, reported]) expect(JSON.stringify(entry)).toBe(bytes);
+
+      const response = await fetch(`http://127.0.0.1:${port}/consumer/v1/feed`, {
+        headers,
+        signal: controller.signal,
+      });
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('no feed body');
+      const decoder = new TextDecoder();
+      let buffer = '';
+      // Frames without data, such as the stream's opening comment, carry no message.
+      const next = async (): Promise<FeedMessage> => {
+        for (;;) {
+          const boundary = buffer.indexOf('\n\n');
+          if (boundary < 0) {
+            const chunk = await reader.read();
+            if (chunk.done) throw new Error('the feed ended');
+            buffer += decoder.decode(chunk.value, { stream: true });
+            continue;
+          }
+          const frame = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          const data = frame
+            .split('\n')
+            .filter((line) => line.startsWith('data: '))
+            .map((line) => line.slice(6))
+            .join('\n');
+          const message = data ? readFeedMessage(data) : undefined;
+          if (message) return message;
+        }
+      };
+      expect(await next()).toMatchObject({ type: 'resync' });
+      changed?.(summary);
+      const feedEntry = await next();
+      if (feedEntry.type !== 'session.changed') throw new Error(`got ${feedEntry.type}`);
+      const { sessionId, native, evidenceSeq, status, explanation } = feedEntry;
+      expect(JSON.stringify({ sessionId, native, evidenceSeq, status, explanation })).toBe(
+        JSON.stringify({
+          sessionId: missed?.id,
+          native: missed?.native,
+          evidenceSeq: missed?.evidenceSeq,
+          status: missed?.status,
+          explanation: missed?.explanation,
+        }),
+      );
+    } finally {
+      controller.abort();
+      routes.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      rmSync(entryHome, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('identifiers at the boundary', () => {
   it('redacts a located path like any text that crosses, and never clips or reflows it', async () => {
-    const { createRedactor } = await import('@salidium/core');
-    const { consumerText, repository } = await import('./report.ts');
-    const text = consumerText(createRedactor());
+    const { redactedDocument, repository } = await import('./report.ts');
+    // One redactor for every call below, as the fields of one document share one.
+    const text = redactedDocument((text) => text);
     const spaced = '/Users/dev/My  Project';
     expect(repository({ root: spaced, path: 'a  b.ts' }, text)).toEqual({
       root: spaced,

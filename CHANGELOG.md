@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.2 - 2026-10-02
+
+- Read a session's activities, files and subagents by own entry only, so a call id or path named
+  `constructor`, `toString` or `__proto__` is recorded like any other instead of crashing the
+  reducer or reaching `Object.prototype`, including in a state scrubbed back on the timeline.
+- The consumer boundary no longer gives a secret it finds the number of a placeholder stored in a
+  later field. It numbers what it finds past every placeholder stored anywhere in the report or
+  list entry it is building, so a placeholder never names two secrets there. It uses one redactor
+  per report or entry rather than one for the daemon's life, so numbers no longer depend on which
+  session or request came first. A secret found only at the boundary gets a new number even when a
+  stored placeholder in the same report stands for it, and placeholders in two list entries are
+  numbered by their own sessions. A placeholder number above 1,000,000,000 is not one of
+  Salidium's and is not reserved.
+
 ## 0.8.1 - 2026-10-02
 
 - Redact credentials written as JSON, YAML, HTTP headers, and environment variables. The key
