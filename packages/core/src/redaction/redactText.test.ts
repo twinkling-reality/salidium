@@ -286,9 +286,13 @@ describe('credentials in structured text', () => {
     expect(redact('X-Authorization: Bearer 4f8a9c2d7e1b3a6f5c8d')).toBe(
       'X-Authorization: Bearer [BEARER_TOKEN#1]',
     );
-    expect(
-      redact('git -c http.extraheader="Authorization: Bearer art_9f8e7d6c5b4a3f2e" fetch'),
-    ).toBe('git -c http.extraheader="Authorization: Bearer [BEARER_TOKEN#1]" fetch');
+    // Git's per-command header, unquoted and quoted.
+    expect(redact('git -c http.extraheader=Authorization: Bearer tk9f8e7d6c5b4a3f2e fetch')).toBe(
+      'git -c http.extraheader=Authorization: Bearer [BEARER_TOKEN#1] fetch',
+    );
+    expect(redact('git -c http.extraheader="Authorization: Bearer tk9f8e7d6c5b4a3f2e" fetch')).toBe(
+      'git -c http.extraheader="Authorization: Bearer [BEARER_TOKEN#1]" fetch',
+    );
     expect(redact('{"HTTP_AUTHORIZATION": "Bearer abc123"}')).toBe(
       '{"HTTP_AUTHORIZATION": "Bearer [BEARER_TOKEN#1]"}',
     );
