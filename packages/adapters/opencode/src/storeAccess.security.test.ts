@@ -1,9 +1,15 @@
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { constants } from 'node:sqlite';
+import { constants, DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { authorize, OpenCodeStoreConnection, withOpenCodeStore } from './storeAccess.ts';
+import {
+  authorize,
+  isRegularFile,
+  OpenCodeStoreConnection,
+  withOpenCodeStore,
+} from './storeAccess.ts';
 import { SyntheticOpenCodeStore, T0, userData } from './testing/syntheticStore.ts';
 
 let dir: string;
@@ -140,5 +146,29 @@ describe('OpenCode store connection', () => {
   it('does not create a store that is not there', () => {
     expect(() => OpenCodeStoreConnection.open(join(dir, 'missing.db'))).toThrow();
     expect(readdirSync(dir)).not.toContain('missing.db');
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'refuses a FIFO at the store path without blocking',
+    () => {
+      const fifo = join(dir, 'fifo.db');
+      execFileSync('mkfifo', [fifo]);
+      const started = Date.now();
+      expect(isRegularFile(fifo)).toBe(false);
+      expect(() => OpenCodeStoreConnection.open(fifo)).toThrow(/not a regular file/);
+      expect(Date.now() - started).toBeLessThan(1000);
+    },
+  );
+
+  it('refuses a store whose tables are views', () => {
+    const crafted = join(dir, 'crafted.db');
+    const db = new DatabaseSync(crafted);
+    db.exec('CREATE TABLE session_v2 (id text, directory text, time_created integer)');
+    db.exec('CREATE TABLE event_sequence (aggregate_id text, seq integer)');
+    db.exec('CREATE TABLE big (x integer)');
+    // A view in place of a table could make every read through the connection a cross join.
+    db.exec('CREATE VIEW session_message AS SELECT a.x AS id FROM big a, big b, big c');
+    db.close();
+    expect(() => OpenCodeStoreConnection.open(crafted)).toThrow(/expected tables/);
   });
 });

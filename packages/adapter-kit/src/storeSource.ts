@@ -38,6 +38,8 @@ export interface StorePollRequest {
   rowBudget: number;
   /** Upper bound on row bytes read in one call; the source's default applies when absent. */
   byteBudget?: number;
+  /** Milliseconds one call may read before handing back; the source's default applies when absent. */
+  timeBudgetMs?: number;
 }
 
 export interface StorePollBatch {

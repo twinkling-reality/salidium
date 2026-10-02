@@ -1,3 +1,4 @@
+import { statSync } from 'node:fs';
 import { constants, DatabaseSync, type SQLInputValue } from 'node:sqlite';
 
 /*
@@ -37,6 +38,17 @@ const READABLE: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ],
   ['event_sequence', new Set(['aggregate_id', 'seq'])],
 ]);
+
+const READ_TABLES = [...READABLE.keys()];
+
+/** Whether `path` is a regular file (following links), not a FIFO, socket, device or directory. */
+export function isRegularFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
 
 /** SQL functions the queries below use. */
 const CALLABLE: ReadonlySet<string> = new Set(['count', 'max', 'length']);
@@ -96,11 +108,14 @@ export class OpenCodeStoreConnection {
 
   /**
    * Opens the store at `path` read only. Never creates, copies or migrates it. Throws when the
-   * file cannot be opened; the caller treats that as "store unavailable".
+   * file cannot be opened or does not look like OpenCode's store; the caller treats that as
+   * "store unavailable".
    */
   static open(path: string): OpenCodeStoreConnection {
     if (!restrictedReadsSupported())
       throw new Error('this Node.js cannot restrict SQLite reads (DatabaseSync.setAuthorizer)');
+    // A FIFO or device at the path would block the synchronous open, and the daemon with it.
+    if (!isRegularFile(path)) throw new Error('the OpenCode store is not a regular file');
     const db = new DatabaseSync(path, {
       readOnly: true,
       // A writer may hold the lock for a moment while it commits. This connection is synchronous,
@@ -110,6 +125,21 @@ export class OpenCodeStoreConnection {
       enableForeignKeyConstraints: false,
     });
     try {
+      // Before the authorizer, the only statements this connection ever runs that it would refuse:
+      // functions in views and triggers may not run, and the three tables read must be tables. A
+      // view in their place could make any SELECT through this connection arbitrarily expensive.
+      db.exec('PRAGMA trusted_schema = OFF');
+      const kinds = new Map(
+        (
+          db
+            .prepare(
+              `SELECT name, type FROM sqlite_schema WHERE name IN (${READ_TABLES.map(() => '?').join(', ')})`,
+            )
+            .all(...READ_TABLES) as Array<{ name: unknown; type: unknown }>
+        ).map((row) => [row.name, row.type] as const),
+      );
+      if (READ_TABLES.some((table) => kinds.get(table) !== 'table'))
+        throw new Error('the OpenCode store does not have the expected tables');
       db.setAuthorizer((action, first, second, database) =>
         authorize(action, first, second, database),
       );
@@ -120,17 +150,27 @@ export class OpenCodeStoreConnection {
     return new OpenCodeStoreConnection(db);
   }
 
-  /** Runs one SELECT. Every statement passes the authorizer when it is prepared. */
+  /**
+   * Prepares one SELECT; the authorizer checks it as it compiles. Integers come back as BigInt,
+   * so a value beyond JavaScript's safe range cannot make the read throw; callers keep only safe
+   * integers (see `records.ts`).
+   */
+  #prepare(sql: string) {
+    const statement = this.#db.prepare(sql);
+    statement.setReadBigInts(true);
+    return statement;
+  }
+
   all(sql: string, ...params: SQLInputValue[]): Record<string, unknown>[] {
-    return this.#db.prepare(sql).all(...params) as Record<string, unknown>[];
+    return this.#prepare(sql).all(...params) as Record<string, unknown>[];
   }
 
   iterate(sql: string, ...params: SQLInputValue[]): Iterable<Record<string, unknown>> {
-    return this.#db.prepare(sql).iterate(...params) as Iterable<Record<string, unknown>>;
+    return this.#prepare(sql).iterate(...params) as Iterable<Record<string, unknown>>;
   }
 
   get(sql: string, ...params: SQLInputValue[]): Record<string, unknown> | undefined {
-    return this.#db.prepare(sql).get(...params) as Record<string, unknown> | undefined;
+    return this.#prepare(sql).get(...params) as Record<string, unknown> | undefined;
   }
 
   close(): void {

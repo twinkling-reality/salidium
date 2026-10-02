@@ -264,7 +264,8 @@ export class StoreTailer {
         tracked.cursors.set(batch.cursor.key, batch.cursor);
       }
       if (!result.more) break;
-      if (round % 4 === 3) await yieldToLoop();
+      // Each round is bounded in rows, bytes and time; yield after every one so requests are served.
+      await yieldToLoop();
     }
     if (complete) tracked.signature = signature;
     for (const job of jobs)

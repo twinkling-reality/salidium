@@ -5,6 +5,7 @@ import {
   countHunkLines,
   excerpt,
   hunksFromUnifiedDiff,
+  pathArgumentMetadata,
 } from '@salidium/adapter-kit';
 import type {
   ExitStatus,
@@ -33,6 +34,10 @@ function tidyPath(p: string): string {
   return HOME && p.startsWith(`${HOME}/`) ? `~/${p.slice(HOME.length + 1)}` : p;
 }
 
+function bounded(text: string | undefined, max: number): string | undefined {
+  return text !== undefined && text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
 function firstLine(text: string): string {
   const line = text.split('\n', 1)[0] ?? '';
   return line.length > 120 ? `${line.slice(0, 120)}…` : line;
@@ -49,7 +54,7 @@ export function canonicalToolName(name: string): string {
 /** Files named by a `*** Begin Patch` text, in order. */
 export function patchPaths(patchText: string): string[] {
   const out: string[] = [];
-  for (const m of patchText.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)) {
+  for (const m of patchText.matchAll(/^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$/gm)) {
     const path = m[1]?.trim();
     if (path && !out.includes(path)) out.push(path);
   }
@@ -81,9 +86,9 @@ export function mapToolInput(
   const input = asObject(rawInput) ?? {};
   switch (name) {
     case 'shell': {
-      const command = asString(input.command) ?? '';
-      const description = asString(input.description);
-      const cwd = asString(input.workdir);
+      const command = excerpt(asString(input.command) ?? '', 8000, 2000).text;
+      const description = bounded(asString(input.description), 500);
+      const cwd = bounded(asString(input.workdir), 4096);
       return {
         input: { kind: 'command', command, description, cwd },
         title: description ?? `Run: ${firstLine(command)}`,
@@ -157,8 +162,29 @@ export function mapToolInput(
       const skill = asString(input.id) ?? asString(input.name) ?? 'skill';
       return { input: { kind: 'other', summary: `Skill ${skill}` }, title: `Use skill ${skill}` };
     }
-    default:
-      return { input: { kind: 'other', summary: name }, title: name };
+    default: {
+      // OpenCode names an MCP server's tool `<server>_<tool>`. Mapped as MCP, a file read through
+      // one is recognised and suppressed exactly as a native read is. A server whose own name has
+      // an underscore splits at its first one, so its tool name keeps the rest.
+      const split = name.indexOf('_');
+      if (split > 0 && split < name.length - 1) {
+        const server = name.slice(0, split);
+        const tool = name.slice(split + 1);
+        const paths = pathArgumentMetadata(input);
+        return {
+          input: {
+            kind: 'mcp',
+            server,
+            tool,
+            pathArgs: paths.paths.length ? paths.paths : undefined,
+            pathArgsTruncated: paths.truncated || undefined,
+            argsExcerpt: excerpt(JSON.stringify(input), 300, 0).text,
+          },
+          title: `${server}: ${tool}`,
+        };
+      }
+      return { input: { kind: 'other', summary: name.slice(0, 120) }, title: name.slice(0, 120) };
+    }
   }
 }
 
@@ -342,10 +368,11 @@ export function planItems(rawInput: unknown): PlanItem[] | undefined {
     const t = asObject(todo);
     const text = asString(t?.content);
     if (!t || !text) return;
+    const status = asString(t.status) ?? '';
     items.push({
-      id: asString(t.id) ?? String(index + 1),
-      text,
-      status: PLAN_STATUS[asString(t.status) ?? ''] ?? 'pending',
+      id: (asString(t.id) ?? String(index + 1)).slice(0, 128),
+      text: excerpt(text, 400, 0).text,
+      status: Object.hasOwn(PLAN_STATUS, status) ? (PLAN_STATUS[status] ?? 'pending') : 'pending',
     });
   });
   return items;

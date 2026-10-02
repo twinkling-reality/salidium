@@ -181,6 +181,11 @@ export class SyntheticOpenCodeStore {
     return id;
   }
 
+  /** Runs arbitrary SQL against the synthetic file, for hostile and malformed cases. */
+  exec(sql: string, ...params: Array<string | number | bigint | null>): void {
+    this.#db.prepare(sql).run(...params);
+  }
+
   sequence(sessionId: string): number {
     const row = this.#db
       .prepare('SELECT seq FROM event_sequence WHERE aggregate_id = ?')

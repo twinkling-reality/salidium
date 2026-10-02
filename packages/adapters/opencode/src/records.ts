@@ -46,25 +46,44 @@ function str(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined;
 }
 
+/** Integers arrive as BigInt; only values JavaScript represents exactly are kept. */
 function num(value: unknown): number | undefined {
+  if (typeof value === 'bigint') {
+    const n = Number(value);
+    return Number.isSafeInteger(n) ? n : undefined;
+  }
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+/** OpenCode ids are a prefix and base62 (`ses_…`, `msg_…`, a fork copy adds `_<seq>`). */
+const ID = /^[\w-]{1,128}$/;
+
+function id(value: unknown): string | undefined {
+  const s = str(value);
+  return s && ID.test(s) ? s : undefined;
+}
+
+function bounded(value: unknown, max: number): string | undefined {
+  const s = str(value);
+  return s && s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
 function sessionRow(row: Record<string, unknown>): SessionRow | undefined {
-  const id = str(row.id);
+  const sessionId = id(row.id);
   const directory = str(row.directory);
   const timeCreated = num(row.time_created);
-  if (!id || !directory || timeCreated === undefined) return undefined;
+  if (!sessionId || !directory || directory.length > 4096 || timeCreated === undefined)
+    return undefined;
   const model = asObject(typeof row.model === 'string' ? safeJson(row.model) : undefined);
   return {
-    id,
-    parentId: str(row.parent_id),
-    forkSessionId: str(row.fork_session_id),
+    id: sessionId,
+    parentId: id(row.parent_id),
+    forkSessionId: id(row.fork_session_id),
     directory,
-    title: str(row.title),
-    version: str(row.version),
+    title: bounded(row.title, 500),
+    version: bounded(row.version, 40),
     model: model ? { providerID: asString(model.providerID), id: asString(model.id) } : undefined,
-    agent: str(row.agent),
+    agent: bounded(row.agent, 120),
     timeCreated,
     timeUpdated: num(row.time_updated) ?? timeCreated,
     timeIdle: num(row.time_idle),
@@ -72,13 +91,13 @@ function sessionRow(row: Record<string, unknown>): SessionRow | undefined {
 }
 
 function messageRow(row: Record<string, unknown>): MessageRow | undefined {
-  const id = str(row.id);
-  const sessionId = str(row.session_id);
-  const type = str(row.type);
+  const messageId = id(row.id);
+  const sessionId = id(row.session_id);
+  const type = bounded(row.type, 64);
   const seq = num(row.seq);
-  if (!id || !sessionId || !type || seq === undefined) return undefined;
+  if (!messageId || !sessionId || !type || seq === undefined) return undefined;
   return {
-    id,
+    id: messageId,
     sessionId,
     type,
     seq,
@@ -104,9 +123,9 @@ export function readSession(store: OpenCodeStoreConnection, id: string): Session
 export function readSequences(store: OpenCodeStoreConnection): Map<string, number> {
   const out = new Map<string, number>();
   for (const row of store.all('SELECT aggregate_id, seq FROM event_sequence')) {
-    const id = str(row.aggregate_id);
+    const aggregate = id(row.aggregate_id);
     const seq = num(row.seq);
-    if (id && seq !== undefined) out.set(id, seq);
+    if (aggregate && seq !== undefined) out.set(aggregate, seq);
   }
   return out;
 }

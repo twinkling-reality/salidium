@@ -41,11 +41,14 @@ import {
   type SessionRow,
   turnBoundaryAfter,
 } from './records.ts';
-import { withOpenCodeStore } from './storeAccess.ts';
+import { isRegularFile, withOpenCodeStore } from './storeAccess.ts';
 import { patchPaths } from './toolMapping.ts';
 
 /** Bytes of row data one poll reads before it hands back and lets the daemon yield. */
-const DEFAULT_BYTE_BUDGET = 64 * 1024 * 1024;
+const DEFAULT_BYTE_BUDGET = 8 * 1024 * 1024;
+
+/** Milliseconds one poll reads before it hands back. */
+const DEFAULT_TIME_BUDGET_MS = 50;
 
 /** Ceiling for one row read during a raw re-read; matches the daemon's ingest ceiling. */
 const RAW_MAX_BYTES = 8 * 1024 * 1024;
@@ -152,9 +155,67 @@ function revertWarning(
 }
 
 /** The fields of an assistant step other than its content: model, timing, finish, usage. */
+const STEP_FIELDS = [
+  'time',
+  'agent',
+  'model',
+  'finish',
+  'rawFinish',
+  'cost',
+  'tokens',
+  'error',
+  'retry',
+  'snapshot',
+] as const;
+
 function stepFields(data: Record<string, unknown>): Record<string, unknown> {
-  const { content: _content, ...rest } = data;
-  return rest;
+  const out: Record<string, unknown> = {};
+  for (const field of STEP_FIELDS) if (Object.hasOwn(data, field)) out[field] = data[field];
+  return out;
+}
+
+/** The changed paths a step's snapshot names; they are checked like any other path. */
+function snapshotFiles(data: Record<string, unknown>): string[] {
+  const files = asObject(data.snapshot)?.files;
+  return Array.isArray(files) ? files.filter((f): f is string => typeof f === 'string') : [];
+}
+
+/** Row types that produce events; any other row is OpenCode bookkeeping and has no raw view. */
+const SHOWN_TYPES = new Set([
+  'user',
+  'assistant',
+  'idle',
+  'compaction',
+  'shell',
+  'model-switched',
+  'location-switched',
+]);
+
+const PATH_KEY = /^(?:path|paths|file|files|file_?path|file_?paths|uri|uris)$/i;
+
+/**
+ * Every string under a path-shaped key, unbounded in number (they are only checked, never shown),
+ * so a long argument list cannot push a sensitive path past a cut-off.
+ */
+function pathArguments(input: unknown): string[] {
+  const out: string[] = [];
+  const visit = (value: unknown, pathContext: boolean, depth: number): void => {
+    if (depth > 32) return;
+    if (typeof value === 'string') {
+      if (pathContext && value) out.push(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, pathContext, depth + 1);
+      return;
+    }
+    const o = asObject(value);
+    if (!o) return;
+    for (const [key, child] of Object.entries(o))
+      visit(child, pathContext || PATH_KEY.test(key), depth + 1);
+  };
+  visit(input, false, 0);
+  return out;
 }
 
 /** Paths and commands a tool part names, for the caller's suppression check. */
@@ -163,9 +224,9 @@ function partSubjects(part: unknown): { paths: string[]; commands: string[] } {
   if (p?.type !== 'tool') return { paths: [], commands: [] };
   const state = asObject(p.state);
   const input = asObject(state?.input) ?? {};
-  const paths = [asString(input.path), asString(input.filePath)].filter(
-    (v): v is string => typeof v === 'string' && v !== '',
-  );
+  // Every path-shaped argument, whatever the tool calls it (MCP tools use `file_path`, `paths`,
+  // `uri`, ...), plus the files a patch names.
+  const paths = pathArguments(input);
   paths.push(...patchPaths(asString(input.patchText) ?? asString(input.patch) ?? ''));
   const files = asObject(state?.metadata)?.files;
   if (Array.isArray(files))
@@ -175,6 +236,14 @@ function partSubjects(part: unknown): { paths: string[]; commands: string[] } {
     }
   const command = asString(input.command);
   return { paths, commands: command ? [command] : [] };
+}
+
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 /**
@@ -190,10 +259,7 @@ function rawView(
   if (type === 'assistant') {
     const content = Array.isArray(data.content) ? data.content : [];
     if (part === undefined || part === 'step') {
-      const snapshot = asObject(data.snapshot);
-      const files = Array.isArray(snapshot?.files)
-        ? snapshot.files.filter((f): f is string => typeof f === 'string')
-        : [];
+      const files = snapshotFiles(data);
       const subjects = part === undefined ? content.map(partSubjects) : [];
       return {
         record: { type, ...stepFields(data) },
@@ -206,10 +272,11 @@ function rawView(
     const subjects = partSubjects(content[index]);
     return {
       record: { type, ...stepFields(data), content: [content[index]] },
-      ...subjects,
+      paths: [...snapshotFiles(data), ...subjects.paths],
+      commands: subjects.commands,
     };
   }
-  if (part !== undefined) return undefined;
+  if (part !== undefined || !SHOWN_TYPES.has(type)) return undefined;
   if (type === 'shell') {
     const { output: _output, ...rest } = data;
     const command = asString(data.command);
@@ -222,12 +289,16 @@ function rawView(
     const files = data.files.map((file) => {
       const f = asObject(file) ?? {};
       const { data: content, ...rest } = f;
-      const uri = asString(asObject(f.source)?.uri);
+      const source = asObject(f.source);
+      const uri = asString(source?.uri);
       const name = asString(f.name);
-      if (uri) paths.push(uri.startsWith('file://') ? decodeURIComponent(uri.slice(7)) : uri);
+      // A `data:` URL is the file's content again; it is neither shown nor treated as a path.
+      const inline = uri?.startsWith('data:') === true;
+      if (uri && !inline) paths.push(uri.startsWith('file://') ? safeDecode(uri.slice(7)) : uri);
       if (name) paths.push(name);
       return {
         ...rest,
+        ...(inline ? { source: { ...source, uri: '[data URL omitted by Salidium]' } } : {}),
         data: `[attachment omitted by Salidium: ${typeof content === 'string' ? content.length : 0} base64 characters]`,
       };
     });
@@ -249,7 +320,8 @@ export function createOpenCodeStoreSource(): StoreSource {
   return {
     locate({ userHome, env }) {
       const path = openCodeStorePath(userHome, env);
-      return existsSync(path) ? path : undefined;
+      // Only a regular file: opening a FIFO or device would block the daemon's thread.
+      return isRegularFile(path) ? path : undefined;
     },
 
     changeIndicators(path) {
@@ -262,26 +334,32 @@ export function createOpenCodeStoreSource(): StoreSource {
         const sessions = readSessions(store);
         const byId = new Map(sessions.map((s) => [s.id, s] as const));
         const sequences = readSequences(store);
-        // Roots before their children, so a lane opens after the session it belongs to.
+        // Roots before their children, so a lane opens after the session it belongs to. Each
+        // session's depth and root are computed once, not inside the comparator.
+        const depths = new Map(sessions.map((x) => [x.id, depth(x, byId)] as const));
+        const roots = new Map(sessions.map((x) => [x.id, rootOf(x, byId)] as const));
         const ordered = [...sessions].sort(
           (a, b) =>
-            depth(a, byId) - depth(b, byId) ||
+            (depths.get(a.id) ?? 0) - (depths.get(b.id) ?? 0) ||
             a.timeCreated - b.timeCreated ||
             a.id.localeCompare(b.id),
         );
+        const startedAt = Date.now();
+        const timeBudgetMs = request.timeBudgetMs ?? DEFAULT_TIME_BUDGET_MS;
         const batches: StorePollBatch[] = [];
         let budget = Math.max(1, request.rowBudget);
         let bytesLeft = request.byteBudget ?? DEFAULT_BYTE_BUDGET;
         let more = false;
 
         for (const session of ordered) {
-          if (budget <= 0 || bytesLeft <= 0) {
+          // Hand back to the daemon after a few milliseconds of reading, so it can serve requests.
+          if (budget <= 0 || bytesLeft <= 0 || Date.now() - startedAt > timeBudgetMs) {
             more = true;
             break;
           }
           const key = cursorKey(request.path, session.id);
           const stored = request.cursors.get(key);
-          const root = rootOf(session, byId);
+          const root = roots.get(session.id) ?? session;
           if (!stored && Math.max(lastActive(session), lastActive(root)) < request.activeSinceMs)
             continue;
           const sequence = sequences.get(session.id) ?? 0;
@@ -398,6 +476,8 @@ export function createOpenCodeStoreSource(): StoreSource {
         return { raw: undefined, reason: 'the OpenCode store has moved since this was recorded' };
       if (!existsSync(storePath))
         return { raw: undefined, reason: 'OpenCode store no longer on disk' };
+      if (!isRegularFile(storePath))
+        return { raw: undefined, reason: 'the OpenCode store is not a regular file' };
       const recordId = ref.recordId;
       if (!recordId) return { raw: undefined, reason: 'no provider record identity' };
       if (!ref.recordHash)
@@ -431,6 +511,11 @@ export function createOpenCodeStoreSource(): StoreSource {
             };
           if (recordHash(row.data) !== ref.recordHash)
             return { raw: undefined, reason: 'provider record changed since ingestion' };
+          if (!SHOWN_TYPES.has(row.type))
+            return {
+              raw: undefined,
+              reason: 'this record is OpenCode bookkeeping, not evidence; it has no raw view',
+            };
           const data = parseRowData(row);
           if (!data) return { raw: undefined, reason: 'provider record is not a JSON object' };
           const view = rawView(row.type, data, part);

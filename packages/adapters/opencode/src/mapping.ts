@@ -548,12 +548,14 @@ function mapToolPart(
   stepCreated: string,
   stepCompleted: string,
 ): CanonicalEvent[] {
-  const rawName = asString(part.name) ?? 'unknown';
+  const rawName = (asString(part.name) ?? 'unknown').slice(0, 200);
   const toolName = canonicalToolName(rawName);
   const state = asObject(part.state);
   const status = asString(state?.status);
   const partTime = asObject(part.time);
-  const callId = `${row.id}/${asString(part.id) ?? `part-${index}`}`;
+  // The provider's call id, when it is a plain bounded token; otherwise the part's position.
+  const providerCallId = asString(part.id);
+  const callId = `${row.id}/${providerCallId && /^[\w-]{1,128}$/.test(providerCallId) ? providerCallId : `part-${index}`}`;
   const id = (...parts: Array<string | number>) => makeEventId(ctx.sessionId, callId, ...parts);
   const calledAt = canonicalTime(num(partTime?.created)) ?? stepCreated;
   const endedAt = canonicalTime(num(partTime?.completed)) ?? stepCompleted;

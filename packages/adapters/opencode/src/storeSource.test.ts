@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { StoreCursor, StoreSource } from '@salidium/adapter-kit';
@@ -21,6 +22,7 @@ import {
   tools,
   userData,
 } from './testing/syntheticStore.ts';
+import { patchPaths } from './toolMapping.ts';
 
 let dir: string;
 let path: string;
@@ -854,5 +856,131 @@ describe('OpenCode raw records', () => {
         recordId: `${id}/${step.id}#9`,
       }),
     ).toEqual({ raw: undefined, reason: 'record part not found' });
+  });
+
+  it('maps an MCP file read as MCP and checks its path in the raw view', () => {
+    const id = store.session({ directory: PROJECT });
+    store.message(id, 'user', userData('read via mcp', T0 + 1));
+    const step = store.message(
+      id,
+      'assistant',
+      stepData(T0 + 2, [
+        {
+          type: 'tool',
+          id: 'call_mcp',
+          name: 'filesystem_read_file',
+          executed: false,
+          state: {
+            status: 'completed',
+            input: { file_path: `${PROJECT}/.env` },
+            content: [{ type: 'text', text: 'SYNTHETIC_SECRET=not-real' }],
+            metadata: {},
+          },
+          time: { created: T0 + 3, completed: T0 + 4 },
+        },
+      ]),
+    );
+    const events = harness().poll();
+    const called = of(events, 'tool.called').find((e) => e.callId === `${step.id}/call_mcp`);
+    expect(called?.input).toMatchObject({
+      kind: 'mcp',
+      server: 'filesystem',
+      tool: 'read_file',
+      pathArgs: [`${PROJECT}/.env`],
+    });
+    expect(called?.title).toBe('filesystem: read_file');
+    const raw = createOpenCodeStoreSource().readRawRecord(path, called?.source.ref ?? {});
+    expect(raw).toMatchObject({ paths: [`${PROJECT}/.env`] });
+  });
+
+  it('keeps only known step fields, checks snapshot names, and omits data URLs', () => {
+    const id = store.session({ directory: PROJECT });
+    store.message(id, 'user', {
+      time: { created: T0 + 1 },
+      text: 'see inline',
+      files: [
+        {
+          data: 'U1lOVEhFVElD',
+          mime: 'text/plain',
+          source: { type: 'uri', uri: 'data:text/plain;base64,U1lOVEhFVElD' },
+        },
+      ],
+    });
+    const data = stepData(T0 + 2, [{ type: 'text', text: 'ok' }]);
+    data.providerState = { opaque: 'SYNTHETIC_PROVIDER_STATE' };
+    data.snapshot = { start: 'a', end: 'b', files: ['.env'] };
+    store.message(id, 'assistant', data);
+    const events = harness().poll();
+    const source = createOpenCodeStoreSource();
+    const usage = source.readRawRecord(
+      path,
+      events.find((e) => e.kind === 'agent.usage')?.source.ref ?? {},
+    );
+    expect(usage.raw).not.toContain('SYNTHETIC_PROVIDER_STATE');
+    expect(usage).toMatchObject({ paths: ['.env'] });
+    const prompt = source.readRawRecord(
+      path,
+      events.find((e) => e.kind === 'turn.started')?.source.ref ?? {},
+    );
+    expect(prompt.raw).not.toContain('U1lOVEhFVElD');
+    expect(prompt).toMatchObject({ paths: [] });
+    expect(
+      patchPaths(
+        '*** Begin Patch\n*** Update File: a.ts\n*** Move to: secrets/.env\n*** End Patch',
+      ),
+    ).toEqual(['a.ts', 'secrets/.env']);
+  });
+
+  it('refuses a raw view of bookkeeping rows, even when a warning cites one', () => {
+    const id = store.session({ directory: PROJECT });
+    store.exec(
+      'INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'msg_bookkeeping',
+      id,
+      'synthetic',
+      1,
+      T0,
+      T0,
+      'SYNTHETIC_REMINDER, not JSON',
+    );
+    const events = harness().poll();
+    const warning = of(events, 'ingest.warning')[0];
+    expect(warning?.code).toBe('malformed-record');
+    expect(createOpenCodeStoreSource().readRawRecord(path, warning?.source.ref ?? {})).toEqual({
+      raw: undefined,
+      reason: 'this record is OpenCode bookkeeping, not evidence; it has no raw view',
+    });
+  });
+
+  it('drops a row or session whose integers JavaScript cannot hold, and keeps reading', () => {
+    const id = store.session({ directory: PROJECT });
+    store.message(id, 'user', userData('fine', T0 + 1));
+    store.exec(
+      'INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'msg_huge_seq',
+      id,
+      'user',
+      2n ** 62n,
+      T0,
+      T0,
+      JSON.stringify(userData('never', T0)),
+    );
+    store.exec(
+      "INSERT INTO session_v2 (id, project_id, slug, directory, version, time_created, time_updated) VALUES ('ses_huge_time', 'synthetic0project0root0commit000000000000', 's', '/w', '2.0.18', ?, ?)",
+      2n ** 62n,
+      2n ** 62n,
+    );
+    const events = harness().poll();
+    expect(of(events, 'turn.started').map((e) => e.prompt)).toEqual(['fine']);
+    expect(events.some((e) => e.sessionId.endsWith('ses_huge_time'))).toBe(false);
+  });
+
+  it.skipIf(process.platform === 'win32')('does not locate a FIFO as the store', () => {
+    const xdg = join(dir, 'xdg');
+    mkdirSync(join(xdg, 'opencode'), { recursive: true });
+    execFileSync('mkfifo', [join(xdg, 'opencode', 'opencode.db')]);
+    expect(
+      createOpenCodeStoreSource().locate({ userHome: dir, env: { XDG_DATA_HOME: xdg } }),
+    ).toBeUndefined();
   });
 });

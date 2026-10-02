@@ -470,6 +470,10 @@ do not.
   declined call is observed. Its `write` tool records no diff: a new file's lines are counted, but
   an overwrite's removed lines are unknown and are carried as unknown rather than guessed. OpenCode
   2.x has no to-do tool, so OpenCode sessions show plans only as the agent's text.
+- The OpenCode store must be a regular file on a local disk. Its reader is synchronous, so a store
+  on a network filesystem that stops answering would stall the daemon; that setup is unsupported.
+  A FIFO, device or directory at the store's path is never opened, and a store whose session
+  tables are not plain tables is refused.
 - Native Windows history import is supported, but the live hook relay currently requires POSIX
   `sh` and `curl`.
 - Raw evidence depends on local provider files. The upgrade can recover fingerprints only while the
