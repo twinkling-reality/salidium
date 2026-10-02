@@ -52,6 +52,8 @@ export interface ObjectStore {
    * never interpreted by git.
    */
   format: 'sha1' | 'sha256';
+  /** The repository's own git directory, where its HEAD is. Never handed to git. */
+  gitDir: string;
 }
 
 const CONFIG_MAX_BYTES = 64 * 1024;
@@ -83,6 +85,7 @@ export async function locateObjectStore(mainRoot: string): Promise<ObjectStore> 
     gitDir = root; // a bare repository
   else throw new GitReadError('unsupported', 'no git directory at the repository root');
   gitDir = await realpath(gitDir);
+  const ownGitDir = gitDir;
   const common = join(gitDir, 'commondir');
   if (await isFile(common)) {
     const named = (await readBoundedText(common, 1024))?.split('\n')[0]?.trim();
@@ -98,7 +101,7 @@ export async function locateObjectStore(mainRoot: string): Promise<ObjectStore> 
       'unsupported',
       'the repository borrows objects from another directory (objects/info/alternates); Salidium maps only repositories that hold their own objects',
     );
-  return { objects, format: await objectFormat(join(gitDir, 'config')) };
+  return { objects, format: await objectFormat(join(gitDir, 'config')), gitDir: ownGitDir };
 }
 
 /**

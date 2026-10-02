@@ -379,6 +379,37 @@ promise. Enabling or disabling an agent shows there after Salidium restarts. The
 [ADR 0005](decisions/0005-read-only-consumer-contract.md) and in the
 `@salidium/consumer-contract` package.
 
+## Map a repository (experimental)
+
+Salidium can map a repository at one commit: its tracked files, the modules its `package.json`,
+`.csproj` and Unity `.asmdef` manifests declare, and the imports between its JavaScript and
+TypeScript files, each edge with the rule that resolved it and the line that states it. C# is read at
+assembly level only. The map is read from committed Git objects, never the working tree, and never
+with a model. It is built when something asks for it, never in the background, and only for a
+repository you allow:
+
+```bash
+salidium map allow ~/code/my-repository
+salidium map show ~/code/my-repository
+```
+
+A linked worktree, or any directory inside a repository, allows the repository it belongs to.
+`salidium map show` prints a summary at `HEAD`, or at a full commit id given after the repository;
+`--json` prints the whole map. Tools you've given a consumer credential can read the committed
+structure of every repository you allow: file paths, sizes, blob ids, imports and manifests, not file
+contents. They read it at `/project-map/v0`, listed in discovery's `experimental` array. To stop:
+
+```bash
+salidium map list
+salidium map revoke ~/code/my-repository
+```
+
+Revoking takes effect on the next request and deletes the repository's cached maps. A map says what
+it covered: a repository over its bounds (20,000 tracked entries) is refused, and a file too large to
+read, or past the build's byte budget, is listed and counted as not parsed rather than silently
+skipped. A repository that borrows objects from another directory through Git alternates is refused.
+The map's format is experimental and may change in any release.
+
 ## Commands
 
 | Command | Purpose |
@@ -413,6 +444,8 @@ promise. Enabling or disabling an agent shows there after Salidium restarts. The
 | `salidium service uninstall` | Remove only the macOS service runtime and LaunchAgents; keep local data. |
 | `salidium explanations` | Show or change model-call frequency. |
 | `salidium consumer create <label>` / `list` / `revoke <id>` | Manage read-only credentials for local tools. |
+| `salidium map allow <repository>` / `list` / `revoke <repository>` | Choose which repositories Salidium may map (experimental). |
+| `salidium map show <repository> [commit]` | Print a summary of a repository's map at a commit. |
 | `salidium restart` | Restart Salidium and reopen the interface. |
 | `salidium stop` | Pause collection, account for the queue, and stop the local daemon. |
 | `salidium --version` | Print the installed version. |

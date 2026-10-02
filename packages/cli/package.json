@@ -49,6 +49,7 @@
     "@salidium/adapter-codex": "workspace:*",
     "@salidium/adapter-opencode": "workspace:*",
     "@salidium/core": "workspace:*",
-    "@salidium/consumer-contract": "workspace:*"
+    "@salidium/consumer-contract": "workspace:*",
+    "@salidium/project-map": "workspace:*"
   }
 }

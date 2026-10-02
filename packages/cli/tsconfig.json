@@ -28,6 +28,9 @@
     },
     {
       "path": "../adapters/opencode"
+    },
+    {
+      "path": "../project-map"
     }
   ]
 }

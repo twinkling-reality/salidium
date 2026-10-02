@@ -109,6 +109,9 @@ importers:
       '@salidium/daemon':
         specifier: workspace:*
         version: link:../daemon
+      '@salidium/project-map':
+        specifier: workspace:*
+        version: link:../project-map
       '@salidium/protocol':
         specifier: workspace:*
         version: link:../protocol
