@@ -12,6 +12,9 @@
       "path": "../consumer-contract"
     },
     {
+      "path": "../project-map"
+    },
+    {
       "path": "../protocol"
     },
     {

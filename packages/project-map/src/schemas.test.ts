@@ -16,7 +16,7 @@ function sample(): ProjectMap {
     version: 0,
     experimental: true,
     generatedAt: '2026-10-02T00:00:00.000Z',
-    indexer: { name: 'salidium-project-map', version: '0.1.0' },
+    indexer: { name: 'salidium-project-map', version: '0.1.0', git: 'git version 2.43.0' },
     repository: {
       root: '/work/repo',
       commit: 'b'.repeat(40),

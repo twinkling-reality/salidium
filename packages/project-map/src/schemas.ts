@@ -34,7 +34,10 @@ export const PROJECT_MAP_BASE_PATH = '/project-map/v0';
 
 /** Bounds every document of version 0 holds to. A build that would exceed one is refused. */
 export const PROJECT_MAP_LIMITS = {
-  /** Paths longer than this are not mapped; the build counts them under `omittedFiles`. */
+  /**
+   * Paths longer than this are not mapped; the build counts them under `omittedFiles`, with paths
+   * that hold control characters or an empty, `.` or `..` segment (which only a crafted tree can).
+   */
   pathLength: 1024,
   nodes: 50_000,
   edges: 250_000,
@@ -280,7 +283,7 @@ export const CoverageSchema = z.object({
   omittedFiles: z
     .array(
       z.object({
-        reason: z.enum(['path-too-long', 'path-control-characters']),
+        reason: z.enum(['path-too-long', 'path-control-characters', 'path-not-canonical']),
         count: Count,
       }),
     )
@@ -331,7 +334,13 @@ export const ProjectMapSchema = z.object({
   version: z.literal(0),
   experimental: z.literal(true),
   generatedAt: Timestamp,
-  indexer: z.object({ name: z.literal('salidium-project-map'), version: Text(32) }),
+  indexer: z.object({
+    name: z.literal('salidium-project-map'),
+    version: Text(32),
+    git: Clean(64).describe(
+      'The first line `git --version` printed for the binary that read the objects.',
+    ),
+  }),
   repository: MapRepositorySchema,
   coverage: CoverageSchema,
   nodes: z.array(MapNodeSchema).max(PROJECT_MAP_LIMITS.nodes),

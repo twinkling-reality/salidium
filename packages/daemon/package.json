@@ -25,6 +25,7 @@
     "@salidium/adapter-codex": "workspace:*",
     "@salidium/adapter-opencode": "workspace:*",
     "@salidium/consumer-contract": "workspace:*",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@salidium/project-map": "workspace:*"
   }
 }
