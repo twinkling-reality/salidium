@@ -714,29 +714,73 @@ function invocation(words: string[]): Invocation | undefined {
 }
 
 /**
- * Family globs for every sensitive name, one entry per path segment. They mirror
- * SENSITIVE_BASENAMES and SENSITIVE_PATTERNS, so a shell glob is checked against what the
+ * Distinctive stem of each sensitive name: a glob counts only when its literal characters carry
+ * the stem of a name it can match, so `*.json` or `package*.json` names no sensitive file while
+ * `auth*.json` does. `env` must stand as a name segment (`.env*`, not `environment*`).
+ */
+const ENV_STEM = /(?:^|[^a-z0-9])env(?:[^a-z0-9]|$)/;
+const stem = (text: string) => new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+
+const BASENAME_STEMS: Record<string, RegExp> = {
+  '.env': ENV_STEM,
+  '.envrc': stem('envrc'),
+  '.flaskenv': stem('flask'),
+  '.npmrc': stem('npm'),
+  '.yarnrc': stem('yarn'),
+  '.yarnrc.yml': stem('yarn'),
+  '.pypirc': stem('pypi'),
+  '.netrc': stem('netrc'),
+  _netrc: stem('netrc'),
+  '.pgpass': stem('pgpass'),
+  '.my.cnf': stem('cnf'),
+  '.git-credentials': stem('credential'),
+  'auth.json': stem('auth'),
+  credentials: stem('credential'),
+  'credentials.json': stem('credential'),
+  id_rsa: /id_|rsa/,
+  id_dsa: /id_|dsa/,
+  id_ecdsa: /id_|ecdsa/,
+  id_ed25519: /id_|ed25519/,
+  known_hosts: stem('known'),
+  '.claude.json': stem('claude'),
+  'secrets.json': stem('secret'),
+  'secrets.yaml': stem('secret'),
+  'secrets.yml': stem('secret'),
+};
+
+/**
+ * Family globs for every sensitive name, one entry per path segment, each with its stem. They
+ * mirror SENSITIVE_BASENAMES and SENSITIVE_PATTERNS, so a shell glob is checked against what the
  * patterns describe rather than against a literal name; keep them in step.
  */
-const SENSITIVE_GLOBS: string[][] = [
-  ...[...SENSITIVE_BASENAMES].map((name) => [name]),
-  ['.env.*'],
+const SENSITIVE_GLOBS: Array<{ segments: string[]; stem: RegExp }> = [
+  ...[...SENSITIVE_BASENAMES].map((name) => ({
+    segments: [name],
+    stem: BASENAME_STEMS[name] ?? stem(name.replace(/^[._]/, '')),
+  })),
+  { segments: ['.env.*'], stem: ENV_STEM },
   ...['pem', 'key', 'p12', 'pfx', 'jks', 'keystore', 'asc', 'gpg', 'ppk', 'tfvars', 'tfstate'].map(
-    (ext) => [`*.${ext}`],
+    (ext) => ({ segments: [`*.${ext}`], stem: stem(ext) }),
   ),
-  ...['id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519'].map((key) => [`${key}.pub`]),
-  ['.ssh', '*'],
-  ['.aws', '*'],
-  ['.gnupg', '*'],
-  ['.config', 'gcloud', '*'],
-  ['.kube', 'config'],
-  ['.docker', 'config.json'],
-  ['service-account*.json'],
-  ['.claude', 'settings.json'],
-  ['.claude', 'settings.local.json'],
-  ['.codex', 'auth.json'],
-  ['.codex', 'config.toml'],
-  ...['yaml', 'yml', 'json', 'toml', 'env'].map((ext) => [`*secret*.${ext}`]),
+  ...(['rsa', 'dsa', 'ecdsa', 'ed25519'] as const).map((kind) => ({
+    segments: [`id_${kind}.pub`],
+    stem: new RegExp(`id_|${kind}`),
+  })),
+  { segments: ['.ssh', '*'], stem: stem('ssh') },
+  { segments: ['.aws', '*'], stem: stem('aws') },
+  { segments: ['.gnupg', '*'], stem: stem('gnupg') },
+  { segments: ['.config', 'gcloud', '*'], stem: stem('gcloud') },
+  { segments: ['.kube', 'config'], stem: stem('kube') },
+  { segments: ['.docker', 'config.json'], stem: stem('docker') },
+  { segments: ['service-account*.json'], stem: stem('service') },
+  { segments: ['.claude', 'settings.json'], stem: stem('claude') },
+  { segments: ['.claude', 'settings.local.json'], stem: stem('claude') },
+  { segments: ['.codex', 'auth.json'], stem: stem('codex') },
+  { segments: ['.codex', 'config.toml'], stem: stem('codex') },
+  ...['yaml', 'yml', 'json', 'toml', 'env'].map((ext) => ({
+    segments: [`*secret*.${ext}`],
+    stem: stem('secret'),
+  })),
 ];
 
 type GlobToken =
@@ -835,7 +879,15 @@ function segmentMatches(user: GlobToken[], family: GlobToken[]): boolean {
 
 const MAX_NAME_CHARS = 255;
 const MAX_READER_OPERANDS = 1024;
-const SENSITIVE_GLOB_TOKENS = SENSITIVE_GLOBS.map((family) => family.map(globTokens));
+const SENSITIVE_GLOB_TOKENS = SENSITIVE_GLOBS.map((family) => ({
+  segments: family.segments.map(globTokens),
+  stem: family.stem,
+}));
+
+/** A glob's literal characters, a one-character class read as that character, wildcards as NUL. */
+function globLiterals(glob: string): string {
+  return glob.replace(/\[([^\]!^])\]/g, '$1').replace(/\[[^\]]*\]|[*?]/g, '\0');
+}
 
 /** `{a,b}` alternatives, innermost first and bounded; ranges are left as written. */
 function braceExpansions(word: string): string[] {
@@ -876,7 +928,9 @@ function globNamesSensitive(word: string): boolean {
     // No file name is longer than 255 characters; a longer pattern is not scanned.
     if (parts.some((part) => part.length > MAX_NAME_CHARS)) return true;
     const segments = parts.map(globTokens);
-    for (const family of SENSITIVE_GLOB_TOKENS) {
+    const literals = globLiterals(parts.join('/'));
+    for (const { segments: family, stem: familyStem } of SENSITIVE_GLOB_TOKENS) {
+      if (!familyStem.test(literals)) continue;
       // Align the ends; a glob shorter than the family may name its directory (`.ss*`).
       const user = segments.length >= family.length ? segments.slice(-family.length) : segments;
       const against = segments.length >= family.length ? family : family.slice(0, segments.length);

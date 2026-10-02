@@ -317,10 +317,8 @@ describe('shell commands that print a sensitive file', () => {
     'cat id_*',
     'cat ~/.ssh/id_*',
     'cat ~/.ssh/*',
-    'cat .en?',
     'cat .[e]nv',
     'cat .env{,.local}',
-    'head .*rc',
     'cat ~/.AWS/*',
     // Git objects named by path.
     'git show HEAD:.env',
@@ -371,5 +369,37 @@ describe('shell commands that print a sensitive file', () => {
     'xargs cat < files.txt',
   ])('leaves %s alone', (command) => {
     expect(isCredentialDumpCommand(command)).toBe(false);
+  });
+});
+
+describe('globs name a sensitive file only through a distinctive stem', () => {
+  it.each([
+    ['*secret*.json', true],
+    ['auth*.json', true],
+    ['.env*', true],
+    ['.env.*', true],
+    ['.[e]nv', true],
+    ['*.pem', true],
+    ['certs/*.key', true],
+    ['id_*', true],
+    ['~/.ssh/*', true],
+    ['~/.aws/cred*', true],
+    ['.npm*rc', true],
+    ['*credential*', true],
+    ['service-account-*.json', true],
+    ['*.json', false],
+    ['package*.json', false],
+    ['tsconfig*.json', false],
+    ['*.yaml', false],
+    ['config/*.yml', false],
+    ['*.ts', false],
+    ['src/**/*.tsx', false],
+    ['*', false],
+    ['.en?', false],
+    ['.*rc', false],
+    ['environment*.ts', false],
+    ['docs/env-*.md', false],
+  ])('cat %s: %s', (glob, sensitive) => {
+    expect(isCredentialDumpCommand(`cat ${glob}`)).toBe(sensitive);
   });
 });

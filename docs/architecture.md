@@ -279,8 +279,10 @@ be decoded counts as sensitive; in a native path a `%` that is not a valid escap
 Shell arguments are not percent-decoded, since a shell passes them through as written. A command
 counts as printing a sensitive file when a reader names it directly, through a prefix such as
 `sudo`, `env`, `xargs` or `bash -c`, by input redirection, by a glob that can match a sensitive
-name, or as `git show <rev>:<path>`; it errs toward matching. Windows 8.3 short names are not
-recognized, and events stored before a rule changed keep what they stored. General redaction then replaces recognized secrets with stable placeholders so a
+name and whose literal characters carry that name's distinctive stem (`.env*`, `*.pem`, `id_*`,
+but not `*.json`), or as `git show <rev>:<path>`. Windows 8.3 short names are not recognized, a
+recursive read of a directory that merely contains a sensitive file (`grep -r KEY .`) is not
+caught, and events stored before a rule changed keep what they stored. General redaction then replaces recognized secrets with stable placeholders so a
 repeated secret remains recognizable without revealing it. Provider records are not copied into a
 hosted Salidium service.
 
