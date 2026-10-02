@@ -28,6 +28,15 @@ export const MAX_QUEUED_BUILDS = 4;
 export const MAX_BUILDS_PER_MINUTE = 6;
 /** Recently served maps kept parsed and serialized, so repeated requests cost nothing. */
 const MEMORY_CACHE_BYTES = 64 * 1024 * 1024;
+/** Commit checks that read the object store, per minute; remembered answers are not counted. */
+export const MAX_COMMIT_CHECKS_PER_MINUTE = 30;
+/**
+ * How long "no such commit" is believed. A commit can arrive (a fetch) after it was asked about,
+ * so a negative answer is kept only long enough to absorb a reader asking again and again.
+ */
+export const COMMIT_ABSENT_MS = 30_000;
+/** Commit answers remembered, across repositories. A commit found stays found under its grant. */
+const COMMIT_ANSWERS = 1024;
 
 export type MapDocumentResult =
   | { ok: true; map: ProjectMap; text: string }
@@ -41,6 +50,7 @@ export interface ProjectMapServiceOptions {
   /** Resolves the git executable and the PATH its child sees. Tests may supply their own. */
   git?: (root: string) => { command: string; path: string } | undefined;
   maxBuildsPerMinute?: number;
+  maxCommitChecksPerMinute?: number;
 }
 
 const refusal = (
@@ -89,6 +99,10 @@ export class DaemonProjectMapService implements ProjectMapService {
   private readonly started: number[] = [];
   private readonly inFlight = new Map<string, Promise<MapDocumentResult>>();
   private readonly memory = new Map<string, { map: ProjectMap; text: string; bytes: number }>();
+  private readonly maxCommitChecksPerMinute: number;
+  private readonly checksStarted: number[] = [];
+  /** Answers from the object store, keyed like the memory cache: root, grant time, commit. */
+  private readonly commitAnswers = new Map<string, { exists: boolean; at: number }>();
 
   constructor(options: ProjectMapServiceOptions) {
     this.optIn = new OptInVerifier(options.home, (reason) => options.log?.warn(reason));
@@ -99,6 +113,8 @@ export class DaemonProjectMapService implements ProjectMapService {
     this.git = options.git ?? trustedGit;
     this.log = options.log;
     this.maxBuildsPerMinute = options.maxBuildsPerMinute ?? MAX_BUILDS_PER_MINUTE;
+    this.maxCommitChecksPerMinute =
+      options.maxCommitChecksPerMinute ?? MAX_COMMIT_CHECKS_PER_MINUTE;
   }
 
   isOptedIn(mainRoot: string): boolean {
@@ -109,26 +125,57 @@ export class DaemonProjectMapService implements ProjectMapService {
     return this.optIn.list();
   }
 
+  /**
+   * Whether the object store holds the commit. An answer is remembered under the grant it was read
+   * with, so a reader asking at every turn end starts no git process: a found commit until the grant
+   * changes, a missing one for `COMMIT_ABSENT_MS`. Reads that do reach the object store count
+   * against their own per-minute limit, and wait in the same queue as builds.
+   */
   async commitExists(mainRoot: string, commit: string): Promise<CommitExistsResult> {
     if (!ObjectIdSchema.safeParse(commit).success)
       return refusal('bad-request', 'commit must be a full 40- or 64-hex object id');
-    if (!this.optIn.get(mainRoot)) return NOT_OPTED_IN();
+    const granted = this.optIn.get(mainRoot);
+    if (!granted) return NOT_OPTED_IN();
+    const key = `${granted.root}\0${granted.allowedAt}\0${commit}`;
+    const at = this.now();
+    const known = this.commitAnswers.get(key);
+    if (known && (known.exists || at - known.at < COMMIT_ABSENT_MS))
+      return { ok: true, exists: known.exists };
+    while (this.checksStarted.length > 0 && at - (this.checksStarted[0] ?? 0) > 60_000)
+      this.checksStarted.shift();
+    if (this.checksStarted.length >= this.maxCommitChecksPerMinute)
+      return refusal('busy', 'too many commits were checked in the last minute; retry shortly');
     if (this.queued >= MAX_QUEUED_BUILDS)
       return refusal('busy', 'other repository reads are queued; retry shortly');
-    return this.serialized(async () => {
+    this.checksStarted.push(at);
+    return this.serialized(async (): Promise<CommitExistsResult> => {
       // Checked again inside the queue: the opt-in may have been revoked while this waited.
       const repository = this.optIn.get(mainRoot);
-      if (!repository) return NOT_OPTED_IN();
+      if (!repository || repository.allowedAt !== granted.allowedAt) return NOT_OPTED_IN();
       const opened = await this.open(repository, commit);
-      if (!opened.ok)
-        return opened.refusal.error === 'commit-unknown' ? { ok: true, exists: false } : opened;
+      if (!opened.ok) {
+        if (opened.refusal.error !== 'commit-unknown') return opened;
+        this.rememberCommit(key, false);
+        return { ok: true, exists: false };
+      }
       try {
         const header = (await opened.reader.check([commit])).get(commit);
-        return { ok: true, exists: header?.type === 'commit' };
+        const exists = header?.type === 'commit';
+        this.rememberCommit(key, exists);
+        return { ok: true, exists };
       } catch (error) {
         return this.refuseError(error);
       }
     });
+  }
+
+  private rememberCommit(key: string, exists: boolean): void {
+    this.commitAnswers.delete(key);
+    this.commitAnswers.set(key, { exists, at: this.now() });
+    for (const oldest of this.commitAnswers.keys()) {
+      if (this.commitAnswers.size <= COMMIT_ANSWERS) break;
+      this.commitAnswers.delete(oldest);
+    }
   }
 
   async getMap(mainRoot: string, commit: string): Promise<MapResult> {
