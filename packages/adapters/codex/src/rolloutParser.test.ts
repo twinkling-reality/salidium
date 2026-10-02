@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { applyEvent, createInitialState, projectSession } from '@salidium/core';
 import {
   type CanonicalEvent,
@@ -466,5 +467,406 @@ describe('code cells that only poll', () => {
       result?: { outputExcerpt?: string };
     };
     expect(done?.result?.outputExcerpt).toContain('work nobody saw start');
+  });
+});
+
+/*
+ * Every Codex build since 0.144 writes item-based rollouts and no longer persists
+ * `patch_apply_end`; an applied patch appears only as an `item_completed` FileChange item. The
+ * fixtures are cut from real rollouts: each record keeps its keys, nesting and order, while ids,
+ * paths, times, diffs and every piece of text are synthetic.
+ */
+describe('CodexRolloutParser: item-based rollouts', () => {
+  const THREAD = '01a00001-0000-7000-8000-000000000001';
+  const fixture = (name: string) =>
+    readFileSync(new URL(`./testing/fixtures/${name}`, import.meta.url), 'utf8')
+      .split('\n')
+      .filter(Boolean);
+  const sessionId = makeSessionId('codex', THREAD);
+  const reduce = (events: CanonicalEvent[]) => {
+    const state = createInitialState({ sessionId, provider: 'codex', providerSessionId: THREAD });
+    let seq = 0;
+    for (const e of events) applyEvent(state, { ...e, seq: seq++ } as StoredEvent);
+    return state;
+  };
+  const changesOf = (events: CanonicalEvent[]) =>
+    events.flatMap((e) =>
+      e.kind === 'tool.completed' && e.result.kind === 'fileChanges'
+        ? e.result.changes.map((c) => ({ callId: e.callId, turnId: e.turnId, ...c }))
+        : [],
+    );
+
+  describe('code mode (0.158 desktop)', () => {
+    const lines = fixture('codex-0.158-code-mode.jsonl');
+    const events = parseAll(lines, sessionId, THREAD);
+    const changes = changesOf(events);
+
+    it('records each applied patch from its FileChange item, not from the script', () => {
+      for (const e of events) expect(() => CanonicalEventSchema.parse(e)).not.toThrow();
+      expect(parseAll(lines, sessionId, THREAD).map((e) => e.id)).toEqual(events.map((e) => e.id));
+      // Whole-file counts follow the convention both adapters share: the content split on
+      // newlines, so a file of 62 lines ending in a newline counts 63.
+      expect(changes.map((c) => [c.path, c.change, c.linesAdded, c.linesRemoved])).toEqual([
+        ['/repo/src/file1.mjs', 'add', 63, 0],
+        ['/repo/src/file2.swift', 'update', 1, 1],
+        ['/repo/src/file2.swift', 'delete', 0, 36],
+      ]);
+      expect(changes.every((c) => c.applied && c.callId.startsWith('exec-'))).toBe(true);
+      // The cell that carried the patch stays a command of its own; nothing is read from its text.
+      const cells = events.filter((e) => e.kind === 'tool.called' && e.toolName === 'exec');
+      expect(cells).toHaveLength(3);
+    });
+
+    it('files each change under the turn the item names', () => {
+      expect(new Set(changes.map((c) => c.turnId))).toEqual(
+        new Set(['01a00003-0000-7000-8000-000000000003']),
+      );
+    });
+
+    it('reduces to the files the session changed', () => {
+      const state = reduce(events);
+      expect(Object.keys(state.files).sort()).toEqual([
+        '/repo/src/file1.mjs',
+        '/repo/src/file2.swift',
+      ]);
+      expect(state.counters.filesChanged).toBe(2);
+      expect(state.files['/repo/src/file2.swift']?.kinds).toEqual(['update', 'delete']);
+    });
+
+    it('merges with the hook that reported the same nested call, without counting it twice', () => {
+      const item = changes[1];
+      if (!item) throw new Error('fixture has an update');
+      const receivedAt = '2026-01-01T00:14:50.830Z';
+      const hookInput = {
+        command:
+          '*** Begin Patch\n*** Update File: /repo/src/file2.swift\n@@\n-line\n+line\n*** End Patch',
+      };
+      const hook = [
+        ...parseCodexHookPayload(
+          {
+            session_id: THREAD,
+            hook_event_name: 'PreToolUse',
+            turn_id: item.turnId,
+            tool_name: 'apply_patch',
+            tool_use_id: item.callId,
+            tool_input: hookInput,
+            cwd: '/repo',
+          },
+          { receivedAt },
+        ),
+        ...parseCodexHookPayload(
+          {
+            session_id: THREAD,
+            hook_event_name: 'PostToolUse',
+            turn_id: item.turnId,
+            tool_name: 'apply_patch',
+            tool_use_id: item.callId,
+            tool_input: hookInput,
+            tool_response: 'Success. Updated the following files:\nM /repo/src/file2.swift\n',
+          },
+          { receivedAt },
+        ),
+      ];
+      const rollout = events.filter((e) => 'callId' in e && e.callId === item.callId);
+      // The hook's call and the rollout's call are one event; the results are two observations.
+      expect(hook[0]?.id).toBe(rollout.find((e) => e.kind === 'tool.called')?.id);
+      const state = reduce([...hook, ...rollout]);
+      expect(Object.keys(state.activities).filter((id) => id === item.callId)).toHaveLength(1);
+      expect(state.files['/repo/src/file2.swift']).toMatchObject({
+        changeCount: 1,
+        linesAdded: 1,
+        linesRemoved: 1,
+      });
+      expect(state.counters.filesChanged).toBe(1);
+    });
+  });
+
+  it('completes a direct apply_patch call with the item that carries its id', () => {
+    const events = parseAll(fixture('codex-direct-apply-patch.jsonl'), sessionId, THREAD);
+    const calls = events.filter((e) => e.kind === 'tool.called' && e.toolName === 'apply_patch');
+    expect(calls.map((e) => 'callId' in e && e.callId)).toEqual([
+      'call_Synthetic001xxxxxxxxxxxx',
+      'call_Synthetic002xxxxxxxxxxxx',
+    ]);
+    const changes = changesOf(events);
+    expect(changes.map((c) => [c.callId.slice(0, 17), c.path, c.change])).toEqual([
+      ['call_Synthetic001', '/repo/src/file2.swift', 'update'],
+      ['call_Synthetic001', '/repo/src/file1.swift', 'update'],
+      ['call_Synthetic002', '/repo/src/file4.swift', 'update'],
+      ['call_Synthetic002', '/repo/src/file3.swift', 'add'],
+    ]);
+    expect(reduce(events).counters.filesChanged).toBe(4);
+  });
+
+  it('keeps a move as a move, from its source path', () => {
+    const events = parseAll(fixture('codex-code-mode-move.jsonl'), sessionId, THREAD);
+    expect(changesOf(events)).toMatchObject([
+      { path: '/repo/src/file2.ts', movedFrom: '/repo/src/file1.ts', change: 'move' },
+    ]);
+  });
+
+  it('ignores an item from another thread, and marks a patch that did not apply', () => {
+    const [line] = fixture('codex-0.158-code-mode.jsonl').filter((l) => l.includes('"FileChange"'));
+    const record = JSON.parse(line ?? '{}');
+    const other = {
+      ...record,
+      payload: { ...record.payload, thread_id: '01a0ffff-0000-7000-8000-00000000ffff' },
+    };
+    expect(changesOf(parseAll([JSON.stringify(other)], sessionId, THREAD))).toEqual([]);
+    const failed = {
+      ...record,
+      payload: { ...record.payload, item: { ...record.payload.item, status: 'failed' } },
+    };
+    const events = parseAll([JSON.stringify(failed)], sessionId, THREAD);
+    expect(changesOf(events).every((c) => !c.applied)).toBe(true);
+    expect(events.find((e) => e.kind === 'tool.completed')).toMatchObject({ isError: true });
+  });
+
+  it('does not invent a change for a file written through the shell (0.157 app server)', () => {
+    const events = parseAll(fixture('codex-0.157-app-server-shell-write.jsonl'), sessionId, THREAD);
+    expect(changesOf(events)).toEqual([]);
+    const command = events.find((e) => e.kind === 'tool.called');
+    expect(command).toMatchObject({ toolName: 'exec_command', input: { kind: 'command' } });
+    expect(reduce(events).counters.filesChanged).toBe(0);
+  });
+});
+
+/*
+ * `CommandExecution` items record each process a command tool started, with its exit code. The
+ * fixture is a real sequence cut from a 0.155 rollout, every value replaced: `npm test` starts in a
+ * code cell and yields a running session, a second cell polls it, the item arrives, and the poll
+ * returns the result. The first run fails, the second passes.
+ */
+describe('CodexRolloutParser: command exit codes from items', () => {
+  const THREAD = '01a00001-0000-7000-8000-000000000001';
+  const sessionId = makeSessionId('codex', THREAD);
+  const read = (name: string) =>
+    readFileSync(new URL(`./testing/fixtures/${name}`, import.meta.url), 'utf8')
+      .split('\n')
+      .filter(Boolean);
+  const lines = read('codex-0.155-yielded-test-runs.jsonl');
+  const isItem = (l: string) => l.includes('"CommandExecution"');
+  const reduce = (events: CanonicalEvent[]) => {
+    const state = createInitialState({ sessionId, provider: 'codex', providerSessionId: THREAD });
+    let seq = 0;
+    for (const e of events) applyEvent(state, { ...e, seq: seq++ } as StoredEvent);
+    return state;
+  };
+  const exits = (events: CanonicalEvent[]) =>
+    events.flatMap((e) =>
+      e.kind === 'tool.completed' && e.result.kind === 'command'
+        ? [{ callId: e.callId, id: e.id, exit: e.result.exit, isError: e.isError }]
+        : [],
+    );
+  const finalExit = (events: CanonicalEvent[], callId: string) =>
+    exits(events)
+      .filter((e) => e.callId === callId)
+      .at(-1)?.exit;
+  const FIRST = 'call_Exit001xxxxxxxxxxxxxxxxx';
+  const SECOND = 'call_Exit003xxxxxxxxxxxxxxxxx';
+  const record = (predicate: (o: Record<string, unknown>) => boolean) => {
+    const found = lines.map((l) => JSON.parse(l)).find(predicate);
+    if (!found) throw new Error('fixture record missing');
+    return found;
+  };
+
+  it('observes the exit code of a yielded command, failing then passing', () => {
+    const events = parseAll(lines, sessionId, THREAD);
+    for (const e of events) expect(() => CanonicalEventSchema.parse(e)).not.toThrow();
+    expect(finalExit(events, FIRST)).toEqual({ code: 1, observation: 'explicit' });
+    expect(finalExit(events, SECOND)).toEqual({ code: 0, observation: 'explicit' });
+    const runs = reduce(events).verifications;
+    expect(runs.map((v) => [v.callId, v.method, v.outcome, v.exit?.observation])).toEqual([
+      [FIRST, 'test', 'fail', 'explicit'],
+      [SECOND, 'test', 'pass', 'explicit'],
+    ]);
+    // Without the items the same rollout says nothing about how either process exited.
+    const without = parseAll(
+      lines.filter((l) => !isItem(l)),
+      sessionId,
+      THREAD,
+    );
+    expect(finalExit(without, FIRST)).toEqual({ observation: 'unknown' });
+    expect(finalExit(without, SECOND)).toEqual({ observation: 'unknown' });
+  });
+
+  it('adds no activity of its own, so nothing is counted twice', () => {
+    const events = parseAll(lines, sessionId, THREAD);
+    const without = parseAll(
+      lines.filter((l) => !isItem(l)),
+      sessionId,
+      THREAD,
+    );
+    expect(events.map((e) => e.id)).toEqual(without.map((e) => e.id));
+    const state = reduce(events);
+    expect(state.counters.toolCalls).toBe(reduce(without).counters.toolCalls);
+    expect(Object.keys(state.activities).some((id) => id.startsWith('exec-'))).toBe(false);
+  });
+
+  it('keeps unknown when the item has no exit code', () => {
+    const stripped = lines.map((l) => {
+      if (!isItem(l)) return l;
+      const o = JSON.parse(l);
+      delete o.payload.item.exit_code;
+      return JSON.stringify(o);
+    });
+    const events = parseAll(stripped, sessionId, THREAD);
+    expect(finalExit(events, FIRST)).toEqual({ observation: 'unknown' });
+    expect(finalExit(events, SECOND)).toEqual({ observation: 'unknown' });
+  });
+
+  it('claims nothing for a command still running when the rollout ends', () => {
+    // The process exited and Codex recorded it, but the poll that returns the result never came.
+    const cut = lines.slice(0, lines.findIndex(isItem) + 1);
+    const events = parseAll(cut, sessionId, THREAD);
+    // Only the provisional result the yielding call returned, which knows nothing of the exit.
+    expect(exits(events).filter((e) => e.callId === FIRST)).toEqual([
+      expect.objectContaining({
+        exit: { observation: 'unknown' },
+        id: expect.not.stringMatching(/final$/),
+      }),
+    ]);
+    expect(reduce(events).activities[FIRST]?.exit).toEqual({ observation: 'unknown' });
+  });
+
+  describe('a cell that finishes in one call', () => {
+    const call = record(
+      (o) =>
+        (o.payload as { call_id?: string }).call_id === FIRST &&
+        (o.payload as { type?: string }).type === 'custom_tool_call',
+    );
+    const item = record((o) => JSON.stringify(o).includes('"CommandExecution"'));
+    const output = (text: string) =>
+      JSON.stringify({
+        ...call,
+        payload: {
+          type: 'custom_tool_call_output',
+          call_id: FIRST,
+          output: [{ type: 'input_text', text }],
+        },
+      });
+    const cell = (...commands: string[]) =>
+      JSON.stringify({
+        ...call,
+        payload: {
+          ...call.payload,
+          input: commands
+            .map((c) => `await tools.exec_command({"cmd":${JSON.stringify(c)},"workdir":"/repo"});`)
+            .join('\n'),
+        },
+      });
+    const ran = (command: string, code: number | undefined, n = 1) => {
+      const o = structuredClone(item);
+      o.payload.item.id = `exec-01a0000${n}-0000-7000-8000-00000000000${n}`;
+      o.payload.item.command = ['/bin/zsh', '-lc', command];
+      if (code === undefined) delete o.payload.item.exit_code;
+      else o.payload.item.exit_code = code;
+      return JSON.stringify(o);
+    };
+    const done = output('Script completed\nWall time 0.1 seconds\nOutput:\nok\n');
+    const exitOf = (records: string[]) => finalExit(parseAll(records, sessionId, THREAD), FIRST);
+
+    it('takes the code of the one command it ran', () => {
+      expect(exitOf([cell('npm test'), ran('npm test', 2), done])).toEqual({
+        code: 2,
+        observation: 'explicit',
+      });
+    });
+
+    it('takes 0 only when every command it names exited 0, and nothing when they disagree', () => {
+      expect(
+        exitOf([
+          cell('npm run lint', 'npm test'),
+          ran('npm run lint', 0, 1),
+          ran('npm test', 0, 2),
+          done,
+        ]),
+      ).toEqual({ code: 0, observation: 'explicit' });
+      expect(
+        exitOf([
+          cell('npm run lint', 'npm test'),
+          ran('npm run lint', 0, 1),
+          ran('npm test', 1, 2),
+          done,
+        ]),
+      ).toEqual({ observation: 'unknown' });
+      // One command never reported: a pass cannot be claimed for the cell.
+      expect(exitOf([cell('npm run lint', 'npm test'), ran('npm run lint', 0, 1), done])).toEqual({
+        observation: 'unknown',
+      });
+    });
+
+    it('does not match a command the script builds at run time, or one two open cells name', () => {
+      const dynamic = JSON.stringify({
+        ...call,
+        payload: {
+          ...call.payload,
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: the string is a script under test.
+          input: 'const t = "test";\nawait tools.exec_command({cmd: `npm ${t}`});',
+        },
+      });
+      expect(exitOf([dynamic, ran('npm test', 1), done])).toEqual({ observation: 'unknown' });
+      const other = cell('npm test').replace(FIRST, 'call_Other00xxxxxxxxxxxxxxxx');
+      expect(exitOf([cell('npm test'), other, ran('npm test', 1), done])).toEqual({
+        observation: 'unknown',
+      });
+    });
+
+    it('lets a code the output itself printed stand', () => {
+      const printed = output(
+        'Script completed\nWall time 0.1 seconds\nOutput:\n{"chunk_id":"000009","wall_time_seconds":0.1,"exit_code":0,"original_token_count":1,"output":"ok"}\n',
+      );
+      expect(exitOf([cell('npm test'), ran('npm test', 0), printed])).toEqual({
+        code: 0,
+        observation: 'explicit',
+      });
+    });
+  });
+
+  it('observes a function-tool command by its call id, and merges with its hook', () => {
+    const shell = read('codex-0.157-app-server-shell-write.jsonl');
+    const events = parseAll(shell, sessionId, THREAD);
+    const [command] = exits(events);
+    expect(command?.exit).toEqual({ code: 0, observation: 'explicit' });
+    expect(
+      exits(
+        parseAll(
+          shell.filter((l) => !isItem(l)),
+          sessionId,
+          THREAD,
+        ),
+      )[0]?.exit,
+    ).toEqual({ observation: 'unknown' });
+    const callId = command?.callId ?? '';
+    const receivedAt = '2026-01-01T00:02:41.300Z';
+    const hook = [
+      ...parseCodexHookPayload(
+        {
+          session_id: THREAD,
+          hook_event_name: 'PreToolUse',
+          tool_name: 'Bash',
+          tool_use_id: callId,
+          tool_input: { command: "printf 'done' > check.txt && cat check.txt" },
+          cwd: '/repo',
+        },
+        { receivedAt },
+      ),
+      ...parseCodexHookPayload(
+        {
+          session_id: THREAD,
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Bash',
+          tool_use_id: callId,
+          tool_input: { command: "printf 'done' > check.txt && cat check.txt" },
+          tool_response: 'done',
+        },
+        { receivedAt },
+      ),
+    ];
+    const state = createInitialState({ sessionId, provider: 'codex', providerSessionId: THREAD });
+    let seq = 0;
+    for (const e of [...hook, ...events]) applyEvent(state, { ...e, seq: seq++ } as StoredEvent);
+    expect(Object.keys(state.activities).filter((id) => id === callId)).toHaveLength(1);
+    expect(state.activities[callId]?.exit).toEqual({ code: 0, observation: 'explicit' });
   });
 });
