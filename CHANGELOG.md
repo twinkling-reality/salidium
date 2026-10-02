@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.1 - 2026-10-02
+
+- Record file changes from current Codex builds. Since Codex 0.144, applied patches are written as
+  `FileChange` items instead of patch events, so sessions from those builds reported "No files
+  changed" even when they made commits. Salidium now reads those items, including patches applied
+  inside code-mode cells and file moves.
+- Read each Codex command's exit code from its `CommandExecution` item, so a test, build, or lint
+  run in a recent Codex session shows whether it passed instead of unknown. Commands in code-mode
+  cells written with a quoted `"cmd"` key are recognized too.
+- After upgrading, run `salidium reingest --all` so sessions recorded before this release are read
+  again with these rules. If you use the macOS always-on service, run `salidium service install`
+  first so the service runs the new copy.
+- Add a validation record for an evidence-linked project map, `docs/project-map-validation.md`,
+  with its prototype scripts. It is an experiment: nothing in the CLI or daemon serves it.
+
 ## 0.6.0 - 2026-09-26
 
 - Add a read-only consumer contract, so a tool on the same machine can read Salidium's session
