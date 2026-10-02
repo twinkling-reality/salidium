@@ -28,7 +28,13 @@ import type { Logger } from '../logging/logger.ts';
 import { startSse } from '../server/sse.ts';
 import { isUserSession, type SessionRegistry } from '../sessions/sessionRegistry.ts';
 import type { ConsumerCredential, ConsumerCredentialVerifier } from './credentials.ts';
-import { consumerText, MAX_CONSUMER_PATH, toSessionEntry, toSessionReport } from './report.ts';
+import {
+  consumerText,
+  currentStatus,
+  MAX_CONSUMER_PATH,
+  toSessionEntry,
+  toSessionReport,
+} from './report.ts';
 
 export interface ConsumerRouteDeps {
   registry: SessionRegistry;
@@ -40,6 +46,11 @@ export interface ConsumerRouteDeps {
 
 export const DEFAULT_CONSUMER_LIST_LIMIT = 200;
 export const MAX_CONSUMER_LIST_LIMIT = 2000;
+/**
+ * How many sessions' list entries are remembered, most recent first. Past it a list still works,
+ * and the older sessions are built and checked on every request as before.
+ */
+export const MAX_CACHED_LIST_ENTRIES = 10_000;
 /** The contract's bound on Salidium's own session id, which repeats the provider's. */
 const MAX_SESSION_ID = 1100;
 /** A feed this far behind is not being read. It is closed, and the reconnect starts with resync. */
@@ -130,6 +141,33 @@ export function createConsumerRoutes(deps: ConsumerRouteDeps) {
     return checked(SessionEntrySchema, entry, summary.id) ? entry : undefined;
   }
 
+  /*
+   * A list builds and checks an entry for every stored session so that total is honest, which at
+   * thousands of sessions is real time on the daemon's thread. Each session's result, including
+   * "cannot be carried", is kept until its summary changes, and each list replaces the cache with
+   * the sessions it saw, so a forgotten session does not linger.
+   *
+   * The key is the whole summary plus the status it reads as now, not just evidenceSeq and status:
+   * the explanation status moves from generating to generated, or to disabled, with no new
+   * evidence, and an entry keyed without it would keep announcing the old one.
+   */
+  interface CachedEntry {
+    key: string;
+    entry: SessionEntry | undefined;
+  }
+  let listCache = new Map<string, CachedEntry>();
+  function listEntryOf(
+    summary: SessionSummary,
+    at: number,
+    seen: Map<string, CachedEntry>,
+  ): SessionEntry | undefined {
+    const key = `${currentStatus(summary, at)}|${JSON.stringify(summary)}`;
+    let cached = listCache.get(summary.id);
+    if (cached?.key !== key) cached = { key, entry: entryOf(summary, at) };
+    if (seen.size < MAX_CACHED_LIST_ENTRIES) seen.set(summary.id, cached);
+    return cached.entry;
+  }
+
   /** The last line: whether `document` passes its own schema, logging where it did not if not. */
   function checked(schema: z.ZodType, document: unknown, key: string): boolean {
     const parsed = schema.safeParse(document);
@@ -212,7 +250,9 @@ export function createConsumerRoutes(deps: ConsumerRouteDeps) {
       );
     const at = now();
     // Every session is checked before counting, so total and truncated describe what can be served.
-    const all = registry.listSessions().flatMap((summary) => entryOf(summary, at) ?? []);
+    const seen = new Map<string, CachedEntry>();
+    const all = registry.listSessions().flatMap((summary) => listEntryOf(summary, at, seen) ?? []);
+    listCache = seen;
     const body: SessionList = {
       format: 'salidium.session-list',
       version: 1,
@@ -221,7 +261,11 @@ export function createConsumerRoutes(deps: ConsumerRouteDeps) {
       total: all.length,
       truncated: all.length > limit,
     };
-    return checked(SessionListSchema, body, 'list') ? json(res, 200, body) : unservable(res);
+    // Each entry already passed SessionEntrySchema, so the envelope is checked around them rather
+    // than parsing up to the limit's worth of entries a second time.
+    return checked(SessionListSchema, { ...body, sessions: [] }, 'list')
+      ? json(res, 200, body)
+      : unservable(res);
   }
 
   function lookup(res: ServerResponse, url: URL): undefined {

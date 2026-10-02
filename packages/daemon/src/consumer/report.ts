@@ -118,7 +118,7 @@ export function consumerText(redactor: Redactor): ConsumerText {
  * The same staleness rule the reducer's projection applies, for summaries read from the store
  * without replaying their state: a session that stopped reporting mid-turn is not still working.
  */
-function currentStatus(summary: SessionSummary, now: number): SessionStatus {
+export function currentStatus(summary: SessionSummary, now: number): SessionStatus {
   if (summary.status === 'working' && summary.lastEventAt) {
     const age = now - Date.parse(summary.lastEventAt);
     if (Number.isFinite(age) && age > WORKING_STALE_MS) return 'idle';
@@ -126,6 +126,10 @@ function currentStatus(summary: SessionSummary, now: number): SessionStatus {
   return STATUS[summary.status];
 }
 
+/**
+ * A pure function of the summary, and of `now` only through `currentStatus`: the list's entry cache
+ * in `routes.ts` relies on that, so anything else that varies with time belongs in its key too.
+ */
 export function toSessionEntry(
   summary: SessionSummary,
   now: number,
