@@ -172,6 +172,10 @@
               "minimum": 0,
               "maximum": 9007199254740991
             },
+            "linesRemovedExact": {
+              "type": "boolean",
+              "description": "False when a provider replaced some file without recording what it held, so linesRemoved is a lower bound rather than a count. Added in 1.1."
+            },
             "reviewOpen": {
               "type": "integer",
               "minimum": 0,
@@ -191,6 +195,7 @@
             "filesChanged",
             "linesAdded",
             "linesRemoved",
+            "linesRemovedExact",
             "reviewOpen",
             "remaining"
           ]
@@ -625,6 +630,10 @@
                 "minimum": 0,
                 "maximum": 9007199254740991
               },
+              "linesRemovedExact": {
+                "type": "boolean",
+                "description": "False when some change replaced this file without recording what it held, so linesRemoved is a lower bound. Added in 1.1."
+              },
               "kinds": {
                 "type": "array",
                 "items": {
@@ -736,6 +745,7 @@
               "changeCount",
               "linesAdded",
               "linesRemoved",
+              "linesRemovedExact",
               "kinds",
               "lastChangedAt",
               "coverage",

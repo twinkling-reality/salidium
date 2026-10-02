@@ -859,6 +859,7 @@ function upgradeCompletedActivity(
       state.counters.linesAdded += change.linesAdded - old.linesAdded;
       state.counters.linesRemoved += change.linesRemoved - old.linesRemoved;
       file.lastHunks = change.hunks?.slice(0, 20);
+      if (change.linesRemovedUnknown) markRemovedUnknown(state, file);
       file.lastChangedAt = e.ts;
       file.lastChangeSeq = e.seq;
       file.lastAgentId = e.agentId;
@@ -1019,6 +1020,15 @@ function markSourceConflict(
   }
 }
 
+/**
+ * Sticky: once any change replaced a file without saying what it held, its removed count and the
+ * session's are lower bounds, whatever exact changes follow.
+ */
+function markRemovedUnknown(state: RunState, file: FileState): void {
+  file.linesRemovedUnknown = true;
+  state.counters.linesRemovedUnknown = true;
+}
+
 function changeVerb(kind: FileChange['change']): string {
   return kind === 'add'
     ? 'Created'
@@ -1115,6 +1125,7 @@ function applyFileChange(
   file.lastAgentId = e.agentId;
   if (change.hunks) file.lastHunks = change.hunks.slice(0, 20);
   if (change.userModifiedBefore) file.userModifiedBefore = true;
+  if (change.linesRemovedUnknown) markRemovedUnknown(state, file);
   if (turn && !file.turnIds.includes(turn.id)) file.turnIds.push(turn.id);
   if (turn && !turn.filesTouched.includes(change.path)) turn.filesTouched.push(change.path);
   state.counters.linesAdded += change.linesAdded;

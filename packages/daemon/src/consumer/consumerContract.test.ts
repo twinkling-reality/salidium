@@ -631,6 +631,57 @@ describe('consumer change feed', () => {
 });
 
 describe('consumer contract edges', () => {
+  it('says a removed line count is a floor when a provider did not record what it replaced', async () => {
+    const { applyEvent, createInitialState, createRedactor, projectSession, summarizeSession } =
+      await import('@salidium/core');
+    const { EventBuilder } = await import('@salidium/core/testing');
+    const { consumerText, toSessionReport } = await import('./report.ts');
+    const b = new EventBuilder('claude-code:overwrite', '2026-09-20T16:00:00.000Z');
+    const state = createInitialState({
+      sessionId: 'claude-code:overwrite',
+      provider: 'claude-code',
+      providerSessionId: 'overwrite',
+      cwd: '/repo',
+    });
+    for (const event of [
+      b.sessionStarted('/repo'),
+      b.turnStarted('Rewrite the config'),
+      ...b.edit('e1', '/repo/exact.ts', 2, 1),
+      b.toolCalled('w1', 'write', { kind: 'fileWrite', path: '/repo/config.ts' }),
+      b.toolCompleted('w1', 'write', {
+        kind: 'fileChanges',
+        changes: [
+          {
+            path: '/repo/config.ts',
+            change: 'update',
+            linesAdded: 9,
+            linesRemoved: 0,
+            linesRemovedUnknown: true,
+            applied: true,
+          },
+        ],
+      }),
+    ])
+      applyEvent(state, event);
+    const at = Date.parse('2026-09-20T16:01:00.000Z');
+    const report = exactly(
+      SessionReportSchema,
+      toSessionReport(
+        state,
+        projectSession(state, at),
+        summarizeSession(state, at),
+        at,
+        consumerText(createRedactor()),
+      ),
+    );
+    expect(report.session.counts).toMatchObject({ linesRemoved: 1, linesRemovedExact: false });
+    expect(
+      Object.fromEntries(
+        report.changes.files.map((f) => [f.path, [f.linesRemoved, f.linesRemovedExact]]),
+      ),
+    ).toEqual({ '/repo/exact.ts': [1, true], '/repo/config.ts': [0, false] });
+  });
+
   it('describes a running code cell in Salidium’s words, never its script', async () => {
     const { applyEvent, createInitialState, createRedactor, projectSession, summarizeSession } =
       await import('@salidium/core');

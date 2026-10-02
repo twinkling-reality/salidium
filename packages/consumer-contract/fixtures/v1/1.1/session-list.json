@@ -24,6 +24,7 @@
         "filesChanged": 0,
         "linesAdded": 0,
         "linesRemoved": 0,
+        "linesRemovedExact": true,
         "reviewOpen": 0,
         "remaining": 0
       },
@@ -51,6 +52,7 @@
         "filesChanged": 1,
         "linesAdded": 12,
         "linesRemoved": 4,
+        "linesRemovedExact": true,
         "reviewOpen": 2,
         "remaining": 0
       },
@@ -82,6 +84,7 @@
         "filesChanged": 4,
         "linesAdded": 43,
         "linesRemoved": 6,
+        "linesRemovedExact": true,
         "reviewOpen": 2,
         "remaining": 1
       },

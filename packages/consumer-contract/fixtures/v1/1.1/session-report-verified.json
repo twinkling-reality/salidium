@@ -23,6 +23,7 @@
       "filesChanged": 4,
       "linesAdded": 43,
       "linesRemoved": 6,
+      "linesRemovedExact": true,
       "reviewOpen": 2,
       "remaining": 1
     },
@@ -75,6 +76,7 @@
         "changeCount": 1,
         "linesAdded": 5,
         "linesRemoved": 1,
+        "linesRemovedExact": true,
         "kinds": [
           "update"
         ],
@@ -102,6 +104,7 @@
         "changeCount": 1,
         "linesAdded": 6,
         "linesRemoved": 0,
+        "linesRemovedExact": true,
         "kinds": [
           "update"
         ],
@@ -124,6 +127,7 @@
         "changeCount": 1,
         "linesAdded": 8,
         "linesRemoved": 2,
+        "linesRemovedExact": true,
         "kinds": [
           "update"
         ],
@@ -151,6 +155,7 @@
         "changeCount": 1,
         "linesAdded": 24,
         "linesRemoved": 3,
+        "linesRemovedExact": true,
         "kinds": [
           "update"
         ],

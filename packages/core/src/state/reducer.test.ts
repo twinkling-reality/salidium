@@ -605,3 +605,49 @@ describe('reducer: a better record of a command that already finished', () => {
     expect(state.counters.commands).toBe(1);
   });
 });
+
+describe('reducer: a removed line count that is unknown', () => {
+  it('marks the file and the session for good, and never treats the count as exact again', () => {
+    const b = new EventBuilder();
+    const overwrite = (callId: string) => [
+      b.toolCalled(callId, 'write', { kind: 'fileWrite', path: '/repo/a.ts' }),
+      b.toolCompleted(callId, 'write', {
+        kind: 'fileChanges',
+        changes: [
+          {
+            path: '/repo/a.ts',
+            change: 'update',
+            linesAdded: 12,
+            linesRemoved: 0,
+            linesRemovedUnknown: true,
+            applied: true,
+          },
+        ],
+      }),
+    ];
+    const { state } = run([
+      b.sessionStarted(),
+      b.turnStarted('Rewrite a'),
+      ...b.edit('e1', '/repo/b.ts', 2, 1),
+      ...overwrite('w1'),
+      // An exact change afterwards does not make the earlier unknown count known.
+      ...b.edit('e2', '/repo/a.ts', 1, 1),
+    ]);
+    expect(state.files['/repo/a.ts']?.linesRemovedUnknown).toBe(true);
+    expect(state.files['/repo/b.ts']?.linesRemovedUnknown).toBeUndefined();
+    expect(state.counters.linesRemovedUnknown).toBe(true);
+    expect(state.counters.linesRemoved).toBe(2);
+    expect(summarizeSession(state, Date.parse('2026-08-16T11:00:00.000Z')).counts).toMatchObject({
+      linesRemoved: 2,
+      linesRemovedExact: false,
+    });
+  });
+
+  it('calls a session with only known counts exact', () => {
+    const b = new EventBuilder();
+    const { state } = run([b.sessionStarted(), ...b.edit('e1', '/repo/b.ts', 2, 1)]);
+    expect(summarizeSession(state, Date.parse('2026-08-16T11:00:00.000Z')).counts).toMatchObject({
+      linesRemovedExact: true,
+    });
+  });
+});

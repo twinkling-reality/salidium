@@ -104,6 +104,9 @@ Check that your discovery entry's `minor` is at least 1 before relying on any of
   Agents often write outside the directory the session started in, so this can differ from
   `session.repositoryRoot`. Salidium reads it from Git's pointer files when the change happens,
   without running git; it is `null` for history imports and wherever no repository holds the file.
+- `linesRemovedExact` on each changed file and on a session's `counts`: `false` when a provider
+  replaced a file without recording what it held, so `linesRemoved` is a lower bound rather than
+  a count. Claude Code and Codex always record it today.
 - Discovery's top-level `providers`: the providers this daemon instance observes, as `{ id }`
   objects with the ids `lookup` takes. An id that is not listed is not observed until Salidium
   restarts with a new `instanceId`, so gate lookups on it rather than on the version. A 1.0 daemon

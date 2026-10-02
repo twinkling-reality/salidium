@@ -15,7 +15,8 @@
   it, including a linked worktree outside the session's directory, and discovery lists the
   providers the daemon observes. Salidium finds a file's repository from Git's own pointer files
   while the change is live, without running git or reading file contents, under the same setting
-  as git snapshots.
+  as git snapshots. A file's and a session's `linesRemovedExact` says when a removed line count is
+  only a lower bound, because a provider replaced a file without recording what it held.
 - Git snapshots now record which boundary triggered them, and a turn end that closely follows a
   commit is no longer skipped.
 - Every store replays its sessions once after upgrading, because session state gained revision

@@ -118,6 +118,11 @@ export const SessionEntrySchema = z.object({
     filesChanged: Count,
     linesAdded: Count,
     linesRemoved: Count,
+    linesRemovedExact: z
+      .boolean()
+      .describe(
+        'False when a provider replaced some file without recording what it held, so linesRemoved is a lower bound rather than a count. Added in 1.1.',
+      ),
     reviewOpen: Count.describe('Open review items above informational severity.'),
     remaining: Count.describe('Plan steps still pending or in progress.'),
   }),
@@ -209,6 +214,11 @@ export const ChangedFileSchema = z.object({
   changeCount: Count,
   linesAdded: Count,
   linesRemoved: Count,
+  linesRemovedExact: z
+    .boolean()
+    .describe(
+      'False when some change replaced this file without recording what it held, so linesRemoved is a lower bound. Added in 1.1.',
+    ),
   kinds: z.array(z.enum(['add', 'update', 'delete', 'move'])),
   lastChangedAt: Timestamp,
   coverage: z

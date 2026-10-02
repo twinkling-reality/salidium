@@ -23,6 +23,7 @@
       "filesChanged": 1,
       "linesAdded": 12,
       "linesRemoved": 4,
+      "linesRemovedExact": true,
       "reviewOpen": 2,
       "remaining": 0
     },

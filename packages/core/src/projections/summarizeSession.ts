@@ -42,6 +42,7 @@ export function summarizeSession(state: RunState, now: number = Date.now()): Ses
       filesChanged: state.counters.filesChanged,
       linesAdded: state.counters.linesAdded,
       linesRemoved: state.counters.linesRemoved,
+      linesRemovedExact: !state.counters.linesRemovedUnknown,
       reviewOpen: state.review.filter((r) => r.resolvedSeq === undefined && r.severity !== 'info')
         .length,
       remaining: state.plan.items.filter(

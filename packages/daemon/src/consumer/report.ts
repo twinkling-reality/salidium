@@ -151,6 +151,8 @@ export function toSessionEntry(
       filesChanged: summary.counts.filesChanged,
       linesAdded: summary.counts.linesAdded,
       linesRemoved: summary.counts.linesRemoved,
+      // Summaries written before the field existed predate any provider that could leave it false.
+      linesRemovedExact: summary.counts.linesRemovedExact ?? true,
       reviewOpen: summary.counts.reviewOpen,
       remaining: summary.counts.remaining,
     },
@@ -292,6 +294,7 @@ export function toSessionReport(
         changeCount: file.changeCount,
         linesAdded: file.linesAdded,
         linesRemoved: file.linesRemoved,
+        linesRemovedExact: !state.files[file.path]?.linesRemovedUnknown,
         kinds: [...file.kinds],
         lastChangedAt: file.lastChangedAt,
         coverage: {

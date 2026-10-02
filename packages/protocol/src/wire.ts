@@ -56,6 +56,11 @@ export const SessionSummarySchema = z.object({
     filesChanged: z.number().int().nonnegative(),
     linesAdded: z.number().int().nonnegative(),
     linesRemoved: z.number().int().nonnegative(),
+    /**
+     * False when some change's removed line count is unknown, so `linesRemoved` is a lower bound.
+     * Absent in summaries written before it existed, when no provider could report such a change.
+     */
+    linesRemovedExact: z.boolean().optional(),
     reviewOpen: z.number().int().nonnegative(),
     remaining: z.number().int().nonnegative(),
   }),

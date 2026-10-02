@@ -166,6 +166,8 @@ export interface FileState {
   /** Latest hunks (bounded) for the raw drill-through; older hunks live in the event log. */
   lastHunks?: Hunk[];
   userModifiedBefore?: boolean;
+  /** Some change replaced the file without its prior content, so `linesRemoved` is a floor. */
+  linesRemovedUnknown?: true;
 }
 
 export type VerificationMethod = 'test' | 'typecheck' | 'lint' | 'build' | 'other';
@@ -320,6 +322,8 @@ export interface GitState {
 }
 
 export interface Counters {
+  /** Some file's removed line count is unknown, so `linesRemoved` is a floor. */
+  linesRemovedUnknown?: true;
   turns: number;
   toolCalls: number;
   toolFailures: number;
