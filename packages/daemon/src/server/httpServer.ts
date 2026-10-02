@@ -10,6 +10,7 @@ import {
   isSensitivePath,
   projectSession,
 } from '@salidium/core';
+import type { SessionLinksHandler } from '@salidium/project-map';
 import type {
   CollectionControlRequest,
   CollectionStatus,
@@ -122,6 +123,12 @@ export interface HttpServerDeps {
    * Optional for the same reason as `consumer`.
    */
   projectMap?: ReturnType<typeof createProjectMapRoutes>;
+  /**
+   * Where a session's changed files sit in the codebase, for the interface: the same
+   * `salidium.execution-links` document the map routes serve to consumers, under the same opt-in.
+   * Optional like `settings`; without it the path is simply not found.
+   */
+  sessionLinks?: SessionLinksHandler;
   log: Logger;
 }
 
@@ -509,6 +516,12 @@ export function createHttpServer(deps: HttpServerDeps): Server {
           if (!Number.isInteger(after) || after < -1)
             return json(res, 400, { error: 'after must be an integer at least -1' });
           return streamSession(res, sessionId, after);
+        }
+        case rest === 'links' && deps.sessionLinks !== undefined: {
+          const result = await deps.sessionLinks({ sessionId, query: url.searchParams });
+          return 'body' in result
+            ? json(res, 200, result.body)
+            : json(res, result.status, { error: result.message });
         }
         case rest.startsWith('raw/'): {
           const eventId = decodeSegment(rest.slice(4));
