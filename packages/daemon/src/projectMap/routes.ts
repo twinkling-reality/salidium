@@ -11,9 +11,11 @@ import {
 } from '@salidium/project-map';
 import type { ConsumerCredentialVerifier } from '../consumer/credentials.ts';
 import type { Logger } from '../logging/logger.ts';
+import type { DaemonProjectMapService } from './service.ts';
 
 export interface ProjectMapRouteDeps {
-  maps: ProjectMapService;
+  /** With `getMapDocument`, as the daemon's service has, a map is served from its cached text. */
+  maps: ProjectMapService & Partial<Pick<DaemonProjectMapService, 'getMapDocument'>>;
   /** The consumer credential file's verifier: the map is read with the same credential. */
   credentials: ConsumerCredentialVerifier;
   /** The execution links view, when the daemon provides one. */
@@ -123,6 +125,12 @@ export function createProjectMapRoutes(deps: ProjectMapRouteDeps) {
         'bad-request',
         'repository (an opted-in absolute root) and commit (a full 40- or 64-hex id) are required',
       );
+    if (maps.getMapDocument) {
+      const document = await maps.getMapDocument(repository.data, commit.data);
+      if (document.ok) return text(res, document.text);
+      if (document.refusal.error === 'busy') res.setHeader('Retry-After', '10');
+      return fail(res, document.refusal.error, document.refusal.message);
+    }
     const result = await maps.getMap(repository.data, commit.data);
     if (result.ok) return json(res, 200, result.map);
     if (result.refusal.error === 'busy') res.setHeader('Retry-After', '10');
@@ -147,6 +155,12 @@ export function createProjectMapRoutes(deps: ProjectMapRouteDeps) {
       return undefined;
     },
   };
+}
+
+function text(res: ServerResponse, body: string): void {
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.end(body);
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {

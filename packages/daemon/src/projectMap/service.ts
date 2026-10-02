@@ -6,6 +6,7 @@ import {
   type MapResult,
   ObjectIdSchema,
   type OptedInRepository,
+  type ProjectMap,
   ProjectMapSchema,
   type ProjectMapService,
 } from '@salidium/project-map';
@@ -23,8 +24,14 @@ import { mapFromObjectStore } from './source.ts';
 
 /** Builds one at a time; a request arriving while this many wait is told to retry. */
 export const MAX_QUEUED_BUILDS = 4;
-/** Builds started per minute, cached answers excluded. */
+/** Builds and disk-cache reads started per minute; maps already in memory are not counted. */
 export const MAX_BUILDS_PER_MINUTE = 12;
+/** Recently served maps kept parsed and serialized, so repeated requests cost nothing. */
+const MEMORY_CACHE_BYTES = 64 * 1024 * 1024;
+
+export type MapDocumentResult =
+  | { ok: true; map: ProjectMap; text: string }
+  | { ok: false; refusal: MapRefusal };
 
 export interface ProjectMapServiceOptions {
   home: string;
@@ -80,7 +87,8 @@ export class DaemonProjectMapService implements ProjectMapService {
   private queue: Promise<unknown> = Promise.resolve();
   private queued = 0;
   private readonly started: number[] = [];
-  private readonly inFlight = new Map<string, Promise<MapResult>>();
+  private readonly inFlight = new Map<string, Promise<MapDocumentResult>>();
+  private readonly memory = new Map<string, { map: ProjectMap; text: string; bytes: number }>();
 
   constructor(options: ProjectMapServiceOptions) {
     this.optIn = new OptInVerifier(options.home, (reason) => options.log?.warn(reason));
@@ -124,27 +132,64 @@ export class DaemonProjectMapService implements ProjectMapService {
   }
 
   async getMap(mainRoot: string, commit: string): Promise<MapResult> {
+    const document = await this.getMapDocument(mainRoot, commit);
+    return document.ok ? { ok: true, map: document.map } : document;
+  }
+
+  /**
+   * The map and its serialized form. Maps served recently are kept in memory with their text, so a
+   * repeated request neither re-reads the disk cache nor re-serializes; anything else (a disk-cache
+   * read or a build) takes a turn in the queue and counts against the per-minute limit.
+   */
+  async getMapDocument(mainRoot: string, commit: string): Promise<MapDocumentResult> {
     if (!ObjectIdSchema.safeParse(commit).success)
       return refusal('bad-request', 'commit must be a full 40- or 64-hex object id');
     const repository = this.optIn.get(mainRoot);
     if (!repository) return NOT_OPTED_IN();
-    const cached = this.cache.get(repository, commit);
-    if (cached) return { ok: true, map: cached };
-    const key = `${mainRoot}\0${commit}`;
+    const key = `${repository.root}\0${repository.allowedAt}\0${commit}`;
+    const remembered = this.memory.get(key);
+    if (remembered) {
+      this.memory.delete(key);
+      this.memory.set(key, remembered);
+      return { ok: true, ...remembered };
+    }
     const running = this.inFlight.get(key);
     if (running) return running;
     const at = this.now();
     while (this.started.length > 0 && at - (this.started[0] ?? 0) > 60_000) this.started.shift();
     if (this.started.length >= this.maxBuildsPerMinute)
-      return refusal('busy', 'too many maps were built in the last minute; retry shortly');
+      return refusal('busy', 'too many maps were read or built in the last minute; retry shortly');
     if (this.queued >= MAX_QUEUED_BUILDS)
       return refusal('busy', 'other maps are being built; retry shortly');
     this.started.push(at);
-    const build = this.serialized(() => this.build(repository, commit)).finally(() =>
-      this.inFlight.delete(key),
-    );
-    this.inFlight.set(key, build);
-    return build;
+    const work = this.serialized(async (): Promise<MapDocumentResult> => {
+      const cached =
+        this.optIn.get(repository.root)?.allowedAt === repository.allowedAt
+          ? this.cache.get(repository, commit)
+          : undefined;
+      const result = cached
+        ? { ok: true as const, map: cached }
+        : await this.build(repository, commit);
+      return result.ok ? this.remember(key, result.map) : result;
+    }).finally(() => this.inFlight.delete(key));
+    this.inFlight.set(key, work);
+    return work;
+  }
+
+  private remember(key: string, map: ProjectMap): MapDocumentResult {
+    const text = JSON.stringify(map);
+    const bytes = Buffer.byteLength(text);
+    if (bytes <= MEMORY_CACHE_BYTES / 4) {
+      this.memory.set(key, { map, text, bytes });
+      let total = 0;
+      for (const [entryKey, entry] of [...this.memory].reverse()) {
+        const [root, allowedAt] = entryKey.split('\0');
+        total += entry.bytes;
+        if (total > MEMORY_CACHE_BYTES || this.optIn.get(root ?? '')?.allowedAt !== allowedAt)
+          this.memory.delete(entryKey);
+      }
+    }
+    return { ok: true, map, text };
   }
 
   /** Runs work after everything queued before it, one at a time. */

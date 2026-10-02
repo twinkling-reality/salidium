@@ -34,6 +34,7 @@ import { MapOverBound } from './build.ts';
 
 export const GIT_TIMEOUT_MS = 15_000;
 const MAX_PACK_ENTRIES = 4096;
+const MAX_OBJECT_DIRECTORY_ENTRIES = 1024;
 /** Longest tree record accepted: a path far beyond any file system's, plus the mode and id. */
 const MAX_TREE_RECORD_BYTES = 8192;
 /** The last second of year 9999, the latest time an ISO timestamp can carry. */
@@ -116,6 +117,8 @@ export async function locateObjectStore(mainRoot: string): Promise<ObjectStore> 
       'unsupported',
       'the repository borrows objects from another directory (objects/info/alternates); Salidium maps only repositories that hold their own objects',
     );
+  await assertPlainEntries(objects, 'the object directory');
+  await assertPlainEntries(join(objects, 'info'), 'objects/info');
   await assertRegularPacks(join(objects, 'pack'));
   return { objects, format: await objectFormat(join(gitDir, 'config')), gitDir };
 }
@@ -126,6 +129,27 @@ async function assertOwned(path: string, what: string): Promise<void> {
   if (uid === undefined) return;
   const info = await stat(path);
   if (info.uid !== uid) throw new GitReadError('unsupported', `${what} belongs to another user`);
+}
+
+/**
+ * The object directory's own entries (the loose-object fan-out directories, `info` and `pack`) must
+ * be real directories or files: a symbolic link there would serve another repository's objects as
+ * this one's. Loose object files inside the fan-out directories are not walked, since there can be
+ * very many; a link there serves an object only under its own id, which a crafted tree would have
+ * to know already.
+ */
+async function assertPlainEntries(directory: string, what: string): Promise<void> {
+  const names = await readdir(directory).catch(() => [] as string[]);
+  if (names.length > MAX_OBJECT_DIRECTORY_ENTRIES)
+    throw new GitReadError('unsupported', `${what} holds more entries than any real one`);
+  for (const name of names) {
+    const entry = await lstat(join(directory, name));
+    if (!entry.isDirectory() && !entry.isFile())
+      throw new GitReadError(
+        'unsupported',
+        `${what} holds a symbolic link or special file; Salidium maps only repositories that hold their own objects`,
+      );
+  }
 }
 
 /**
@@ -276,6 +300,11 @@ export class GitObjectReader {
         for (;;) {
           const end = buffer.indexOf(0);
           if (end < 0) break;
+          if (end > MAX_TREE_RECORD_BYTES) {
+            over = 'path-length';
+            stop();
+            return;
+          }
           const record = buffer.subarray(0, end).toString('utf8');
           buffer = buffer.subarray(end + 1);
           const tab = record.indexOf('\t');

@@ -39,8 +39,8 @@ export const PROJECT_MAP_LIMITS = {
    * that hold control characters or an empty, `.` or `..` segment (which only a crafted tree can).
    */
   pathLength: 1024,
-  nodes: 50_000,
-  edges: 250_000,
+  nodes: 30_000,
+  edges: 100_000,
   /** Evidence kept per edge. `count` says how many places state it. */
   evidencePerEdge: 8,
   unresolvedItems: 1000,
@@ -57,20 +57,21 @@ const Timestamp = z.iso
 const Count = z.number().int().nonnegative();
 const Text = (max: number) => z.string().max(max);
 /**
- * No C0 or C1 control characters and no bidirectional overrides or isolates: a reader may print
- * these strings to a terminal or a page, and each of those can change what is displayed.
+ * No C0 or C1 control characters, no bidirectional marks, overrides or isolates, and no line or
+ * paragraph separators: a reader may print these strings to a terminal or a page, and each of those
+ * can change what is displayed.
  */
-// biome-ignore lint/suspicious/noControlCharactersInRegex: excluding control characters is the point.
-const NO_CONTROL = /^[^\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]*$/;
-// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point.
-const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
+const CONTROL_CLASS =
+  '\\u0000-\\u001f\\u007f-\\u009f\\u061c\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069';
+const NO_CONTROL = new RegExp(`^[^${CONTROL_CLASS}]*$`);
+const UNPRINTABLE = new RegExp(`[${CONTROL_CLASS}]`);
 
 /** Whether a string holds a character the map's strings never carry. */
 export const hasUnprintable = (text: string): boolean => UNPRINTABLE.test(text);
 
 /** The string with each such character replaced by `?`, for printing or clipping. */
 export const printable = (text: string): string =>
-  text.replace(new RegExp(UNPRINTABLE.source, 'g'), '?');
+  text.replace(new RegExp(`[${CONTROL_CLASS}]`, 'g'), '?');
 const Clean = (max: number) => z.string().max(max).regex(NO_CONTROL);
 
 export const ObjectIdSchema = z

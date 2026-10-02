@@ -37,7 +37,10 @@ const PROBE = ['.ts', '.tsx', '.mts', '.js', '.mjs', '.cjs', '.jsx', '.json'];
 /** Exports maps beyond these sizes come only from crafted manifests and are not read. */
 export const MAX_EXPORTS_KEYS = 1000;
 const MAX_EXPORTS_PATTERNS = 64;
-const MAX_EXPORTS_TARGET_BYTES = 64 * 1024;
+const MAX_EXPORTS_VALUE_BYTES = 64 * 1024;
+/** A pattern target longer than any path, or with more stars than any real one, is not read. */
+const MAX_PATTERN_TARGET_LENGTH = 1024;
+const MAX_PATTERN_STARS = 8;
 const MAX_CONDITION_DEPTH = 8;
 const IMPORT_CONDITIONS = new Set(['development', 'node', 'import', 'default']);
 const REQUIRE_CONDITIONS = new Set(['development', 'node', 'require', 'default']);
@@ -109,9 +112,16 @@ export function createResolver(
   };
 
   /** A package's exports, normalized once: exact subpaths, and star patterns in key order. */
+  type Picked = { target: string; conditions: string[] } | undefined;
   interface PreparedExports {
     exact: Map<string, unknown>;
-    stars: { prefix: string; suffix: string; value: unknown }[];
+    stars: {
+      prefix: string;
+      suffix: string;
+      value: unknown;
+      /** The condition each mode picks, worked out once: it does not depend on the match. */
+      picked: Map<ReadonlySet<string>, Picked>;
+    }[];
     tooLarge: boolean;
   }
   const prepared = new Map<string, PreparedExports>();
@@ -142,9 +152,14 @@ export function createResolver(
             prefix: key.slice(0, star),
             suffix: key.slice(star + 1),
             value: map[key],
+            picked: new Map(),
           });
       }
-    if (result.stars.length > MAX_EXPORTS_PATTERNS) result.tooLarge = true;
+    if (
+      result.stars.length > MAX_EXPORTS_PATTERNS ||
+      result.stars.some((s) => (JSON.stringify(s.value) ?? '').length > MAX_EXPORTS_VALUE_BYTES)
+    )
+      result.tooLarge = true;
     prepared.set(pkg.name, result);
     return result;
   };
@@ -157,26 +172,39 @@ export function createResolver(
     const exportsMap = prepare(pkg);
     if (exportsMap.tooLarge)
       return { class: 'unresolved', package: pkg.name, reason: 'exports-too-large' };
-    let entry = exportsMap.exact.get(subpath);
-    if (entry === undefined) {
-      for (const { prefix, suffix, value } of exportsMap.stars) {
-        if (
+    let found: Picked;
+    const exact = exportsMap.exact.get(subpath);
+    if (exact !== undefined) {
+      if (exact === null) return { class: 'unresolved', package: pkg.name, reason: 'not-exported' };
+      found = pickTarget(exact, conditions);
+    } else {
+      const pattern = exportsMap.stars.find(
+        ({ prefix, suffix }) =>
           subpath.length >= prefix.length + suffix.length &&
           subpath.startsWith(prefix) &&
-          subpath.endsWith(suffix)
-        ) {
-          const matched = subpath.slice(prefix.length, subpath.length - suffix.length);
-          const text = JSON.stringify(value) ?? 'null';
-          if (text.length > MAX_EXPORTS_TARGET_BYTES)
-            return { class: 'unresolved', package: pkg.name, reason: 'exports-too-large' };
-          entry = JSON.parse(text.replaceAll('*', matched)) as unknown;
-          break;
-        }
+          subpath.endsWith(suffix),
+      );
+      if (!pattern) return { class: 'unresolved', package: pkg.name, reason: 'not-exported' };
+      if (!pattern.picked.has(conditions))
+        pattern.picked.set(
+          conditions,
+          pattern.value === null ? undefined : pickTarget(pattern.value, conditions),
+        );
+      const picked = pattern.picked.get(conditions);
+      if (picked) {
+        // Node substitutes the match into the chosen target string only, as text.
+        if (
+          picked.target.length > MAX_PATTERN_TARGET_LENGTH ||
+          picked.target.split('*').length - 1 > MAX_PATTERN_STARS
+        )
+          return { class: 'unresolved', package: pkg.name, reason: 'exports-too-large' };
+        const matched = subpath.slice(
+          pattern.prefix.length,
+          subpath.length - pattern.suffix.length,
+        );
+        found = { ...picked, target: picked.target.replaceAll('*', matched) };
       }
     }
-    if (entry === undefined || entry === null)
-      return { class: 'unresolved', package: pkg.name, reason: 'not-exported' };
-    const found = pickTarget(entry, conditions);
     if (!found) return { class: 'unresolved', package: pkg.name, reason: 'not-exported' };
     const target = posix.normalize(posix.join(pkg.dir, found.target));
     if (!files.has(target))

@@ -274,11 +274,12 @@ export async function buildProjectMap(input: BuildInput): Promise<ProjectMap> {
   // is refused once its wall-clock budget is spent.
   const deadline = performance.now() + (input.deadlineMs ?? DEFAULT_BUILD_DEADLINE_MS);
   let slice = performance.now();
+  const overTime = () =>
+    new MapOverBound('build-time', 'building the map took longer than its time bound');
   const pace = async (): Promise<void> => {
     const at = performance.now();
     if (at - slice < SLICE_MS) return;
-    if (at > deadline)
-      throw new MapOverBound('build-time', 'building the map took longer than its time bound');
+    if (at > deadline) throw overTime();
     await new Promise<void>((resolve) => setImmediate(resolve));
     slice = performance.now();
   };
@@ -659,6 +660,7 @@ export async function buildProjectMap(input: BuildInput): Promise<ProjectMap> {
       });
     }
     for (const found of scanned.specifiers) {
+      await pace();
       specifierKinds[kindKey[found.kind]] += 1;
       const kind = edgeKindOf(found.kind);
       const evidence = { path: entry.path, line: found.line };
@@ -736,6 +738,9 @@ export async function buildProjectMap(input: BuildInput): Promise<ProjectMap> {
       }
     }
   }
+
+  // A step between two yields that ran long still ends the build: the bound is the whole build.
+  if (performance.now() > deadline) throw overTime();
 
   // Coverage.
   const edgeList = [...edges.values()];

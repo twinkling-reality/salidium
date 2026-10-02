@@ -87,7 +87,9 @@ function lockState(
     const info = statSync(lock, { bigint: true });
     let pid: number | undefined;
     try {
-      pid = Number(readFileSync(owner, 'utf8'));
+      const text = readFileSync(owner, 'utf8').trim();
+      // Empty or garbled is the same as absent: the write has not landed, stale once old enough.
+      pid = /^[1-9]\d{0,9}$/.test(text) ? Number(text) : undefined;
     } catch {
       /* mkdir finished and the owner write did not; stale once old enough. */
     }

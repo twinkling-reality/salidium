@@ -352,6 +352,27 @@ describe('buildProjectMap on crafted input', () => {
     ).toMatchObject({ count: 50_000, rule: 'exports:string' });
   });
 
+  test('a pattern target cannot be amplified by the match, and a quote cannot break it', async () => {
+    const started = performance.now();
+    const imports = Array.from({ length: 100 }, (_, i) => `import 'big/${'m'.repeat(400)}${i}';`);
+    const map = await build({
+      'big/package.json': JSON.stringify({ name: 'big', exports: { './*': '*'.repeat(60_000) } }),
+      'q/package.json': JSON.stringify({ name: 'q', exports: { './*': './src/*.ts' } }),
+      'q/src/a"b.ts': 'export {};\n',
+      'main.ts': `${imports.join('\n')}\nimport 'q/a"b';\n`,
+    });
+    expect(performance.now() - started).toBeLessThan(5000);
+    expect(map.coverage.unresolved.byReason).toContainEqual({
+      reason: 'exports-too-large',
+      count: 100,
+    });
+    expect(
+      map.edges.find((e) => e.from === 'file:main.ts' && e.to === 'file:q/src/a"b.ts'),
+    ).toMatchObject({
+      rule: 'exports:string',
+    });
+  });
+
   test('a glob too complex to match is listed, not matched', async () => {
     const include = `${'**/a/'.repeat(20)}*.cs`;
     const map = await build({
@@ -400,9 +421,12 @@ describe('buildProjectMap on crafted input', () => {
     });
   });
 
-  test('paths with C1 controls or bidirectional overrides are omitted', async () => {
-    const map = await build({ 'a\u009bb.ts': '', 'a‮b.ts': '', 'ok.ts': '' });
+  test('paths with C1 controls, bidirectional marks or separators are omitted', async () => {
+    const files: Record<string, string> = { 'ok.ts': '' };
+    for (const code of [0x9b, 0x202e, 0x200e, 0x2028])
+      files[`a${String.fromCharCode(code)}b.ts`] = '';
+    const map = await build(files);
     expect(map.nodes.flatMap((n) => (n.kind === 'file' ? [n.path] : []))).toEqual(['ok.ts']);
-    expect(map.coverage.omittedFiles).toEqual([{ reason: 'path-control-characters', count: 2 }]);
+    expect(map.coverage.omittedFiles).toEqual([{ reason: 'path-control-characters', count: 4 }]);
   });
 });

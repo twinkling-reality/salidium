@@ -6,6 +6,7 @@ import {
   readdirSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -115,6 +116,16 @@ describe('opt-in', () => {
     expect(() => listOptedInRepositories(home)).toThrow();
   });
 
+  test('a lock left with an empty owner file is recovered once it is old', () => {
+    const { repo, home } = setup();
+    const lock = join(home, 'project-map-repositories.lock');
+    mkdirSync(lock, { recursive: true });
+    writeFileSync(join(lock, 'owner'), '');
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    expect(allowRepository(home, repo.dir, join(repo.dir, '.git')).added).toBe(true);
+  });
+
   test('allowing twice keeps one entry, and the file is owner-only', () => {
     const { repo, home } = setup();
     expect(allowRepository(home, repo.dir, join(repo.dir, '.git')).added).toBe(true);
@@ -153,6 +164,23 @@ describe('building', () => {
     expect(await maps.getMap(repo.dir, 'HEAD')).toMatchObject({
       refusal: { error: 'bad-request' },
     });
+  });
+
+  test('maps served once are kept in memory and cost no further reads', async () => {
+    const { repo, home } = setup();
+    const commit = basicTree(repo);
+    allowRepository(home, repo.dir, join(repo.dir, '.git'));
+    const maps = new DaemonProjectMapService({ home, maxBuildsPerMinute: 1 });
+    const first = await maps.getMapDocument(repo.dir, commit);
+    const second = await maps.getMapDocument(repo.dir, commit);
+    if (!first.ok || !second.ok) throw new Error('expected maps');
+    expect(second.text).toBe(first.text);
+    expect(JSON.parse(first.text)).toEqual(first.map);
+    // A fresh service reads the disk cache, which counts against its limit like a build.
+    const fresh = new DaemonProjectMapService({ home, maxBuildsPerMinute: 1 });
+    expect((await fresh.getMap(repo.dir, commit)).ok).toBe(true);
+    revokeRepository(home, repo.dir);
+    expect((await maps.getMapDocument(repo.dir, commit)).ok).toBe(false);
   });
 
   test('builds are serialized and rate limited', async () => {
@@ -348,6 +376,24 @@ describe('crafted repositories', () => {
     expect(JSON.stringify(result)).not.toContain('topsecret');
   });
 
+  test('a loose-object directory linked to another repository is refused', async () => {
+    const secret = scratchRepository();
+    cleanups.push(() => secret.remove());
+    secret.write('src/topsecret.ts', 'export {};\n');
+    const secretCommit = secret.commit();
+    const { repo, home } = setup();
+    basicTree(repo);
+    const fanout = secretCommit.slice(0, 2);
+    rmSync(join(repo.dir, '.git', 'objects', fanout), { recursive: true, force: true });
+    symlinkSync(
+      join(secret.dir, '.git', 'objects', fanout),
+      join(repo.dir, '.git', 'objects', fanout),
+    );
+    allowRepository(home, repo.dir, join(repo.dir, '.git'));
+    const result = await new DaemonProjectMapService({ home }).getMap(repo.dir, secretCommit);
+    expect(result).toMatchObject({ refusal: { error: 'repository-unsupported' } });
+  });
+
   test('a pack directory holding anything but files is refused', async () => {
     const { repo, home } = setup();
     const commit = basicTree(repo);
@@ -364,12 +410,15 @@ describe('crafted repositories', () => {
   test('a tree entry with an impossibly long name is refused without holding it', async () => {
     const { repo, home } = setup();
     const blob = repo.git(['hash-object', '-w', '--stdin'], 'x\n');
-    const tree = repo.git(['mktree'], `100644 blob ${blob}\t${'n'.repeat(200_000)}\n`);
-    const commit = repo.git(['commit-tree', tree, '-m', 'long']);
     allowRepository(home, repo.dir, join(repo.dir, '.git'));
-    expect(await new DaemonProjectMapService({ home }).getMap(repo.dir, commit)).toMatchObject({
-      refusal: { error: 'over-bound', bound: 'path-length' },
-    });
+    // Inside one read chunk, and spanning several.
+    for (const length of [20_000, 200_000]) {
+      const tree = repo.git(['mktree'], `100644 blob ${blob}\t${'n'.repeat(length)}\n`);
+      const commit = repo.git(['commit-tree', tree, '-m', 'long']);
+      expect(await new DaemonProjectMapService({ home }).getMap(repo.dir, commit)).toMatchObject({
+        refusal: { error: 'over-bound', bound: 'path-length' },
+      });
+    }
   });
 
   test('a commit time no timestamp can carry is refused, not a server error', async () => {
