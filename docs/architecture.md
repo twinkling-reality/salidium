@@ -119,6 +119,13 @@ the relay against its ceiling, and one more gap records that the quarantine is f
 as waiting work, so they hold neither queue age nor the empty-queue precondition for storage
 optimization.
 
+Concurrent senders serialize spool publication with a quota lock. Reclaiming a dead owner's lock is
+reserved to one contender at a time by a reaping directory that the relay creates and removes with
+`mkdir` and `rmdir`. A reaper that dies between them, from a signal or because the shell exits when
+it cannot fork, leaves that directory behind, and no later sender could reclaim a dead owner's lock.
+The relay has no clock, so the drain removes a reaping directory older than five minutes. It leaves
+the lock itself to the relay, which re-reads the owner before unlinking.
+
 Operational policy is a versioned sparse document in `operations-config.json`. Owner-only,
 same-directory atomic replacement retains `operations-config.previous.json` as a recovery copy.
 Effective resolution applies shipped defaults, stored choices, and then compatible environment

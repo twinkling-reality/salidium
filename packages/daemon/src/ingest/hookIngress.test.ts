@@ -17,7 +17,13 @@ import { createLogger } from '../logging/logger.ts';
 import type { SessionRegistry } from '../sessions/sessionRegistry.ts';
 import { readCollectionGapLedger } from './collectionGaps.ts';
 import { HookIngress } from './hookIngress.ts';
-import { MAX_SPOOL_DRAIN_BATCH, TRUNCATED_HOOK_PAYLOAD_KEY } from './limits.ts';
+import {
+  HOOK_QUOTA_LOCK_FILE,
+  HOOK_QUOTA_REAPING_DIR,
+  MAX_SPOOL_DRAIN_BATCH,
+  STALE_HOOK_QUOTA_REAPING_MS,
+  TRUNCATED_HOOK_PAYLOAD_KEY,
+} from './limits.ts';
 import type { TranscriptTailer } from './transcriptTailer.ts';
 
 const dirs: string[] = [];
@@ -344,6 +350,29 @@ describe('HookIngress durability and recovery', () => {
     );
     expect(readFileSync(join(pending, '_1-1-a.ready.json'), 'utf8')).toBe('{"synthetic":"newer"}');
     expect(readCollectionGapLedger(join(dir, 'collection-gaps.json')).episodes).toEqual([]);
+  });
+
+  it('removes an abandoned relay reaping guard and leaves the quota lock to the relay', () => {
+    const { dir, hooks } = fixture();
+    const pending = join(dir, 'pending');
+    mkdirSync(pending);
+    const guard = join(pending, HOOK_QUOTA_REAPING_DIR);
+    const lock = join(pending, HOOK_QUOTA_LOCK_FILE);
+    mkdirSync(guard);
+    writeFileSync(lock, '999999\n');
+
+    // A guard younger than the bound may belong to a reaper that is still running.
+    const recent = new Date(Date.now() - STALE_HOOK_QUOTA_REAPING_MS + 30_000);
+    utimesSync(guard, recent, recent);
+    hooks.drainSpool();
+    expect(existsSync(guard)).toBe(true);
+
+    const abandoned = new Date(Date.now() - STALE_HOOK_QUOTA_REAPING_MS - 1_000);
+    utimesSync(guard, abandoned, abandoned);
+    hooks.drainSpool();
+    expect(existsSync(guard)).toBe(false);
+    // Whether that owner is dead is the relay's question, asked under the guard it can now take.
+    expect(readFileSync(lock, 'utf8')).toBe('999999\n');
   });
 
   it('preserves processing and pending files when persistence is deferred', () => {

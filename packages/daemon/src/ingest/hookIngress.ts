@@ -2,6 +2,7 @@ import {
   closeSync,
   existsSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readdirSync,
@@ -9,6 +10,7 @@ import {
   readSync,
   realpathSync,
   renameSync,
+  rmdirSync,
   statSync,
   unlinkSync,
 } from 'node:fs';
@@ -24,6 +26,7 @@ import {
 } from './collectionGaps.ts';
 import {
   HOOK_BREAKER_FILE,
+  HOOK_QUOTA_REAPING_DIR,
   HOOK_SHED_FIRST_FILE,
   HOOK_SHED_RETAIN_FILE,
   HOOK_SHED_SECOND_FILE,
@@ -34,6 +37,7 @@ import {
   MAX_INGEST_PAYLOAD_BYTES,
   MAX_QUARANTINED_FILES,
   MAX_SPOOL_DRAIN_BATCH,
+  STALE_HOOK_QUOTA_REAPING_MS,
   TRUNCATED_HOOK_PAYLOAD_KEY,
   UNATTRIBUTED_SUFFIX,
 } from './limits.ts';
@@ -338,6 +342,7 @@ export class HookIngress {
   private drainOrphanedPending(): boolean {
     const pending = join(this.spoolDir, 'pending');
     if (!existsSync(pending)) return false;
+    this.recoverStaleQuotaReaping(pending);
     const cutoff = Date.now() - 10_000;
     const listing = readdirSync(pending);
     const all = listing
@@ -487,6 +492,37 @@ export class HookIngress {
         remaining: more,
       });
     return more;
+  }
+
+  /**
+   * The relay's reaping guard is made and removed by the external `mkdir` and `rmdir` commands. A
+   * reaper that dies between them leaves it behind: a signal can do that, and so can a full process
+   * table, because the shell exits at once when it cannot fork `rm` or `rmdir`. From then on no
+   * sender can reclaim a dead owner's quota lock, and each one that spools waits out its whole
+   * attempt budget instead. The relay has no clock, so expiry belongs here, to the one process that
+   * drains this queue. Only the guard is removed. The lock itself is still reclaimed by the relay's
+   * own protocol, which re-reads the owner before unlinking so a replacement owner is never removed.
+   */
+  private recoverStaleQuotaReaping(pending: string): void {
+    const guard = join(pending, HOOK_QUOTA_REAPING_DIR);
+    let ageMs: number;
+    try {
+      const st = lstatSync(guard);
+      if (!st.isDirectory()) return;
+      ageMs = Date.now() - st.mtimeMs;
+    } catch {
+      return;
+    }
+    if (ageMs < STALE_HOOK_QUOTA_REAPING_MS) return;
+    try {
+      rmdirSync(guard);
+    } catch (err) {
+      this.log.warn('abandoned relay reaping guard was not removed', { err: String(err) });
+      return;
+    }
+    this.log.warn('abandoned relay reaping guard removed', {
+      ageSeconds: Math.round(ageMs / 1000),
+    });
   }
 
   /**

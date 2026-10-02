@@ -42,6 +42,11 @@
   that still names no provider is quarantined unread with an `.unattributed` suffix, up to 1,000
   quarantined files, and each drain pass that quarantines any records one collection gap without a
   loss count.
+- Recover the relay's quota lock after a sender dies while reclaiming it. A reaper that the shell
+  abandoned mid-reclaim, for example when it could not fork under a full process table, left its
+  reaping directory in the spool for good, and every later sender that met a dead owner's lock then
+  waited out its whole attempt budget. The daemon now removes a reaping directory older than five
+  minutes and leaves the lock itself to the relay's owner check.
 - Count quarantined files apart from waiting work in `salidium maintenance queue`, and measure queue
   age, the drain result, and the storage optimization precondition from waiting work only.
 

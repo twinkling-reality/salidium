@@ -7,6 +7,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -19,6 +20,8 @@ import { describe, expect, it } from 'vitest';
 import { writeRelayScript } from './daemon.ts';
 import { HookIngress } from './ingest/hookIngress.ts';
 import {
+  HOOK_QUOTA_LOCK_FILE,
+  HOOK_QUOTA_REAPING_DIR,
   HOOK_SHED_FIRST_FILE,
   HOOK_SHED_RETAIN_FILE,
   HOOK_SHED_SECOND_FILE,
@@ -27,6 +30,7 @@ import {
   MAX_HOOK_SHED_FIRST_PENDING_FILES,
   MAX_HOOK_SHED_SECOND_PENDING_FILES,
   MAX_INGEST_PAYLOAD_BYTES,
+  STALE_HOOK_QUOTA_REAPING_MS,
   TRUNCATED_HOOK_PAYLOAD_KEY,
 } from './ingest/limits.ts';
 import type { TranscriptTailer } from './ingest/transcriptTailer.ts';
@@ -448,6 +452,73 @@ describe('the installed hook relay', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  /*
+   * Found on a real machine: a reaping guard left since 2026-09-09, the minute the process table was
+   * full. The shell exits at once when it cannot fork, so a reaper that cannot start `rmdir` leaves
+   * its guard for good, and every later sender that meets a dead owner's lock spins out its whole
+   * attempt budget. An `rmdir` that fails stands in for that fork here.
+   */
+  it('recovers lock reclaiming after a reaper leaves its guard behind', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'salidium-relay-reaping-'));
+    const isolation = isolateProviders();
+    try {
+      const home = join(root, 'state');
+      const pending = join(home, 'spool', 'pending');
+      mkdirSync(pending, { recursive: true });
+      const lock = join(pending, HOOK_QUOTA_LOCK_FILE);
+      const guard = join(pending, HOOK_QUOTA_REAPING_DIR);
+      const deadOwner = () => `${spawnSync('/bin/sh', ['-c', 'exit 0']).pid}\n`;
+      const send = (relay: string, name: string) => {
+        const input = join(pending, name);
+        writeFileSync(input, JSON.stringify({ synthetic: name }));
+        return spawnSync('/bin/sh', [relay, '--send', 'claude-code', 'Stop', 'lifecycle', input], {
+          env: isolation.environment({}, {}),
+          timeout: 15_000,
+        });
+      };
+
+      const brokenBin = join(root, 'installed', 'bin');
+      mkdirSync(brokenBin, { recursive: true });
+      writeFileSync(join(brokenBin, 'rmdir'), '#!/bin/sh\nexit 1\n');
+      chmodSync(join(brokenBin, 'rmdir'), 0o700);
+      const broken = writeRelayScript(join(root, 'broken-hooks'), home, {
+        PATH: [brokenBin, '/usr/bin', '/bin'].join(delimiter),
+      });
+      writeFileSync(lock, deadOwner());
+      expect(send(broken, 'claude-code_1-1-a.json').status).toBe(0);
+      expect(existsSync(join(pending, 'claude-code_1-1-a.ready.json'))).toBe(true);
+      expect(existsSync(guard)).toBe(true);
+
+      // Another owner dies holding the lock. With the guard still there, nobody may reclaim it.
+      writeFileSync(lock, deadOwner());
+      const abandoned = new Date(Date.now() - STALE_HOOK_QUOTA_REAPING_MS - 1_000);
+      utimesSync(guard, abandoned, abandoned);
+      new HookIngress({
+        adapters: [],
+        registry: { ingest: () => 1, flush: () => true } as unknown as SessionRegistry,
+        tailer: { track() {} } as unknown as TranscriptTailer,
+        spoolDir: join(home, 'spool'),
+        breakerFile: join(home, 'hooks-off'),
+        userHome: root,
+        log: createLogger('silent'),
+      }).drainSpool();
+      expect(existsSync(guard)).toBe(false);
+
+      const relay = writeRelayScript(join(home, 'hooks'), home, {
+        PATH: ['/usr/bin', '/bin'].join(delimiter),
+      });
+      const started = Date.now();
+      expect(send(relay, 'claude-code_2-2-b.json').status).toBe(0);
+      expect(Date.now() - started).toBeLessThan(10_000);
+      expect(existsSync(join(pending, 'claude-code_2-2-b.ready.json'))).toBe(true);
+      expect(existsSync(lock)).toBe(false);
+      expect(existsSync(guard)).toBe(false);
+    } finally {
+      isolation.dispose();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   /**
    * The regression that matters most, and the cheapest one to state: an earlier relay measured the

@@ -68,6 +68,7 @@ import { HookIngress } from './ingest/hookIngress.ts';
 import {
   HOOK_BREAKER_FILE,
   HOOK_PAUSE_FILE,
+  HOOK_QUOTA_LOCK_FILE,
   HOOK_SHED_FIRST_FILE,
   HOOK_SHED_RETAIN_FILE,
   HOOK_SHED_SECOND_FILE,
@@ -1112,7 +1113,7 @@ if [ "$1" = "--send" ]; then
   # Serialize quota observation and publication across concurrent hook processes. Without this
   # small filesystem lock, many senders can all observe one remaining slot and overrun the hard
   # physical ceiling. A timed-out contender leaves its plain .json input durable for orphan drain.
-  QUOTA_LOCK="$PENDING/.quota-lock"
+  QUOTA_LOCK="$PENDING/${HOOK_QUOTA_LOCK_FILE}"
   QUOTA_ATTEMPTS=0
   while :; do
     set -C
