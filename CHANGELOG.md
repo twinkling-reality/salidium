@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 - 2026-10-02
 
-- Observe OpenCode 2.x sessions, read only, as the experimental provider `salidium/opencode`. It is
+- Observe OpenCode 2.x sessions, read only, as the provider `salidium/opencode`. Experimental and
   off by default; turn it on with `salidium config set providers.enabled
   claude-code,codex,salidium/opencode` or the providers setting in Ingest & Storage. Salidium reads
   OpenCode's own store (`$XDG_DATA_HOME/opencode/opencode.db`, else
@@ -14,9 +14,6 @@
   OpenCode 2.0.18. When OpenCode replaces a whole file it does not record what the file held, so
   the removed line count is only a lower bound and consumer contract 1.1 says so
   (`linesRemovedExact: false`).
-
-## 0.7.0 - 2026-10-02
-
 - Each command in a Codex code-mode session shows once. With hooks on, a command used to appear
   twice, as the code cell and as the hook's own record. From Codex 0.149, which records every
   process it starts, each process is its own command with its own exit code and output, and the
