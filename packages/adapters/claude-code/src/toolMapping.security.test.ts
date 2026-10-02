@@ -55,7 +55,8 @@ describe('encoded sensitive paths', () => {
     { uri: 'file:///repo/%2Eenv' },
     { path: 'file://localhost/repo/.%65nv.local' },
     { paths: ['/repo/a.ts', 'file:///Users/me/%2Essh/id_rsa'] },
-    { path: '/repo/%ZZ/secrets' },
+    { uri: '/repo/%ZZ/secrets' },
+    { url: 'file:///repo/%E0%A4%A' },
   ])('suppresses an MCP read of %j', (args) => {
     const { input } = mapToolInput('mcp__filesystem__read_file', args);
     const event = stored(
@@ -65,6 +66,19 @@ describe('encoded sensitive paths', () => {
     );
     expect(JSON.stringify(event)).not.toContain('SECRET=1');
   });
+
+  it.each(['/repo/docs/100%.md', '/repo/%ZZ/readme.md'])(
+    'reads a literal percent in the native path %s and keeps it',
+    (path) => {
+      const mcp = mapToolInput('mcp__filesystem__read_file', { path }).input;
+      expect(mcp.kind === 'mcp' && mcp.pathArgsUndecodable).toBeFalsy();
+      const kept = stored('mcp__filesystem__read_file', { kind: 'generic', excerpt: 'plain' }, mcp);
+      expect(kept).toMatchObject({ result: { kind: 'generic', excerpt: 'plain' } });
+      const { input } = mapToolInput('Read', { file_path: path });
+      const { result } = mapToolResult('Read', { file_path: path }, undefined, '');
+      expect(stored('Read', result, input)).not.toMatchObject({ result: { suppressed: true } });
+    },
+  );
 
   it('keeps an ordinary encoded read', () => {
     const args = { uri: 'file:///repo/src/%63onfig.ts' };

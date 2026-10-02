@@ -191,42 +191,62 @@ const SHOWN_TYPES = new Set([
   'location-switched',
 ]);
 
-const PATH_KEY = /^(?:path|paths|file|files|file_?path|file_?paths|uri|uris)$/i;
+const PATH_KEY = /^(?:path|paths|file|files|file_?path|file_?paths)$/i;
+/** Keys whose values are URIs, which whatever opens them percent-decodes. */
+const URI_KEY = /^(?:uri|uris|url|urls|href|hrefs)$/i;
+
+interface Subjects {
+  paths: string[];
+  /** Values given as URIs, checked strictly: a malformed escape counts as sensitive. */
+  uris: string[];
+  commands: string[];
+}
 
 /**
- * Every string under a path-shaped key, unbounded in number (they are only checked, never shown),
- * so a long argument list cannot push a sensitive path past a cut-off.
+ * Every string under a path-shaped or URI-shaped key, unbounded in number (they are only checked,
+ * never shown), so a long argument list cannot push a sensitive path past a cut-off.
  */
-function pathArguments(input: unknown): string[] {
-  const out: string[] = [];
-  const visit = (value: unknown, pathContext: boolean, depth: number): void => {
+function pathArguments(input: unknown): { paths: string[]; uris: string[] } {
+  const paths: string[] = [];
+  const uris: string[] = [];
+  type Context = 'none' | 'path' | 'uri';
+  const visit = (value: unknown, context: Context, depth: number): void => {
     if (depth > 32) return;
     if (typeof value === 'string') {
-      if (pathContext && value) out.push(value);
+      if (context === 'uri' && value) uris.push(value);
+      else if (context === 'path' && value) paths.push(value);
       return;
     }
     if (Array.isArray(value)) {
-      for (const item of value) visit(item, pathContext, depth + 1);
+      for (const item of value) visit(item, context, depth + 1);
       return;
     }
     const o = asObject(value);
     if (!o) return;
-    for (const [key, child] of Object.entries(o))
-      visit(child, pathContext || PATH_KEY.test(key), depth + 1);
+    for (const [key, child] of Object.entries(o)) {
+      const next: Context = URI_KEY.test(key)
+        ? 'uri'
+        : context !== 'none'
+          ? context
+          : PATH_KEY.test(key)
+            ? 'path'
+            : 'none';
+      visit(child, next, depth + 1);
+    }
   };
-  visit(input, false, 0);
-  return out;
+  visit(input, 'none', 0);
+  return { paths, uris };
 }
 
-/** Paths and commands a tool part names, for the caller's suppression check. */
-function partSubjects(part: unknown): { paths: string[]; commands: string[] } {
+/** Paths, URIs and commands a tool part names, for the caller's suppression check. */
+function partSubjects(part: unknown): Subjects {
   const p = asObject(part);
-  if (p?.type !== 'tool') return { paths: [], commands: [] };
+  if (p?.type !== 'tool') return { paths: [], uris: [], commands: [] };
   const state = asObject(p.state);
   const input = asObject(state?.input) ?? {};
   // Every path-shaped argument, whatever the tool calls it (MCP tools use `file_path`, `paths`,
   // `uri`, ...), plus the files a patch names.
-  const paths = pathArguments(input);
+  const { paths, uris } = pathArguments(input);
   paths.push(...patchPaths(asString(input.patchText) ?? asString(input.patch) ?? ''));
   const files = asObject(state?.metadata)?.files;
   if (Array.isArray(files))
@@ -235,7 +255,7 @@ function partSubjects(part: unknown): { paths: string[]; commands: string[] } {
       if (file) paths.push(file);
     }
   const command = asString(input.command);
-  return { paths, commands: command ? [command] : [] };
+  return { paths, uris, commands: command ? [command] : [] };
 }
 
 /**
@@ -247,7 +267,7 @@ function rawView(
   type: string,
   data: Record<string, unknown>,
   part: string | undefined,
-): { record: unknown; paths: string[]; commands: string[] } | undefined {
+): ({ record: unknown } & Subjects) | undefined {
   if (type === 'assistant') {
     const content = Array.isArray(data.content) ? data.content : [];
     if (part === undefined || part === 'step') {
@@ -256,6 +276,7 @@ function rawView(
       return {
         record: { type, ...stepFields(data) },
         paths: [...files, ...subjects.flatMap((s) => s.paths)],
+        uris: subjects.flatMap((s) => s.uris),
         commands: subjects.flatMap((s) => s.commands),
       };
     }
@@ -265,6 +286,7 @@ function rawView(
     return {
       record: { type, ...stepFields(data), content: [content[index]] },
       paths: [...snapshotFiles(data), ...subjects.paths],
+      uris: subjects.uris,
       commands: subjects.commands,
     };
   }
@@ -272,12 +294,13 @@ function rawView(
   if (type === 'shell') {
     const { output: _output, ...rest } = data;
     const command = asString(data.command);
-    return { record: { type, ...rest }, paths: [], commands: command ? [command] : [] };
+    return { record: { type, ...rest }, paths: [], uris: [], commands: command ? [command] : [] };
   }
   if (type === 'user' && Array.isArray(data.files)) {
     // Attached files travel inside the prompt as base64. The raw view names them, never shows
     // their contents, and reports their paths for the caller's sensitive-file check.
     const paths: string[] = [];
+    const uris: string[] = [];
     const files = data.files.map((file) => {
       const f = asObject(file) ?? {};
       const { data: content, ...rest } = f;
@@ -286,9 +309,9 @@ function rawView(
       const name = asString(f.name);
       // A `data:` URL is the file's content again; it is neither shown nor treated as a path.
       const inline = uri?.startsWith('data:') === true;
-      // Given as written: the sensitive-path check decodes a `file:` URI itself, and treats one
-      // it cannot decode as sensitive rather than falling back to the undecoded text.
-      if (uri && !inline) paths.push(uri);
+      // Given as written: the sensitive-path check decodes the URI itself, and treats one it
+      // cannot decode as sensitive rather than falling back to the undecoded text.
+      if (uri && !inline) uris.push(uri);
       if (name) paths.push(name);
       return {
         ...rest,
@@ -296,9 +319,9 @@ function rawView(
         data: `[attachment omitted by Salidium: ${typeof content === 'string' ? content.length : 0} base64 characters]`,
       };
     });
-    return { record: { type, ...data, files }, paths, commands: [] };
+    return { record: { type, ...data, files }, paths, uris, commands: [] };
   }
-  return { record: { type, ...data }, paths: [], commands: [] };
+  return { record: { type, ...data }, paths: [], uris: [], commands: [] };
 }
 
 /**
@@ -518,7 +541,12 @@ export function createOpenCodeStoreSource(): StoreSource {
           if (!data) return { raw: undefined, reason: 'provider record is not a JSON object' };
           const view = rawView(row.type, data, part);
           if (!view) return { raw: undefined, reason: 'record part not found' };
-          return { raw: JSON.stringify(view.record), paths: view.paths, commands: view.commands };
+          return {
+            raw: JSON.stringify(view.record),
+            paths: view.paths,
+            uris: view.uris,
+            commands: view.commands,
+          };
         });
       } catch {
         return { raw: undefined, reason: 'the OpenCode store could not be opened read only' };

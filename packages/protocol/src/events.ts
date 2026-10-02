@@ -80,6 +80,11 @@ export const McpInputSchema = z.object({
   pathArgs: z.array(z.string().max(1000)).max(32).optional(),
   /** More path arguments existed, or a longer one, than the bounded metadata could retain. */
   pathArgsTruncated: z.boolean().optional(),
+  /**
+   * A URI-type argument (`uri`, `url`, `href`) held a malformed percent-escape, so what it names
+   * cannot be read with confidence.
+   */
+  pathArgsUndecodable: z.literal(true).optional(),
   argsExcerpt: z.string().optional(),
 });
 

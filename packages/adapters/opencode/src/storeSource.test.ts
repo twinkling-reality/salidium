@@ -7,7 +7,7 @@ import {
   applyEvent,
   createInitialState,
   isSensitiveMcpFileRead,
-  isSensitivePath,
+  isSensitiveUri,
   projectSession,
 } from '@salidium/core';
 import {
@@ -854,7 +854,7 @@ describe('OpenCode raw records', () => {
     );
     expect(prompt.raw).toBeDefined();
     expect(prompt.raw).not.toContain(Buffer.from('SYNTHETIC_SECRET=not-real').toString('base64'));
-    expect(prompt).toMatchObject({ paths: [`file://${PROJECT}/.env`, '.env'] });
+    expect(prompt).toMatchObject({ paths: ['.env'], uris: [`file://${PROJECT}/.env`] });
 
     expect(
       source.readRawRecord(path, {
@@ -1035,8 +1035,8 @@ describe('OpenCode raw records', () => {
       .poll()
       .find((e) => e.source.ref?.recordId === `${id}/${withFile.id}`)?.source.ref;
     const read = createOpenCodeStoreSource().readRawRecord(path, ref ?? {});
-    expect(read).toMatchObject({ paths: [uri, name] });
-    expect(read.paths?.some(isSensitivePath)).toBe(true);
+    expect(read).toMatchObject({ paths: [name], uris: [uri] });
+    expect(read.uris?.some(isSensitiveUri)).toBe(true);
   });
 
   it('splits an MCP name at its first underscore when nothing sensitive is read', () => {

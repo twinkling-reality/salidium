@@ -347,6 +347,7 @@ export class CodexRolloutParser implements RecordParser {
               tool,
               pathArgs: pathMetadata.paths.length ? pathMetadata.paths : undefined,
               pathArgsTruncated: pathMetadata.truncated || undefined,
+              pathArgsUndecodable: pathMetadata.undecodable || undefined,
               argsExcerpt: excerpt(JSON.stringify(invocationArgs), 300, 0).text,
             },
             title: `${server}: ${tool}`,
@@ -1019,6 +1020,7 @@ export class CodexRolloutParser implements RecordParser {
               tool: mcp[2] ?? '',
               pathArgs: pathMetadata?.paths.length ? pathMetadata.paths : undefined,
               pathArgsTruncated: pathMetadata?.truncated || undefined,
+              pathArgsUndecodable: pathMetadata?.undecodable || undefined,
               argsExcerpt: excerpt(JSON.stringify(args), 300, 0).text,
             }
           : { kind: 'other', summary: name };

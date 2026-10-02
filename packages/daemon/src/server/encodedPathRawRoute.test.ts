@@ -237,6 +237,57 @@ describe.each(['claude-code', 'codex'] as const)('encoded sensitive paths (%s)',
     await expectSuppressed(ids);
   });
 
+  const command = (cmd: string) =>
+    provider === 'codex'
+      ? mapCodexToolInput('exec_command', { cmd }).input
+      : mapToolInput('Bash', { command: cmd }).input;
+  const output = (text: string): ToolResult => ({
+    kind: 'command',
+    exit: { code: 0, observation: 'explicit' },
+    outputExcerpt: text,
+    outputChars: text.length,
+    truncated: false,
+  });
+
+  it.each([
+    'sudo cat .env',
+    '< .env cat',
+    'cat .env*',
+    'git show HEAD:.env',
+    'git cat-file -p main:config/.ENV',
+    'echo .env | xargs base64',
+  ])('suppresses the output of %s and its raw records', async (cmd) => {
+    await expectSuppressed(ingest(provider, 'Bash', command(cmd), output(SECRET)));
+  });
+
+  it.each(['cat src/*.ts', 'grep -rn TODO *', 'cat docs/100%.md'])(
+    'keeps the output of %s and its raw records',
+    async (cmd) => {
+      const ids = ingest(provider, 'Bash', command(cmd), output('ordinary output'));
+      expect(JSON.stringify(stored(ids.session, ids.done))).toContain('ordinary output');
+      expect((await raw(ids.session, ids.done)).raw).toMatchObject({ type: 'tool_result' });
+    },
+  );
+
+  it('suppresses an MCP read whose URI argument cannot be decoded', async () => {
+    const input = map.mcp({ uri: '/repo/%ZZ/notes.md' });
+    const ids = ingest(provider, 'mcp__filesystem__read_file', input, {
+      kind: 'generic',
+      excerpt: SECRET,
+    });
+    await expectSuppressed(ids);
+  });
+
+  it('keeps a read of a native path with a literal percent and its raw records', async () => {
+    const input = map.mcp({ path: '/repo/docs/100%.md' });
+    const ids = ingest(provider, 'mcp__filesystem__read_file', input, {
+      kind: 'generic',
+      excerpt: 'ordinary notes',
+    });
+    expect(JSON.stringify(stored(ids.session, ids.done))).toContain('ordinary notes');
+    expect((await raw(ids.session, ids.done)).raw).toMatchObject({ type: 'tool_result' });
+  });
+
   it('keeps an ordinary encoded read and its raw records', async () => {
     const input = map.mcp({ uri: 'file:///repo/src/%63onfig.ts' });
     const ids = ingest(provider, 'mcp__filesystem__read_file', input, {

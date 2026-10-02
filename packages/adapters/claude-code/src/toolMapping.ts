@@ -114,6 +114,7 @@ export function mapToolInput(
             tool,
             pathArgs: pathMetadata.paths.length ? pathMetadata.paths : undefined,
             pathArgsTruncated: pathMetadata.truncated || undefined,
+            pathArgsUndecodable: pathMetadata.undecodable || undefined,
             argsExcerpt,
           },
           title: `${server}: ${tool}`,

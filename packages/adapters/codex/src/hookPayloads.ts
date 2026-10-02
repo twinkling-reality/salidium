@@ -320,6 +320,7 @@ export function mapCodexToolInput(
         tool: mcp[2] ?? '',
         pathArgs: pathMetadata.paths.length ? pathMetadata.paths : undefined,
         pathArgsTruncated: pathMetadata.truncated || undefined,
+        pathArgsUndecodable: pathMetadata.undecodable || undefined,
         argsExcerpt: excerpt(JSON.stringify(input), 300, 0).text,
       },
       title: `${mcp[1]}: ${mcp[2]}`,

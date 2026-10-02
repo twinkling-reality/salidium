@@ -60,7 +60,14 @@ export interface StorePollResult {
  * same suppression it applies to events, and refuses the raw view when any is sensitive.
  */
 export type StoreRawRecord =
-  | { raw: string; paths: string[]; commands: string[]; reason?: undefined }
+  | {
+      raw: string;
+      paths: string[];
+      /** Values the record gives as URIs; a malformed escape in one counts as sensitive. */
+      uris?: string[];
+      commands: string[];
+      reason?: undefined;
+    }
   | { raw: undefined; reason: string };
 
 /**

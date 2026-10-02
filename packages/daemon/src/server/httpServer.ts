@@ -8,6 +8,7 @@ import {
   isCredentialDumpCommand,
   isSensitiveMcpFileRead,
   isSensitivePath,
+  isSensitiveUri,
   projectSession,
 } from '@salidium/core';
 import type { SessionLinksHandler } from '@salidium/project-map';
@@ -651,7 +652,11 @@ export function createHttpServer(deps: HttpServerDeps): Server {
         });
       if (read.raw === undefined) return json(res, 200, { event, raw: null, reason: read.reason });
       // The source names the paths and commands in what it returned; suppress as for events.
-      if (read.paths.some(isSensitivePath) || read.commands.some(isCredentialDumpCommand))
+      if (
+        read.paths.some(isSensitivePath) ||
+        read.uris?.some(isSensitiveUri) ||
+        read.commands.some(isCredentialDumpCommand)
+      )
         return json(res, 200, {
           event,
           raw: null,

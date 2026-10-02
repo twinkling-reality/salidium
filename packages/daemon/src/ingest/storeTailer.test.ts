@@ -307,6 +307,9 @@ describe('OpenCode through the daemon', () => {
     ['file_system_read_file', { file_path: `file://localhost${PROJECT}/.%65nv.local` }, 110],
     ['read', { filePath: `${PROJECT}//./.ENV.` }, 120],
     ['read', { filePath: `${PROJECT}/src/../%2Essh/id_rsa` }, 130],
+    ['filesystem_read_file', { uri: `${PROJECT}/%ZZ/notes.md` }, 135],
+    ['shell', { command: 'sudo cat .env' }, 136],
+    ['shell', { command: 'git show HEAD:.env' }, 137],
   ] as const)(
     'suppresses a %s of an encoded sensitive path in the stored event and the raw view',
     async (name, input, at) => {
@@ -377,6 +380,36 @@ describe('OpenCode through the daemon', () => {
       raw: null,
       reason: 'suppressed: sensitive file contents or credential dump',
     });
+  });
+
+  it('keeps the raw view of a read whose native path holds a literal percent', async () => {
+    const step = store.message(
+      nativeId,
+      'assistant',
+      stepData(T0 + 180, [
+        {
+          type: 'tool',
+          id: 'call_pct',
+          name: 'read',
+          executed: false,
+          state: {
+            status: 'completed',
+            input: { filePath: `${PROJECT}/docs/100%.md` },
+            content: [{ type: 'text', text: 'ordinary notes' }],
+            metadata: {},
+          },
+          time: { created: T0 + 181, completed: T0 + 182 },
+        },
+      ]),
+    );
+    const callId = `${step.id}/call_pct`;
+    const completed = await waitFor(async () =>
+      (await events()).find((e) => e.kind === 'tool.completed' && e.callId === callId),
+    );
+    const raw = await api<{ raw: unknown; reason?: string }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/raw/${encodeURIComponent(completed.id)}`,
+    );
+    expect(JSON.stringify(raw.raw)).toContain('ordinary notes');
   });
 
   it('answers a consumer v1 lookup by provider salidium/opencode and the OpenCode session id', async () => {

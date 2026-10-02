@@ -3,6 +3,7 @@ import {
   isCredentialDumpCommand,
   isSensitiveMcpFileRead,
   isSensitivePath,
+  isSensitiveUri,
 } from './sensitivePaths.ts';
 
 /** Every basename in the sensitive list, and a file under each sensitive directory or suffix. */
@@ -110,7 +111,7 @@ describe('sensitive path normalization', () => {
   });
 
   it.each([
-    ['a stray percent', '/repo/notes/100%/.envrc-not'],
+    ['a stray percent in a URI', 'file:///repo/notes/100%/readme.md'],
     ['a truncated escape', 'file:///repo/%2'],
     ['a non-hex escape', 'file:///repo/%ZZenv'],
     ['an incomplete UTF-8 sequence', 'file:///repo/%E0%A4%A.txt'],
@@ -147,6 +148,35 @@ describe('sensitive path normalization', () => {
     isSensitiveMcpFileRead({ kind: 'mcp', server: 'fs', tool: 'read_file', pathArgs: hostile });
     // Generous: the unbounded version took over a second; this guards the order of magnitude.
     expect(performance.now() - started).toBeLessThan(500);
+  });
+
+  it.each([
+    '/repo/docs/100%.md',
+    '/repo/docs/50%off.md',
+    '/repo/notes/100%/.envrc-not',
+    '/repo/%ZZ/readme.md',
+    'C:\\repo\\100%\\a.ts',
+  ])('reads a malformed escape in the native path %s as a literal percent', (path) => {
+    expect(isSensitivePath(path)).toBe(false);
+  });
+
+  it('still decodes valid escapes in a native path, and checks the rest literally', () => {
+    expect(isSensitivePath('/repo/%2Eenv')).toBe(true);
+    expect(isSensitivePath('/repo/100%/%2Eenv')).toBe(true);
+    expect(isSensitivePath('/repo/100%/.ENV.')).toBe(true);
+  });
+
+  it.each(['/repo/%ZZ/readme.md', '100%.md', 'https://example.com/%E0%A4%A'])(
+    'treats a malformed escape in the URI value %s as sensitive',
+    (value) => {
+      expect(isSensitiveUri(value)).toBe(true);
+    },
+  );
+
+  it('reads a well-formed URI value as its path', () => {
+    expect(isSensitiveUri('file:///repo/src/%63onfig.ts')).toBe(false);
+    expect(isSensitiveUri('/repo/docs/100%25.md')).toBe(false);
+    expect(isSensitiveUri('file:///repo/%2Eenv')).toBe(true);
   });
 
   it('decodes nested encoding within the bound', () => {
@@ -201,6 +231,28 @@ describe('MCP read arguments', () => {
     expect(read(JSON.stringify({ uri: 'file:///repo/src/config.ts' }))).toBe(false);
   });
 
+  it('fails closed on a malformed escape under a URI key only', () => {
+    expect(read(JSON.stringify({ uri: '/repo/%ZZ/readme.md' }))).toBe(true);
+    expect(read(JSON.stringify({ url: 'file:///repo/%E0%A4%A' }))).toBe(true);
+    expect(read(JSON.stringify({ request: { hrefs: ['/repo/a.ts', '/repo/100%.md'] } }))).toBe(
+      true,
+    );
+    expect(read(JSON.stringify({ path: '/repo/%ZZ/readme.md' }))).toBe(false);
+    expect(read(JSON.stringify({ paths: ['/repo/docs/100%.md'] }))).toBe(false);
+    expect(read('{"uri":"/repo/%ZZ/readme.md","padding":"xx')).toBe(true);
+    expect(read('{"path":"/repo/%ZZ/readme.md","padding":"xx')).toBe(false);
+    expect(read('{}', ['/repo/%ZZ/readme.md'])).toBe(false);
+    expect(
+      isSensitiveMcpFileRead({
+        kind: 'mcp',
+        server: 'filesystem',
+        tool: 'read_file',
+        pathArgs: ['/repo/%ZZ/readme.md'],
+        pathArgsUndecodable: true,
+      }),
+    ).toBe(true);
+  });
+
   it('treats read_media_file as a read', () => {
     expect(
       isSensitiveMcpFileRead({
@@ -218,5 +270,106 @@ describe('MCP read arguments', () => {
     expect(read('{"path":"/repo/it\\"s/.ENV","padding":"xx')).toBe(true);
     expect(read('{"path":"/repo/\\u002eenv","padding":"xx')).toBe(true);
     expect(read('{"paths":["/repo/a.ts","/repo/b.ts"],"padding":"xx')).toBe(false);
+  });
+});
+
+describe('shell commands that print a sensitive file', () => {
+  it.each([
+    // Prefixes that run the command after them.
+    'sudo cat .env',
+    'sudo -u root cat /root/.ssh/id_rsa',
+    'sudo -E -n cat .env',
+    'env cat .env',
+    'env FOO=1 -u BAR cat .env',
+    "env -S 'cat .env'",
+    'command cat .env',
+    'nice -n 10 cat .env',
+    'time cat .env',
+    'time -p cat .env',
+    'timeout 5 cat .env',
+    'nohup cat .env',
+    'doas cat .env',
+    'stdbuf -oL cat .env',
+    'echo .env | xargs cat',
+    'find . -name .env -print0 | xargs -0 cat',
+    'printf "%s\\n" .env | xargs -I{} sudo cat {}',
+    // Readers.
+    ...['tac', 'nl', 'base64', 'xxd', 'od -c', 'hexdump -C', 'strings', 'head', 'tail', 'less']
+      .concat(['more', 'bat', 'sort', 'uniq', 'cut -d= -f2', 'diff a.txt', 'jq .'])
+      .map((reader) => `${reader} .env`),
+    'dd if=.env',
+    "grep -E 'KEY|TOKEN' .env",
+    'grep -e KEY .env*',
+    'grep -r KEY ~/.aws',
+    'rg --files-with-matches KEY ~/.ssh',
+    // Input redirection from a sensitive file.
+    '< .env cat',
+    'cat < .env',
+    'cat 0<.env',
+    'sort <.env',
+    'while read -r line; do echo "$line"; done < .env',
+    'echo "$(< .env)"',
+    // Globs that match sensitive names.
+    'cat .env*',
+    'cat .env.*',
+    'cat *.pem',
+    'cat certs/*.key',
+    'cat id_*',
+    'cat ~/.ssh/id_*',
+    'cat ~/.ssh/*',
+    'cat .en?',
+    'cat .[e]nv',
+    'cat .env{,.local}',
+    'head .*rc',
+    'cat ~/.AWS/*',
+    // Git objects named by path.
+    'git show HEAD:.env',
+    'git show :.env',
+    'git show HEAD~1:./.ENV',
+    'git cat-file -p HEAD:.env',
+    'git cat-file blob main:config/.env.production',
+    'git -C repo --no-pager show main:.npmrc',
+    'git diff HEAD -- .env',
+    'git log -p -- .env',
+    // Scripts inside scripts.
+    'echo $(cat .env)',
+    'echo `cat .env`',
+    'diff <(cat .env) .env.example',
+    '(cat .env)',
+    '{ cat .env; }',
+    'if true; then cat .env; fi',
+    "bash -c 'cat .env'",
+    'sh -lc "sudo cat .env"',
+    'eval "cat .env"',
+    "find . -name '.env*' -exec cat {} ;",
+    'find ~/.ssh -type f -exec cat {} +',
+  ])('suppresses %s', (command) => {
+    expect(isCredentialDumpCommand(command)).toBe(true);
+  });
+
+  it.each([
+    'grep -rn TODO *',
+    'grep -rn TODO .',
+    'cat *.ts',
+    'head -n 5 src/*.md',
+    "grep -E '.*foo.*' src/a.ts",
+    "rg -i '.*TODO.*' src",
+    "sed 's/.*/x/' notes.txt",
+    "awk '/.env/ {print}' .gitignore.bak",
+    'cat .gitignore',
+    'tail -f logs/server.log',
+    'cat < input.txt',
+    'ls -la .env',
+    'git add .env',
+    'git show HEAD:src/a.ts',
+    'git diff',
+    'echo .env >> .gitignore',
+    'cat <<EOF\nnot a file\nEOF',
+    'sudo ls /root',
+    "find . -name '*.tmp' | xargs rm",
+    'timeout 5 node server.js',
+    'xargs cat < files.txt',
+  ])('leaves %s alone', (command) => {
+    expect(isCredentialDumpCommand(command)).toBe(false);
   });
 });

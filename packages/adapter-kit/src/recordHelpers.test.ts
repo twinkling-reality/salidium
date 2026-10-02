@@ -35,6 +35,16 @@ describe('pathArgumentMetadata', () => {
     expect(pathArgumentMetadata({ path: '/repo/src/a.ts' })).toEqual({
       paths: ['/repo/src/a.ts'],
       truncated: false,
+      undecodable: false,
     });
+  });
+
+  it('records a malformed escape under a URI key, and not under a path key', () => {
+    expect(pathArgumentMetadata({ uri: '/repo/%ZZ/a.md' }).undecodable).toBe(true);
+    expect(
+      pathArgumentMetadata({ request: { hrefs: ['file:///repo/%E0%A4%A'] } }).undecodable,
+    ).toBe(true);
+    expect(pathArgumentMetadata({ path: '/repo/100%.md' }).undecodable).toBe(false);
+    expect(pathArgumentMetadata({ uri: 'file:///repo/100%25.md' }).undecodable).toBe(false);
   });
 });
