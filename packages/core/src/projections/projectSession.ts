@@ -1,6 +1,7 @@
 import type { Epistemic, ExitStatus, PlanItem, SessionStatus } from '@salidium/protocol';
 import { headlineOf } from '../claims/classifyAgentMessage.ts';
 import { basename, clip, shortSha } from '../state/changeLog.ts';
+import { ownEntry } from '../state/keyedRecord.ts';
 import { describeVerification } from '../state/reducer.ts';
 import type {
   Activity,
@@ -331,7 +332,7 @@ export function projectSession(state: RunState, now: number = Date.now()): Sessi
   // (results that never arrived) and sub-agent lanes are not "what is happening now".
   const activeCall = [...state.running]
     .reverse()
-    .map((id) => state.activities[id])
+    .map((id) => ownEntry(state.activities, id))
     .find((a) => a && !a.agentId && now - Date.parse(a.startedAt) < ACTIVE_CALL_MAX_AGE_MS);
 
   const strip: StripView = {
@@ -407,7 +408,7 @@ export function projectSession(state: RunState, now: number = Date.now()): Sessi
       glance: changesGlance(state),
       files: files.map((f) => toFileRow(state, f, lastPass)),
       commands: state.activityOrder
-        .map((id) => state.activities[id])
+        .map((id) => ownEntry(state.activities, id))
         .filter((a): a is Activity =>
           Boolean(a && a.kind === 'command' && a.input.kind === 'command'),
         )
@@ -839,7 +840,7 @@ function nearestReason(state: RunState, turnId: string, f: FileState): Line | un
       author: lane ? 'subagent' : 'agent',
     };
   if (lane) {
-    const sub = state.subagents[lane];
+    const sub = ownEntry(state.subagents, lane);
     if (sub?.description)
       return {
         text: `Subagent: ${sub.description}`,
@@ -945,7 +946,7 @@ function leftSection(state: RunState): SessionView['left'] {
 
 function toTurnRow(state: RunState, t: Turn, verificationRows: VerificationRow[]): TurnRow {
   const activities = t.activityIds
-    .map((id) => state.activities[id])
+    .map((id) => ownEntry(state.activities, id))
     .filter((a): a is Activity => Boolean(a));
   let linesAdded = 0;
   let linesRemoved = 0;

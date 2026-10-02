@@ -11,6 +11,7 @@ import { detectGitCommand } from '../verification/classifyCommand.ts';
 import { deriveVerification } from '../verification/deriveVerification.ts';
 import { basename, ChangeLog, clip, shortSha } from './changeLog.ts';
 import { deriveStatus } from './deriveStatus.ts';
+import { ownEntry, setEntry } from './keyedRecord.ts';
 import { applyReviewRulesAfterEvent } from './reviewRules.ts';
 import type { Activity, Claim, FileState, RunState, Turn, Verification } from './runState.ts';
 
@@ -66,14 +67,14 @@ export function applyEvent(state: RunState, event: StoredEvent): SemanticChange[
       onToolFailed(state, event, log);
       break;
     case 'subagent.started':
-      state.subagents[event.subagentId] = {
+      setEntry(state.subagents, event.subagentId, {
         id: event.subagentId,
         agentType: event.agentType,
         description: event.description,
         startedAt: event.ts,
         toolCalls: 0,
         eventId: event.id,
-      };
+      });
       log.add(
         'how',
         `Delegated to ${event.agentType ?? 'subagent'}: ${event.description ?? event.subagentId}`,
@@ -81,7 +82,7 @@ export function applyEvent(state: RunState, event: StoredEvent): SemanticChange[
       );
       break;
     case 'subagent.ended': {
-      const s = state.subagents[event.subagentId];
+      const s = ownEntry(state.subagents, event.subagentId);
       if (s) {
         s.endedAt = event.ts;
         // Flattened for the same reason a claim is: a subagent writes markdown, and the section
@@ -137,13 +138,7 @@ export function applyEvent(state: RunState, event: StoredEvent): SemanticChange[
     case 'file.located':
       // Defined, not assigned: a path is provider data, and assigning `__proto__` would replace
       // the record's prototype instead of adding an entry.
-      for (const file of event.files)
-        Object.defineProperty(state.fileLocations, file.path, {
-          value: file.repository,
-          enumerable: true,
-          writable: true,
-          configurable: true,
-        });
+      for (const file of event.files) setEntry(state.fileLocations, file.path, file.repository);
       break;
     case 'ingest.warning':
       state.counters.ingestWarnings += 1;
@@ -325,13 +320,13 @@ function onTurnEnded(state: RunState, e: StoredEventOf<'turn.ended'>, log: Chang
   state.waiting = undefined;
   // Tools still marked running at turn end are unknown (interrupted or lost result).
   for (const id of state.running) {
-    const a = state.activities[id];
+    const a = ownEntry(state.activities, id);
     if (a && a.turnId === turn.id) {
       a.status = 'unknown';
       a.endedAt = e.ts;
     }
   }
-  state.running = state.running.filter((id) => state.activities[id]?.turnId !== turn.id);
+  state.running = state.running.filter((id) => ownEntry(state.activities, id)?.turnId !== turn.id);
 
   if (e.outcome === 'failed') {
     state.issues.push({
@@ -468,7 +463,7 @@ function recordClaim(
 function onAgentUsage(state: RunState, e: StoredEventOf<'agent.usage'>) {
   const u = state.usage;
   const lane = e.agentId ?? 'main';
-  const prev = u.lastByLane[lane];
+  const prev = ownEntry(u.lastByLane, lane);
   if (prev?.messageId === e.messageId) {
     u.inputTokens -= prev.inputTokens;
     u.outputTokens -= prev.outputTokens;
@@ -481,13 +476,13 @@ function onAgentUsage(state: RunState, e: StoredEventOf<'agent.usage'>) {
   u.outputTokens += e.outputTokens;
   u.cacheReadTokens += e.cacheReadTokens;
   u.cacheWriteTokens += e.cacheWriteTokens;
-  u.lastByLane[lane] = {
+  setEntry(u.lastByLane, lane, {
     messageId: e.messageId,
     inputTokens: e.inputTokens,
     outputTokens: e.outputTokens,
     cacheReadTokens: e.cacheReadTokens,
     cacheWriteTokens: e.cacheWriteTokens,
-  };
+  });
 }
 
 function sourceFidelity(e: StoredEvent): number {
@@ -569,26 +564,19 @@ function absorbed(state: RunState, e: StoredEvent): boolean {
     return false;
   // Call ids are provider data: only own entries count, so an id such as `constructor` is not
   // mistaken for a folded call, and `__proto__` is recorded rather than assigned.
-  const own = <T>(record: Record<string, T>, key: string): T | undefined =>
-    Object.hasOwn(record, key) ? record[key] : undefined;
-  let parentId = own(state.absorbedCalls, e.callId);
+  let parentId = ownEntry(state.absorbedCalls, e.callId);
   if (
     !parentId &&
     e.kind === 'tool.called' &&
     e.parentCallId &&
-    !own(state.activities, e.callId) &&
-    own(state.activities, e.parentCallId)?.kind === 'command'
+    !ownEntry(state.activities, e.callId) &&
+    ownEntry(state.activities, e.parentCallId)?.kind === 'command'
   ) {
     parentId = e.parentCallId;
-    Object.defineProperty(state.absorbedCalls, e.callId, {
-      value: parentId,
-      enumerable: true,
-      writable: true,
-      configurable: true,
-    });
+    setEntry(state.absorbedCalls, e.callId, parentId);
   }
   if (!parentId) return false;
-  const parent = own(state.activities, parentId);
+  const parent = ownEntry(state.activities, parentId);
   if (parent) rememberEventId(parent, e.id);
   return true;
 }
@@ -601,7 +589,7 @@ function rememberEventId(a: Activity, id: string): void {
 }
 
 function onToolCalled(state: RunState, e: StoredEventOf<'tool.called'>, log: ChangeLog) {
-  const existing = state.activities[e.callId];
+  const existing = ownEntry(state.activities, e.callId);
   if (existing) {
     upgradeLateToolCall(state, existing, e, log);
     return;
@@ -625,13 +613,13 @@ function onToolCalled(state: RunState, e: StoredEventOf<'tool.called'>, log: Cha
     callFidelity: callFidelity(e),
     eventIds: [e.id],
   };
-  state.activities[e.callId] = activity;
+  setEntry(state.activities, e.callId, activity);
   state.activityOrder.push(e.callId);
   state.running.push(e.callId);
   state.counters.toolCalls += 1;
   if (e.input.kind === 'command') state.counters.commands += 1;
   turn?.activityIds.push(e.callId);
-  const lane = e.agentId ? state.subagents[e.agentId] : undefined;
+  const lane = e.agentId ? ownEntry(state.subagents, e.agentId) : undefined;
   if (lane) lane.toolCalls += 1;
 
   if (e.input.kind === 'question') {
@@ -679,7 +667,7 @@ function upgradeLateToolCall(
   a.callFidelity = candidateFidelity;
   if (previousInputKind !== 'command' && e.input.kind === 'command') state.counters.commands += 1;
   if (previousInputKind === 'command' && e.input.kind !== 'command') state.counters.commands -= 1;
-  const lane = e.agentId ? state.subagents[e.agentId] : undefined;
+  const lane = e.agentId ? ownEntry(state.subagents, e.agentId) : undefined;
   if (lane && resultOnlyPlaceholder) lane.toolCalls += 1;
   // Only a call that first names the command derives what its result means. A better record of a
   // call that was already a command (a hook's, then the provider's) has nothing new to derive, and
@@ -726,7 +714,7 @@ function upgradeLateToolCall(
 }
 
 function completeActivity(state: RunState, callId: string, e: StoredEvent): Activity | undefined {
-  const a = state.activities[callId];
+  const a = ownEntry(state.activities, callId);
   if (!a) return undefined;
   if (a.status !== 'running') return a;
   a.endedAt = e.ts;
@@ -739,7 +727,7 @@ function completeActivity(state: RunState, callId: string, e: StoredEvent): Acti
 }
 
 function onToolCompleted(state: RunState, e: StoredEventOf<'tool.completed'>, log: ChangeLog) {
-  let a = state.activities[e.callId];
+  let a = ownEntry(state.activities, e.callId);
   if (!a) {
     // Result without a recorded call (channel gap): synthesize the activity from the result.
     const turn = turnFor(state, e);
@@ -758,7 +746,7 @@ function onToolCompleted(state: RunState, e: StoredEventOf<'tool.completed'>, lo
       callFidelity: 0,
       eventIds: [],
     };
-    state.activities[e.callId] = a;
+    setEntry(state.activities, e.callId, a);
     state.activityOrder.push(e.callId);
     state.counters.toolCalls += 1;
     turn?.activityIds.push(e.callId);
@@ -790,7 +778,7 @@ function onToolCompleted(state: RunState, e: StoredEventOf<'tool.completed'>, lo
       break;
     case 'subagent':
       {
-        const s = e.result.agentId ? state.subagents[e.result.agentId] : undefined;
+        const s = e.result.agentId ? ownEntry(state.subagents, e.result.agentId) : undefined;
         if (s) {
           s.endedAt = s.endedAt ?? e.ts;
           s.lastMessage = s.lastMessage ?? e.result.summaryExcerpt;
@@ -869,7 +857,7 @@ function upgradeCompletedActivity(
       }
       const oldLines = old.linesAdded + old.linesRemoved;
       const newLines = change.linesAdded + change.linesRemoved;
-      const file = state.files[change.path];
+      const file = ownEntry(state.files, change.path);
       if (!file) continue;
       file.linesAdded += change.linesAdded - old.linesAdded;
       file.linesRemoved += change.linesRemoved - old.linesRemoved;
@@ -1115,7 +1103,7 @@ function applyFileChange(
     log.add('review', `Patch not applied: ${basename(change.path)}`, 'observed');
     return;
   }
-  const existing = state.files[change.path];
+  const existing = ownEntry(state.files, change.path);
   const file: FileState = existing ?? {
     path: change.path,
     changeCount: 0,
@@ -1129,7 +1117,7 @@ function applyFileChange(
     turnIds: [],
   };
   if (!existing) {
-    state.files[change.path] = file;
+    setEntry(state.files, change.path, file);
     state.counters.filesChanged += 1;
   }
   file.changeCount += 1;
@@ -1340,7 +1328,7 @@ export function describeVerification(v: {
 
 function onToolFailed(state: RunState, e: StoredEventOf<'tool.failed'>, log: ChangeLog) {
   onToolFailedInner(state, e, log);
-  const a = state.activities[e.callId];
+  const a = ownEntry(state.activities, e.callId);
   if (a) {
     a.errorExcerpt = a.errorExcerpt === undefined ? undefined : clip(a.errorExcerpt, 400);
     if (a.result?.kind === 'command')
@@ -1349,7 +1337,7 @@ function onToolFailed(state: RunState, e: StoredEventOf<'tool.failed'>, log: Cha
 }
 
 function onToolFailedInner(state: RunState, e: StoredEventOf<'tool.failed'>, log: ChangeLog) {
-  let a = state.activities[e.callId];
+  let a = ownEntry(state.activities, e.callId);
   if (!a) {
     // Preserve a failure whose call record has not arrived yet. The late call upgrades this
     // placeholder and applies command-specific verification/failure semantics then.
@@ -1369,7 +1357,7 @@ function onToolFailedInner(state: RunState, e: StoredEventOf<'tool.failed'>, log
       callFidelity: 0,
       eventIds: [],
     };
-    state.activities[e.callId] = a;
+    setEntry(state.activities, e.callId, a);
     state.activityOrder.push(e.callId);
     state.counters.toolCalls += 1;
     turn?.activityIds.push(e.callId);

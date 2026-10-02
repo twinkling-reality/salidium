@@ -744,3 +744,60 @@ describe('reducer: provider ids are keys like any other', () => {
     expect(Object.keys(resumed.activities).sort()).toEqual(Object.keys(whole.activities).sort());
   });
 });
+
+describe('reducer: provider keys on records that still have a prototype', () => {
+  /** The shape a state has when it crosses as JSON and nothing revives it, as a replay once did. */
+  function unrevived(): RunState {
+    const state = JSON.parse(JSON.stringify(fresh())) as RunState;
+    expect(Object.getPrototypeOf(state.activities)).toBe(Object.prototype);
+    return state;
+  }
+
+  it('records a call named constructor as an activity like any other', () => {
+    const b = new EventBuilder();
+    const { state } = run(
+      [
+        b.sessionStarted(),
+        b.turnStarted('Run tests'),
+        ...b.command('constructor', 'pnpm vitest run', VITEST_PASS, { exitCode: 0 }),
+        b.turnEnded('Done.'),
+      ],
+      unrevived(),
+    );
+    expect(Object.hasOwn(state.activities, 'constructor')).toBe(true);
+    expect(state.activities.constructor).toMatchObject({
+      callId: 'constructor',
+      kind: 'command',
+      status: 'completed',
+    });
+    expect(state.activityOrder).toEqual(['constructor']);
+    expect(state.counters.toolCalls).toBe(1);
+    expect(state.verifications.map((v) => v.callId)).toEqual(['constructor']);
+    expect(() => projectSession(state, '2026-01-01T00:00:00.000Z')).not.toThrow();
+  });
+
+  it('records a file at path __proto__ without replacing any prototype', () => {
+    const b = new EventBuilder();
+    const { state } = run(
+      [
+        b.sessionStarted(),
+        b.turnStarted('Edit'),
+        ...b.edit('e1', '__proto__', 3, 1),
+        ...b.edit('e2', '__proto__', 2, 0),
+        b.turnEnded('Done.'),
+      ],
+      unrevived(),
+    );
+    expect(Object.getPrototypeOf(state.files)).toBe(Object.prototype);
+    expect(Object.keys(state.files)).toEqual(['__proto__']);
+    expect(Object.getOwnPropertyDescriptor(state.files, '__proto__')?.value).toMatchObject({
+      path: '__proto__',
+      changeCount: 2,
+      linesAdded: 5,
+      linesRemoved: 1,
+    });
+    expect(state.counters.filesChanged).toBe(1);
+    expect(({} as Record<string, unknown>).linesAdded).toBeUndefined();
+    expect(state.turns[0]?.filesTouched).toEqual(['__proto__']);
+  });
+});

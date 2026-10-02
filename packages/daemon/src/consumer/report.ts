@@ -19,7 +19,7 @@ import type {
   VerificationRow,
   WaitingState,
 } from '@salidium/core';
-import { clip, WORKING_STALE_MS } from '@salidium/core';
+import { clip, ownEntry, WORKING_STALE_MS } from '@salidium/core';
 import type { Epistemic, SessionSummary, ToolKind } from '@salidium/protocol';
 import { explanationIsCurrent } from '../sessions/sessionCoordinator.ts';
 
@@ -91,7 +91,7 @@ const ACTIVITY: Record<ToolKind, string> = {
 };
 
 function workingHeadline(state: RunState, callId: string | undefined): string {
-  const activity = callId ? state.activities[callId] : undefined;
+  const activity = callId ? ownEntry(state.activities, callId) : undefined;
   if (!activity) return 'Working';
   const input = activity.input;
   if (input.kind === 'fileEdit' || input.kind === 'fileWrite')
@@ -318,16 +318,11 @@ export function toSessionReport(
         if (path === undefined) return [];
         return {
           path,
-          repository: repository(
-            Object.hasOwn(state.fileLocations, file.path)
-              ? state.fileLocations[file.path]
-              : undefined,
-            text,
-          ),
+          repository: repository(ownEntry(state.fileLocations, file.path), text),
           changeCount: file.changeCount,
           linesAdded: file.linesAdded,
           linesRemoved: file.linesRemoved,
-          linesRemovedExact: !state.files[file.path]?.linesRemovedUnknown,
+          linesRemovedExact: !ownEntry(state.files, file.path)?.linesRemovedUnknown,
           kinds: [...file.kinds],
           lastChangedAt: file.lastChangedAt,
           coverage: {

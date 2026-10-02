@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Read a session's activities, files and subagents by own entry only, so a call id or path named
+  `constructor`, `toString` or `__proto__` is recorded like any other instead of crashing the
+  reducer or reaching `Object.prototype`, including in a state scrubbed back on the timeline.
+
 ## 0.8.1 - 2026-10-02
 
 - Redact credentials written as JSON, YAML, HTTP headers, and environment variables. The key
