@@ -33,6 +33,25 @@
   reingested record whose redaction now differs from its stored event is not fingerprinted, and
   its raw evidence may keep asking to be re-ingested. `salidium forget <id>` removes a session
   whose stored text holds a secret.
+- Reads of sensitive files stay out of stored events and the raw view however a tool spells the
+  path. Salidium used to compare a path as given, so `file:///repo/%2Eenv`, `.ENV`, `.env.`,
+  `/repo//./.env`, `src/../.ssh/id_rsa` or `.env::$DATA` read the file without suppression. It now
+  compares every spelling a tool might open: as a `file:` URI's path, percent-decoded, with
+  separators, `.` and `..` segments, trailing dots and whitespace, NTFS streams and Windows drive
+  prefixes normalized, and without regard to case. The comparison is lexical and never touches the
+  filesystem. A URI (a `file:` value, or a `uri`, `url` or `href` argument) that cannot be decoded
+  counts as sensitive; in an ordinary path a `%` that is not a valid escape is literal, so
+  `docs/100%.md` stays visible. This applies to Claude Code, Codex and OpenCode alike.
+- More reads count as reads of a sensitive file: a search inside one (Grep over `.env`), a command
+  that fails after printing one (`cat .env; exit 1`), a file moved out of a sensitive path, a Codex
+  `view_image`, the MCP filesystem tool `read_media_file`, and an MCP path argument too long to keep
+  whole.
+- More shell commands count as printing a sensitive file: through `sudo`, `env`, `command`, `nice`,
+  `time`, `timeout`, `nohup` or `xargs`; with readers such as `tac`, `nl`, `base64`, `xxd`, `od`,
+  `hexdump` and `strings`; by input redirection (`< .env cat`); by a glob that carries a sensitive
+  name's stem (`.env*`, `*.pem`, `id_*`, `~/.ssh/*`, but not `*.json`); as `git show <rev>:.env`
+  or `git cat-file -p <rev>:.env`; and inside `$(...)`, `bash -c` or `find -exec`. A recursive
+  search of a directory that merely contains a sensitive file (`grep -r KEY .`) is not caught.
 
 ## 0.8.0 - 2026-10-02
 
