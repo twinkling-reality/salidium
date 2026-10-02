@@ -455,6 +455,32 @@ describe('daemon', () => {
     expect(body).toMatchObject({ state: 'refused', models: [] });
   });
 
+  it('clears a model chosen for one writer when the API switches to another', async () => {
+    const put = (body: unknown) =>
+      api<{ backend: string; model: string | null }>('/api/settings/explainer', {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      });
+    expect((await put({ backend: 'ollama', model: 'local:1b' })).body).toMatchObject({
+      backend: 'ollama',
+      model: 'local:1b',
+    });
+    // Restating the same writer keeps the model.
+    expect((await put({ backend: 'ollama' })).body.model).toBe('local:1b');
+    expect((await put({ backend: 'claude' })).body).toMatchObject({
+      backend: 'claude',
+      model: null,
+    });
+    // Naming both still sets both.
+    expect((await put({ backend: 'codex', model: 'gpt-5.6-luna' })).body.model).toBe(
+      'gpt-5.6-luna',
+    );
+    expect((await put({ backend: 'auto', model: null })).body).toMatchObject({
+      backend: 'auto',
+      model: null,
+    });
+  });
+
   it('rejects unauthenticated, wrong-host and cross-origin requests', async () => {
     const base = `http://127.0.0.1:${daemon.port}`;
     expect((await fetch(`${base}/api/sessions`)).status).toBe(401);

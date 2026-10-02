@@ -25,6 +25,7 @@ import {
   type CoordinatorListener,
   explanationIsCurrent,
   SessionCoordinator,
+  type StoredExplainerChoice,
 } from './sessionCoordinator.ts';
 
 /** States replayed for side-effect-free reads, most recently used last. */
@@ -76,6 +77,7 @@ export class SessionRegistry {
   /** Handed to every coordinator this registry loads; see `CoordinatorOptions.now`. */
   private readonly now: (() => number) | undefined;
   /** Reads the daemon's current helper routing at call time, so settings apply without a restart. */
+  private readonly explainerChoice: (() => StoredExplainerChoice) | undefined;
   private readonly explainSession:
     | ((state: RunState, signal?: AbortSignal) => Promise<ExplanationAttempt>)
     | undefined;
@@ -85,6 +87,8 @@ export class SessionRegistry {
     opts: {
       explainerCadence?: ExplainerCadence;
       explainSession?: (state: RunState, signal?: AbortSignal) => Promise<ExplanationAttempt>;
+      /** The stored helper choice; see `CoordinatorOptions.explainerChoice`. */
+      explainerChoice?: () => StoredExplainerChoice;
       now?: () => number;
     } = {},
   ) {
@@ -92,6 +96,7 @@ export class SessionRegistry {
     if (opts.explainerCadence) this.explainerCadence = opts.explainerCadence;
     this.now = opts.now;
     this.explainSession = opts.explainSession;
+    this.explainerChoice = opts.explainerChoice;
     this.listener = {
       onEvents: (sessionId, events, changes) => {
         for (const s of this.allSubscribers) {
@@ -141,6 +146,7 @@ export class SessionRegistry {
         options: {
           cadence: this.explainerCadence,
           ...(this.explainSession ? { explainSession: this.explainSession } : {}),
+          ...(this.explainerChoice ? { explainerChoice: this.explainerChoice } : {}),
           ...(this.now ? { now: this.now } : {}),
         },
       });

@@ -46,7 +46,6 @@ import {
   writeConsumerDiscovery,
 } from './consumer/discovery.ts';
 import { createConsumerRoutes } from './consumer/routes.ts';
-import { explainWithStatus } from './enrich/explainer.ts';
 import { explainedConfiguration } from './enrich/explainerBackends.ts';
 import { listOllamaModels } from './enrich/ollamaBackend.ts';
 import { personalizeExplanation } from './enrich/personalizeExplanation.ts';
@@ -320,10 +319,9 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     explainedConfiguration(stored.explainerBackend, stored.explainerModel, process.env);
   const registry = new SessionRegistry(store, {
     explainerCadence: effectiveCadence(stored.explainerCadence),
-    explainSession: (state, signal) => {
-      const active = activeExplainer();
-      return explainWithStatus(state, { mode: active.mode, model: active.model, signal });
-    },
+    // The coordinator resolves this against the environment itself, so the stored choice, not a
+    // default, decides the writer on every path that can generate an explanation.
+    explainerChoice: () => ({ backend: stored.explainerBackend, model: stored.explainerModel }),
     ...(overrides.now ? { now: overrides.now } : {}),
   });
   const explainerSettings = (): ExplainerSettings => {
@@ -679,6 +677,14 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
           ...stored,
           ...(change.cadence !== undefined ? { explainerCadence: change.cadence } : {}),
           ...(change.backend !== undefined ? { explainerBackend: change.backend } : {}),
+          // A model name belongs to the writer it was chosen for. Switching writer without naming
+          // a model clears it, as the interface does, so a local Ollama model name is never handed
+          // to a hosted CLI, and a CLI model id is never sent to Ollama.
+          ...(change.backend !== undefined &&
+          change.backend !== stored.explainerBackend &&
+          change.model === undefined
+            ? { explainerModel: null }
+            : {}),
           ...(change.model !== undefined ? { explainerModel: change.model } : {}),
         };
         writeSettings(config.home, candidate);
