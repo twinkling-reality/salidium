@@ -106,6 +106,7 @@ describe('ApiClient.sessionLinks', () => {
     files: [],
     filesTotal: 0,
     filesOmitted: 0,
+    mapElementsWithheld: 0,
     modules: [],
     modulesTruncated: false,
   };

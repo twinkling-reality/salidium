@@ -8,6 +8,8 @@ import {
   type ExecutionLinks,
   ExecutionLinksSchema,
   linkExecution,
+  type MapNode,
+  type ProjectMap,
   type ProjectMapService,
   type RepositoryResolution,
   type RevisionAnchor,
@@ -22,6 +24,8 @@ import type { Logger } from '../logging/logger.ts';
 import { isUserSession, type SessionRegistry } from '../sessions/sessionRegistry.ts';
 
 const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+/** Commits remembered as existing, across repositories. */
+const KNOWN_COMMITS = 512;
 
 export interface SessionLinksDeps {
   registry: Pick<SessionRegistry, 'readSession'>;
@@ -44,6 +48,33 @@ export interface SessionLinksDeps {
  */
 export function createSessionLinks(deps: SessionLinksDeps) {
   const now = deps.now ?? Date.now;
+  /*
+   * Commits already found in a repository's object store. A commit that exists stays readable for
+   * as long as anything references it, so a reader refetching at every turn end need not start a
+   * git process each time to ask again; a map that has meanwhile become unbuildable is still
+   * refused by `getMap`, and the opt-in is still read on every request before either.
+   */
+  const knownCommits = new Set<string>();
+  const remember = (key: string) => {
+    knownCommits.delete(key);
+    knownCommits.add(key);
+    for (const oldest of knownCommits) {
+      if (knownCommits.size <= KNOWN_COMMITS) break;
+      knownCommits.delete(oldest);
+    }
+  };
+  const withKnownCommits = (maps: ProjectMapService): ProjectMapService => ({
+    isOptedIn: (root) => maps.isOptedIn(root),
+    repositories: () => maps.repositories(),
+    getMap: (root, commit) => maps.getMap(root, commit),
+    commitExists: async (root, commit) => {
+      const key = `${root}\0${commit}`;
+      if (knownCommits.has(key) && maps.isOptedIn(root)) return { ok: true, exists: true };
+      const answer = await maps.commitExists(root, commit);
+      if (answer.ok && answer.exists) remember(key);
+      return answer;
+    },
+  });
 
   async function document(
     maps: ProjectMapService,
@@ -66,27 +97,43 @@ export function createSessionLinks(deps: SessionLinksDeps) {
             unchanged(file.location.path) &&
             (file.location.mainRoot === undefined || unchanged(file.location.mainRoot)))),
     );
-    const anchors = withheldBranches(sessionAnchors(state), unchanged);
+    const observed = withheldBranches(sessionAnchors(state), unchanged);
+    const anchors =
+      observed.repository !== null && !unchanged(observed.repository)
+        ? { ...observed, repository: null }
+        : observed;
     const repositories = new Map<string, RepositoryResolution>();
-    for (const root of repositoriesOf(files).slice(0, EXECUTION_LINKS_LIMITS.repositories))
-      repositories.set(root, await resolveRepository(maps, anchors, root));
+    let mapElementsWithheld = 0;
+    for (const root of repositoriesOf(files).slice(0, EXECUTION_LINKS_LIMITS.repositories)) {
+      const resolved = await resolveRepository(maps, anchors, root);
+      if (resolved.status !== 'mapped') {
+        repositories.set(root, resolved);
+        continue;
+      }
+      // Map paths, names and rules follow the same rule as the session's own identifiers.
+      const carried = withholdAltered(resolved.map, unchanged);
+      mapElementsWithheld += carried.withheld;
+      repositories.set(root, { ...resolved, map: carried.map });
+    }
     const doc = linkExecution({
       sessionId,
       generatedAt: new Date(now()).toISOString(),
       anchors,
       files,
       withheld: all.length - files.length,
+      mapElementsWithheld,
       repositories,
     });
-    // Map-derived names and rules from the opted-in tree pass the redactor too, as any text does.
+    // Everything above was carried whole or withheld, so this pass changes nothing it is given;
+    // it stays as defense in depth for any string added later without that check.
     return ExecutionLinksSchema.parse(redactStrings(doc, redactor));
   }
 
-  const handler: SessionLinksHandlerFactory =
-    ({ maps }) =>
-    async ({ sessionId }): Promise<RouteResult> => {
+  const handler: SessionLinksHandlerFactory = ({ maps }) => {
+    const cached = withKnownCommits(maps);
+    return async ({ sessionId }): Promise<RouteResult> => {
       try {
-        const doc = await document(maps, sessionId);
+        const doc = await document(cached, sessionId);
         if (!doc) return { status: 404, error: 'not-found', message: 'no such session' };
         return { status: 200, body: doc };
       } catch (error) {
@@ -94,6 +141,7 @@ export function createSessionLinks(deps: SessionLinksDeps) {
         return { status: 500, error: 'internal', message: 'the links could not be computed' };
       }
     };
+  };
 
   return { document, handler };
 }
@@ -178,6 +226,35 @@ function within(cwd: string, root: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * The map with every node and edge whose text the redactor would alter left out, and how many
+ * were. A path or name that crosses altered names something else, and a placeholder longer than
+ * what it replaced could push a value past its bound; leaving the element out is what the session's
+ * own identifiers get too. Evidence whose path would be altered is dropped from its edge.
+ */
+export function withholdAltered(
+  map: ProjectMap,
+  unchanged: (value: string) => boolean,
+): { map: ProjectMap; withheld: number } {
+  const text = (node: MapNode): string[] =>
+    node.kind === 'file'
+      ? [node.id, node.path]
+      : node.kind === 'module'
+        ? [node.id, node.manifest, ...(node.name === null ? [] : [node.name])]
+        : [node.id, node.name];
+  const nodes = map.nodes.filter((node) => text(node).every(unchanged));
+  const kept = new Set(nodes.map((node) => node.id));
+  const edges = map.edges
+    .filter((edge) => kept.has(edge.from) && kept.has(edge.to) && unchanged(edge.rule))
+    .map((edge) =>
+      edge.evidence.every((e) => unchanged(e.path))
+        ? edge
+        : { ...edge, evidence: edge.evidence.filter((e) => unchanged(e.path)) },
+    );
+  const withheld = map.nodes.length - nodes.length + (map.edges.length - edges.length);
+  return { map: withheld === 0 ? map : { ...map, nodes, edges }, withheld };
 }
 
 /**

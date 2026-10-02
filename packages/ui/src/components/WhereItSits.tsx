@@ -146,6 +146,12 @@ export function WhereItSits({
         );
       })}
 
+      {links.mapElementsWithheld > 0 && (
+        <p className="viz-foot">
+          Some neighbours or modules are not shown because their names look like secrets.
+        </p>
+      )}
+
       {(links.filesTotal > links.files.length || links.filesOmitted > 0) && (
         <p className="viz-foot">
           {links.filesTotal - links.files.length > links.filesOmitted

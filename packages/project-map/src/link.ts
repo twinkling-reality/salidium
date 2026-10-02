@@ -196,6 +196,8 @@ export function linkExecution(input: {
   files: readonly ChangedFile[];
   /** Changed files the caller did not pass, counted as omitted: for example ones redaction alters. */
   withheld?: number;
+  /** Map nodes and edges the caller left out, for example ones redaction alters. */
+  mapElementsWithheld?: number;
   repositories: ReadonlyMap<string, RepositoryResolution>;
 }): ExecutionLinks {
   const indexes = new Map<string, MapIndex>();
@@ -371,6 +373,7 @@ export function linkExecution(input: {
     files,
     filesTotal: input.files.length + (input.withheld ?? 0),
     filesOmitted: input.files.length - carried.length + (input.withheld ?? 0),
+    mapElementsWithheld: input.mapElementsWithheld ?? 0,
     modules: allModules.slice(0, EXECUTION_LINKS_LIMITS.modules),
     modulesTruncated: allModules.length > EXECUTION_LINKS_LIMITS.modules,
   };

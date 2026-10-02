@@ -4,6 +4,7 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createRedactor } from '@salidium/core';
 import { EventBuilder } from '@salidium/core/testing';
 import {
   type ExecutionLinks,
@@ -19,7 +20,7 @@ import type { HookIngress } from '../ingest/hookIngress.ts';
 import { createHttpServer } from '../server/httpServer.ts';
 import { SessionRegistry } from '../sessions/sessionRegistry.ts';
 import { SqliteStore } from '../storage/sqliteStore.ts';
-import { createSessionLinks } from './sessionLinks.ts';
+import { createSessionLinks, withholdAltered } from './sessionLinks.ts';
 
 /**
  * The document the interface and consumers read, derived from real ingested events through the
@@ -439,5 +440,62 @@ describe('the owner route', () => {
       headers: { Authorization: `Bearer ${TOKEN}`, Origin: 'http://evil.example' },
     });
     expect(res.status).toBe(403);
+  });
+});
+
+describe('carried whole or withheld', () => {
+  test('map nodes and edges whose text the redactor would alter are left out and counted', () => {
+    const redactor = createRedactor();
+    const unchanged = (value: string) => redactor.redact(value).text === value;
+    const map = mapAt(END);
+    const secretPath = `src/${SECRET}.ts`;
+    map.nodes.push(fileNode(secretPath));
+    map.edges.push({
+      id: edgeId(`file:${secretPath}`, 'imports', 'file:src/pay.ts'),
+      from: `file:${secretPath}`,
+      to: 'file:src/pay.ts',
+      kind: 'imports',
+      provenance: 'observed',
+      rule: 'probe',
+      evidence: [],
+      count: 1,
+    });
+    const { map: carried, withheld } = withholdAltered(map, unchanged);
+    expect(withheld).toBe(2);
+    expect(JSON.stringify(carried)).not.toContain(SECRET);
+    expect(withholdAltered(mapAt(END), unchanged)).toEqual({ map: mapAt(END), withheld: 0 });
+  });
+
+  test('a commit found once is not asked about again, while the opt-in is still read', async () => {
+    const calls: string[] = [];
+    let allowed = true;
+    const counting: ProjectMapService = {
+      isOptedIn: () => {
+        calls.push('isOptedIn');
+        return allowed;
+      },
+      repositories: () => [],
+      commitExists: async () => {
+        calls.push('commitExists');
+        return { ok: true, exists: true };
+      },
+      getMap: async (_root, commit) => {
+        calls.push('getMap');
+        return { ok: true, map: mapAt(commit) };
+      },
+    };
+    const handler = createSessionLinks({ registry, log }).handler({ maps: counting });
+    await handler({ sessionId: LIVE, query: new URLSearchParams() });
+    await handler({ sessionId: LIVE, query: new URLSearchParams() });
+    expect(calls.filter((c) => c === 'commitExists')).toHaveLength(1);
+    expect(calls.filter((c) => c === 'getMap')).toHaveLength(2);
+    allowed = false;
+    calls.length = 0;
+    const refused = await handler({ sessionId: LIVE, query: new URLSearchParams() });
+    expect(calls).not.toContain('commitExists');
+    expect(calls).not.toContain('getMap');
+    expect(refused.status).toBe(200);
+    if (refused.status === 200)
+      expect((refused.body as ExecutionLinks).repositories[0]?.status).toBe('not-opted-in');
   });
 });

@@ -133,6 +133,7 @@ function sample(): ExecutionLinks {
     ],
     filesTotal: 5,
     filesOmitted: 0,
+    mapElementsWithheld: 0,
     modules: [
       {
         repository: REPO,

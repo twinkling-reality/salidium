@@ -269,6 +269,9 @@ export const ExecutionLinksSchema = z.object({
   filesOmitted: Count.describe(
     'Changed paths this version cannot carry: not absolute, longer than the bound, holding control characters, or holding text the redactor would change, which would make the path name something else. Counted, never dropped silently.',
   ),
+  mapElementsWithheld: Count.describe(
+    'Map nodes and edges left out because the redactor would alter their text, so a neighbour or module may be missing. Counted, never dropped silently.',
+  ),
   modules: z
     .array(ModuleLinkSchema)
     .max(EXECUTION_LINKS_LIMITS.modules)
