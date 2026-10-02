@@ -11,6 +11,8 @@ import {
   ProviderRegistry,
   trustedPathEntries,
 } from '@salidium/adapter-kit';
+import { openCodeProvider } from '@salidium/adapter-opencode';
+import type { ExperimentalContractEntry } from '@salidium/consumer-contract';
 import type { RunState } from '@salidium/core';
 import {
   type CollectionStatus,
@@ -20,6 +22,7 @@ import {
   type ExplainerCadence,
   type ExplainerSettings,
   type ExplainerSettingsRequest,
+  type OllamaModels,
   OPERATIONS_CONTRACT_VERSION,
   type OperationalConfigPatch,
   type OperationsHealthSnapshot,
@@ -39,13 +42,15 @@ import {
 import { ConsumerCredentialVerifier } from './consumer/credentials.ts';
 import {
   consumerDiscovery,
+  experimentalContracts,
   removeConsumerDiscovery,
   writeConsumerDiscovery,
 } from './consumer/discovery.ts';
 import { createConsumerRoutes } from './consumer/routes.ts';
-import { explainWithStatus } from './enrich/explainer.ts';
 import { explainedConfiguration } from './enrich/explainerBackends.ts';
+import { listOllamaModels } from './enrich/ollamaBackend.ts';
 import { personalizeExplanation } from './enrich/personalizeExplanation.ts';
+import { FileLocationEnricher } from './enrichers/fileLocation.ts';
 import { GitSnapshotEnricher } from './enrichers/gitSnapshot.ts';
 import { type CodexHookTrust, inspectCodexHookTrust } from './ingest/codexHookTrust.ts';
 import {
@@ -64,6 +69,8 @@ import { HookIngress } from './ingest/hookIngress.ts';
 import {
   HOOK_BREAKER_FILE,
   HOOK_PAUSE_FILE,
+  HOOK_QUOTA_LOCK_FILE,
+  HOOK_QUOTA_REAPING_DIR,
   HOOK_SHED_FIRST_FILE,
   HOOK_SHED_RETAIN_FILE,
   HOOK_SHED_SECOND_FILE,
@@ -74,6 +81,7 @@ import {
   MAX_INGEST_PAYLOAD_BYTES,
   TRUNCATED_HOOK_PAYLOAD_KEY,
 } from './ingest/limits.ts';
+import { StoreTailer } from './ingest/storeTailer.ts';
 import { TranscriptTailer } from './ingest/transcriptTailer.ts';
 import { createLogger } from './logging/logger.ts';
 import {
@@ -90,10 +98,16 @@ import {
   updateOperationalConfig,
 } from './operations/configuration.ts';
 import { writePrivateJsonAtomic, writePrivateTextAtomic } from './operations/files.ts';
-import { createHealthSnapshot, inspectQueue, retainHealthSample } from './operations/health.ts';
+import {
+  createHealthSnapshot,
+  inspectQueue,
+  oldestWaitingAt,
+  retainHealthSample,
+} from './operations/health.ts';
 import { readMaintenanceState, runQueueDrainMaintenance } from './operations/maintenance.ts';
 import { NativeAlertSink } from './operations/nativeNotifications.ts';
 import { createHttpServer } from './server/httpServer.ts';
+import { HistoryWarmup } from './sessions/historyWarmup.ts';
 import { effectiveCadence } from './sessions/sessionCoordinator.ts';
 import { SessionRegistry } from './sessions/sessionRegistry.ts';
 import { inspectStoreLayout } from './storage/optimizeStore.ts';
@@ -132,6 +146,14 @@ export type StartDaemonOptions = Partial<DaemonConfig> & {
    * node_modules for executable plug-ins; callers must load and pass reviewed descriptors.
    */
   providerDescriptors?: readonly ProviderDescriptor[];
+  /**
+   * Experimental local contracts to list in consumer discovery, given the port the daemon listens
+   * on. Called once, after the port is known, so `consumer.json` and the discovery endpoint agree
+   * for the instance's whole life. Defaults to none.
+   */
+  experimentalContracts?: (context: { port: number }) => readonly unknown[];
+  /** Test seam: false leaves stored sessions to be re-derived on first open only. */
+  historyWarmup?: boolean;
   /** Internal persistence seam; SQLite is the production authority and default. */
   storeFactory?: SalidiumStoreFactory;
   /** Test/embedding seam; the native desktop sink is used when notification policy enables it. */
@@ -142,7 +164,15 @@ export type StartDaemonOptions = Partial<DaemonConfig> & {
   now?: () => number;
 };
 
-const BUILT_IN_PROVIDERS: readonly ProviderDescriptor[] = [claudeCodeProvider, codexProvider];
+/*
+ * Every built-in is registered; `providers.enabled` in the operations config decides which are
+ * read. OpenCode is registered but not enabled by default.
+ */
+const BUILT_IN_PROVIDERS: readonly ProviderDescriptor[] = [
+  claudeCodeProvider,
+  codexProvider,
+  openCodeProvider,
+];
 const DEFAULT_RETENTION_SWEEP_INTERVAL_MS = 60 * 60_000;
 
 const require = createRequire(import.meta.url);
@@ -309,10 +339,9 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     explainedConfiguration(stored.explainerBackend, stored.explainerModel, process.env);
   const registry = new SessionRegistry(store, {
     explainerCadence: effectiveCadence(stored.explainerCadence),
-    explainSession: (state, signal) => {
-      const active = activeExplainer();
-      return explainWithStatus(state, { mode: active.mode, model: active.model, signal });
-    },
+    // The coordinator resolves this against the environment itself, so the stored choice, not a
+    // default, decides the writer on every path that can generate an explanation.
+    explainerChoice: () => ({ backend: stored.explainerBackend, model: stored.explainerModel }),
     ...(overrides.now ? { now: overrides.now } : {}),
   });
   const explainerSettings = (): ExplainerSettings => {
@@ -327,22 +356,41 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
       envOff: active.mode === 'off',
       backendLocked: active.backendLocked,
       modelLocked: active.modelLocked,
-      activeBackend:
-        active.mode === 'auto' || active.mode === 'claude' || active.mode === 'codex'
-          ? active.mode
-          : null,
+      activeBackend: active.mode === 'off' || active.mode === 'invalid' ? null : active.mode,
       activeModel: active.model ?? null,
       availableBackends: active.availableBackends,
       routes: active.routes,
+      ...(active.ollama ? { ollama: active.ollama } : {}),
       usageStatus: store.usageBackfillProgress?.().complete === false ? 'preparing' : 'ready',
       ...(usage ? { usage } : {}),
     };
   };
   registry.onPersistError = (sessionId, err) =>
     log.warn('persist failed; will retry', { sessionId, err: String(err) });
-  const tailer = new TranscriptTailer({ adapters, registry, store, log });
+  const tailer = new TranscriptTailer({
+    adapters,
+    registry,
+    store,
+    log,
+    storeProviders: providerRegistry
+      .list()
+      .filter((descriptor) => descriptor.storeSource)
+      .map((descriptor) => descriptor.adapter.id),
+  });
+  const storeTailer = new StoreTailer({
+    providers: config.providers.flatMap((id) => {
+      const source = providerRegistry.get(id)?.storeSource;
+      return source ? [{ id, source }] : [];
+    }),
+    registry,
+    store,
+    log,
+  });
   let collectionPaused = existsSync(paths.pauseFile);
-  if (collectionPaused) tailer.pause();
+  if (collectionPaused) {
+    tailer.pause();
+    storeTailer.pause();
+  }
   const hooks = new HookIngress({
     adapters,
     registry,
@@ -354,6 +402,19 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     log,
   });
   const git = new GitSnapshotEnricher(registry, log);
+  // After a reducer upgrade, stored sessions are re-derived in the background rather than on
+  // first open. Maintenance and a collection pause both hold it.
+  const historyWarmup = new HistoryWarmup({
+    store,
+    log,
+    isLive: (sessionId) => registry.peek(sessionId) !== undefined,
+    isPaused: () => {
+      if (collectionPaused) return true;
+      const phase = readMaintenanceState(config.home)?.phase;
+      return phase !== undefined && phase !== 'idle' && phase !== 'completed';
+    },
+  });
+  const locations = new FileLocationEnricher(registry, log);
   const token = randomBytes(32).toString('hex');
   const startedAt = new Date().toISOString();
 
@@ -384,7 +445,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
         hooksInstalled: inspection?.status === 'configured',
         ...(inspection ? { hookStatus: inspection.status } : {}),
         hookTrust: a.id === 'codex' ? codexHookTrust : 'not-applicable',
-        sourcesWatched: tailer.countForProvider(a.id),
+        sourcesWatched: tailer.countForProvider(a.id) + storeTailer.countForProvider(a.id),
       };
     }),
   });
@@ -404,12 +465,14 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     pauseCollection(config.home, reason);
     collectionPaused = true;
     tailer.pause();
+    storeTailer.pause();
     return collectionStatus();
   };
   const setCollectionActive = (): CollectionStatus => {
     resumeCollection(config.home);
     collectionPaused = false;
     tailer.resume();
+    storeTailer.resume();
     hooks.drainSpool();
     return collectionStatus();
   };
@@ -442,7 +505,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
       queue: {
         files: queue.totalFiles ?? 0,
         bytes: queue.totalBytes ?? 0,
-        oldestAt: queue.entries[0]?.queuedAt ?? null,
+        oldestAt: oldestWaitingAt(queue),
       },
       now,
     });
@@ -464,6 +527,17 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
         trust: provider.hookTrust ?? 'unknown',
       })),
       maintenance: readMaintenanceState(config.home, now),
+      historyUpdate: (() => {
+        const progress = historyWarmup.progress();
+        return progress
+          ? {
+              state: progress.state,
+              sessionsUpdated: progress.updated,
+              sessionsTotal: progress.total,
+              reducerVersion: progress.reducerVersion,
+            }
+          : null;
+      })(),
       config: effective,
       history: store.healthSamples(cutoff, sampleLimit),
       schemaVersion: storeLayout.schemaVersion,
@@ -574,15 +648,24 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
 
   let port = config.port;
   const instanceId = randomBytes(16).toString('hex');
-  const discovery = () =>
-    consumerDiscovery({
+  let experimental: ExperimentalContractEntry[] | undefined;
+  const discovery = () => {
+    experimental ??= experimentalContracts(
+      () => overrides.experimentalContracts?.({ port }) ?? [],
       port,
+      (reason) => log.warn(reason),
+    );
+    return consumerDiscovery({
+      port,
+      providers: config.providers,
+      experimental,
       pid: process.pid,
       instanceId,
       startedAt,
       version: runtimeVersion,
       now: (overrides.now ?? Date.now)(),
     });
+  };
   const consumer = createConsumerRoutes({
     registry,
     credentials: new ConsumerCredentialVerifier(config.home, (reason) => log.warn(reason)),
@@ -592,6 +675,13 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
   });
   const server = createHttpServer({
     consumer,
+    storeRecords: {
+      isStoreProvider: (provider) =>
+        providerRegistry
+          .list()
+          .some((descriptor) => descriptor.adapter.id === provider && descriptor.storeSource),
+      read: (provider, ref) => storeTailer.readRawRecord(provider, ref),
+    },
     registry,
     hooks,
     token,
@@ -638,6 +728,22 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     },
     settings: {
       explainer: explainerSettings,
+      ollamaModels: async (): Promise<OllamaModels> => {
+        // Ollama is asked only while it is the writer in force, not whenever the route is called.
+        if (activeExplainer().mode !== 'ollama')
+          return {
+            state: 'refused',
+            endpoint: null,
+            models: [],
+            reason: 'The local model route is not selected.',
+          };
+        const list = await listOllamaModels(process.env);
+        return list.state === 'ready'
+          ? { state: 'ready', endpoint: list.endpoint, models: list.models, reason: null }
+          : list.state === 'unreachable'
+            ? { state: 'unreachable', endpoint: list.endpoint, models: [], reason: list.reason }
+            : { state: 'refused', endpoint: null, models: [], reason: list.reason };
+      },
       setExplainerSettings: (change: ExplainerSettingsRequest) => {
         // Persist a candidate before it becomes live. A failed disk write must not leave this
         // process using settings the API reported as rejected.
@@ -645,6 +751,14 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
           ...stored,
           ...(change.cadence !== undefined ? { explainerCadence: change.cadence } : {}),
           ...(change.backend !== undefined ? { explainerBackend: change.backend } : {}),
+          // A model name belongs to the writer it was chosen for. Switching writer without naming
+          // a model clears it, as the interface does, so a local Ollama model name is never handed
+          // to a hosted CLI, and a CLI model id is never sent to Ollama.
+          ...(change.backend !== undefined &&
+          change.backend !== stored.explainerBackend &&
+          change.model === undefined
+            ? { explainerModel: null }
+            : {}),
           ...(change.model !== undefined ? { explainerModel: change.model } : {}),
         };
         writeSettings(config.home, candidate);
@@ -730,8 +844,11 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     trustRefreshController?.abort();
     if (collectionControlTimer) clearInterval(collectionControlTimer);
     tailer.stop();
+    storeTailer.stop();
     hooks.stop();
     git.stop();
+    locations.stop();
+    await historyWarmup.stop();
     // Tell open consumer feeds why they are ending before the connections are cut below.
     consumer.close();
     removeConsumerDiscovery(config.home, process.pid);
@@ -770,7 +887,11 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
       protocolVersion: PROTOCOL_VERSION,
       storeSchemaVersion: SCHEMA_VERSION,
     };
-    if (config.gitEnrichment) git.start();
+    if (config.gitEnrichment) {
+      git.start();
+      // Reading where a changed file lives is repository observation too, under the same switch.
+      locations.start();
+    }
     // Recover the spool before publishing daemon.json, not after. The file is what both the CLI's
     // readiness probe and every relay treat as "there is a daemon here", and the first drain is the
     // one moment a fresh daemon is busiest: announcing first meant a backlog could make `salidium
@@ -779,7 +900,10 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     hooks.startSpoolWatcher();
     writePrivateJsonAtomic(paths.daemonJson, daemonJson);
     writeConsumerDiscovery(config.home, discovery());
-    const initialBackfill = tailer.start(config.userHome, config.historyDays);
+    const initialBackfill = Promise.all([
+      tailer.start(config.userHome, config.historyDays),
+      storeTailer.start(config.userHome, config.historyDays),
+    ]);
     log.info('salidium daemon listening', {
       port,
       home: config.home,
@@ -868,6 +992,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
       });
     };
     startUsageBackfillWorker();
+    if (overrides.historyWarmup !== false) historyWarmup.start();
 
     const sampleOperations = () => {
       if (stopped) return;
@@ -936,6 +1061,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
       if (collectionPaused && markerExists && expireCollectionPause(config.home)) {
         collectionPaused = false;
         tailer.resume();
+        storeTailer.resume();
         hooks.drainSpool();
         log.info('collection pause expired');
         return;
@@ -943,11 +1069,13 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
       if (collectionPaused && !markerExists) {
         collectionPaused = false;
         tailer.resume();
+        storeTailer.resume();
         hooks.drainSpool();
         log.info('collection resumed');
       } else if (!collectionPaused && markerExists) {
         collectionPaused = true;
         tailer.pause();
+        storeTailer.pause();
         log.info('collection paused', { expiresAt: readCollectionPause(config.home)?.expiresAt });
       }
     };
@@ -1062,7 +1190,8 @@ if [ "$1" = "--send" ]; then
   # Serialize quota observation and publication across concurrent hook processes. Without this
   # small filesystem lock, many senders can all observe one remaining slot and overrun the hard
   # physical ceiling. A timed-out contender leaves its plain .json input durable for orphan drain.
-  QUOTA_LOCK="$PENDING/.quota-lock"
+  QUOTA_LOCK="$PENDING/${HOOK_QUOTA_LOCK_FILE}"
+  QUOTA_REAPING="$PENDING/${HOOK_QUOTA_REAPING_DIR}"
   QUOTA_ATTEMPTS=0
   while :; do
     set -C
@@ -1074,7 +1203,7 @@ if [ "$1" = "--send" ]; then
     QUOTA_ATTEMPTS=$((QUOTA_ATTEMPTS + 1))
     # Only one contender may reclaim a dead owner's lock. Without this guard, a late
     # contender can unlink a replacement lock acquired after another reclaimed it.
-    if mkdir "$QUOTA_LOCK.reaping" 2>/dev/null; then
+    if mkdir "$QUOTA_REAPING" 2>/dev/null; then
       LOCK_OWNER=''
       CURRENT_OWNER=''
       if [ -r "$QUOTA_LOCK" ]; then
@@ -1092,7 +1221,7 @@ if [ "$1" = "--send" ]; then
           fi;;
       esac
       fi
-      rmdir "$QUOTA_LOCK.reaping" 2>/dev/null
+      rmdir "$QUOTA_REAPING" 2>/dev/null
     fi
     [ "$QUOTA_ATTEMPTS" -lt 5000 ] || exit 0
     sleep 0.01
@@ -1157,7 +1286,15 @@ PROVIDER="\${1:-claude-code}"
 # Provider ids can contain the namespacing slash, but a slash in FILE creates an unintended
 # directory and makes the hook silently discard its stdin. Tilde and underscore cannot occur in a valid
 # provider id, so this is an injective, filename-safe encoding with an unambiguous separator.
-PROVIDER_FILE=$(printf '%s' "$PROVIDER" | tr '/' '~')
+# A provider id has at most one slash, so parameter expansion encodes it without a subprocess. The
+# earlier \`printf | tr\` substitution expanded to nothing when the process table was full, and the
+# envelope it named carried no provider the drain could ever attribute.
+# An id with a second slash is not a provider id; its encoding would keep a slash, so refuse it.
+case "$PROVIDER" in
+  */*/*) exit 0;;
+  */*) PROVIDER_FILE="\${PROVIDER%%/*}~\${PROVIDER#*/}";;
+  *) PROVIDER_FILE="$PROVIDER";;
+esac
 PENDING="$HOME_DIR/spool/pending"
 mkdir -p "$PENDING" 2>/dev/null && chmod 700 "$HOME_DIR/spool" "$PENDING" 2>/dev/null
 FILE="$PENDING/\${PROVIDER_FILE}_$(date -u +%s)-$$-$(od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \\n').json"

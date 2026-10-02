@@ -104,6 +104,14 @@ export interface UsageBackfillProgress {
  * exists so the daemon core is testable and so future storage work has a versioned boundary
  * instead of being spread through ingestion and projection code.
  */
+export interface SessionNeedingReplay {
+  sessionId: string;
+  provider: string;
+  providerSessionId: string;
+  cwd: string;
+  latestSeq: number;
+}
+
 export interface SalidiumStore {
   transaction<T>(fn: () => T): T;
   insertEvents(events: StoredEvent[]): void;
@@ -143,6 +151,29 @@ export interface SalidiumStore {
   deleteSession(sessionId: string): void;
   usageTotals(internal: boolean): UsageTotals | undefined;
   /** Optional for injected stores; SQLite reconstructs old usage cooperatively after startup. */
+  /**
+   * Sessions with events and no checkpoint at `reducerVersion`, which the next load would replay
+   * from the start, newest activity first. Salidium's own sessions are left out.
+   */
+  sessionsNeedingReplay?(reducerVersion: string, limit: number): SessionNeedingReplay[];
+  countSessionsNeedingReplay?(reducerVersion: string): number;
+  /**
+   * How many sessions needed replay when this reducer version first asked, kept durably so the
+   * progress a reader sees counts the same whole across restarts.
+   */
+  replayTotal?(reducerVersion: string, remaining: number): number;
+  /**
+   * Stores a session re-derived at `reducerVersion`, exactly as its first load would: the new
+   * checkpoint and the whole rewritten change log, and drops its checkpoints of other versions,
+   * all in one transaction.
+   */
+  saveReplayedSession?(
+    sessionId: string,
+    seq: number,
+    reducerVersion: string,
+    state: RunState,
+    changes: SemanticChange[],
+  ): void;
   usageBackfillProgress?(): UsageBackfillProgress;
   advanceUsageBackfill?(batchSize?: number): UsageBackfillProgress;
   agentMessagesBySession(): Generator<{ sessionId: string; messages: AuditMessageRow[] }>;

@@ -1,0 +1,14 @@
+{
+  "format": "salidium.session-feed",
+  "version": 1,
+  "type": "session.changed",
+  "at": "2026-09-20T16:20:00.000Z",
+  "sessionId": "codex:0199a3f2-7c4e-7b10-8d2a-5e6f9c1b3a47",
+  "native": {
+    "provider": "codex",
+    "sessionId": "0199a3f2-7c4e-7b10-8d2a-5e6f9c1b3a47"
+  },
+  "evidenceSeq": 8,
+  "status": "waiting",
+  "explanation": "disabled"
+}

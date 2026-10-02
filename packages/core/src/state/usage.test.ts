@@ -134,9 +134,11 @@ describe('reducer: agent.usage', () => {
       cacheWriteTokens: 0,
       lastByLane: {},
     });
-    // Summing usage is new derivation, so every checkpoint written before it is stale. This
-    // assertion exists to make the bump deliberate: change it in the same edit as the version.
-    expect(REDUCER_VERSION).toBe('1.12.0');
+    // New derivation makes every checkpoint written before it stale (1.13.0 added revision
+    // anchors and file locations, 1.14.0 folds a code cell's processes into a legacy cell, 1.15.0
+    // gives each anchor its repository). This assertion exists to make the bump deliberate: change
+    // it in the same edit as the version.
+    expect(REDUCER_VERSION).toBe('1.15.0');
     expect(fresh().reducerVersion).toBe(REDUCER_VERSION);
   });
 });

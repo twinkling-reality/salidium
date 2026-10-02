@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   rmSync,
   utimesSync,
   writeFileSync,
@@ -12,11 +13,17 @@ import { join } from 'node:path';
 import type { ProviderAdapter } from '@salidium/adapter-kit';
 import type { CanonicalEvent } from '@salidium/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createLogger } from '../logging/logger.ts';
+import { createLogger, type Logger } from '../logging/logger.ts';
 import type { SessionRegistry } from '../sessions/sessionRegistry.ts';
 import { readCollectionGapLedger } from './collectionGaps.ts';
 import { HookIngress } from './hookIngress.ts';
-import { MAX_SPOOL_DRAIN_BATCH, TRUNCATED_HOOK_PAYLOAD_KEY } from './limits.ts';
+import {
+  HOOK_QUOTA_LOCK_FILE,
+  HOOK_QUOTA_REAPING_DIR,
+  MAX_SPOOL_DRAIN_BATCH,
+  STALE_HOOK_QUOTA_REAPING_MS,
+  TRUNCATED_HOOK_PAYLOAD_KEY,
+} from './limits.ts';
 import type { TranscriptTailer } from './transcriptTailer.ts';
 
 const dirs: string[] = [];
@@ -27,7 +34,12 @@ afterEach(() => {
 
 function fixture(
   flush: () => boolean = () => true,
-  limits: { maxPayloadBytes?: number; maxSpoolRecordBytes?: number } = {},
+  limits: {
+    maxPayloadBytes?: number;
+    maxSpoolRecordBytes?: number;
+    maxQuarantinedFiles?: number;
+    log?: Logger;
+  } = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), 'salidium-hooks-'));
   dirs.push(dir);
@@ -217,6 +229,200 @@ describe('HookIngress durability and recovery', () => {
     expect(seenPayloads).toEqual([{ enabled: 'drained' }]);
     expect(existsSync(join(pending, 'claude-code_2-9999-x.ready.json'))).toBe(false);
     expect(existsSync(join(pending, 'codex_1-0000-x.ready.json.processing'))).toBe(true);
+  });
+
+  /*
+   * A relay that lost its provider to a failed fork named its envelopes `_<time>-<pid>-<random>`.
+   * The drain read `_<time>` as the provider, found it disabled, and retained the envelope forever.
+   * No configuration can enable a provider that is not a provider id, so these are quarantined:
+   * kept unread and undeleted, and each pass that sets any aside records one observed gap without a
+   * guessed loss count.
+   */
+  it('quarantines an envelope whose name carries no provider instead of retaining it forever', () => {
+    const { dir, hooks, seenPayloads } = fixture();
+    const pending = join(dir, 'pending');
+    mkdirSync(pending);
+    const old = new Date('2026-09-09T19:15:30.000Z');
+    const plant = (name: string, at: Date | undefined) => {
+      writeFileSync(join(pending, name), JSON.stringify({ synthetic: name }));
+      if (at) utimesSync(join(pending, name), at, at);
+    };
+    plant('_1788981330-49817-147de426.json', new Date('2026-09-09T19:20:00.000Z'));
+    plant('_1788981410-77997-13ca39bc.ready.json', old);
+    plant('_1788981852-8914-.json', new Date('2026-09-09T19:24:12.000Z'));
+    // A plain envelope may still belong to a sender that is about to deliver or publish it.
+    plant('_1790954716-15107-3aef6314.json', undefined);
+    plant('claude-code_1790954716-11848-57f91d27.ready.json', undefined);
+    // A namespaced provider that is not enabled here is a provider id all the same. It waits.
+    plant('salidium~opencode_1790954716-2-ab.ready.json', old);
+
+    hooks.drainSpool();
+
+    expect(seenPayloads).toEqual([
+      { synthetic: 'claude-code_1790954716-11848-57f91d27.ready.json' },
+    ]);
+    expect(readdirSync(pending).sort()).toEqual([
+      '_1788981330-49817-147de426.json.unattributed',
+      '_1788981410-77997-13ca39bc.ready.json.unattributed',
+      '_1788981852-8914-.json.unattributed',
+      '_1790954716-15107-3aef6314.json',
+      'salidium~opencode_1790954716-2-ab.ready.json',
+    ]);
+    expect(
+      JSON.parse(readFileSync(join(pending, '_1788981852-8914-.json.unattributed'), 'utf8')),
+    ).toEqual({ synthetic: '_1788981852-8914-.json' });
+    const ledger = join(dir, 'collection-gaps.json');
+    expect(readCollectionGapLedger(ledger).episodes).toMatchObject([
+      {
+        reason: 'hook-envelope-unattributed',
+        provider: null,
+        event: null,
+        pressure: null,
+        firstDroppedAt: old.toISOString(),
+        exactCount: null,
+      },
+    ]);
+
+    // Quarantine is the claim. Later passes neither retry the files nor count them again.
+    hooks.drainSpool();
+    expect(readCollectionGapLedger(ledger).episodes).toHaveLength(1);
+    expect(seenPayloads).toHaveLength(1);
+  });
+
+  it('bounds the quarantine and keeps envelopes past it in place and out of the batch', () => {
+    const { dir, hooks, seenPayloads } = fixture(() => true, { maxQuarantinedFiles: 3 });
+    const pending = join(dir, 'pending');
+    mkdirSync(pending);
+    const old = new Date('2026-09-09T19:15:30.000Z');
+    const plant = (name: string) => {
+      writeFileSync(join(pending, name), JSON.stringify({ synthetic: name }));
+      utimesSync(join(pending, name), old, old);
+    };
+    plant('claude-code_1-1-big.ready.json.processing.oversized');
+    plant('_1-2-a.ready.json.unattributed');
+    for (const name of ['_2-1-a.ready.json', '_2-2-b.ready.json', '_2-3-c.ready.json']) plant(name);
+    plant('claude-code_3-1-a.ready.json');
+
+    hooks.drainSpool();
+
+    expect(seenPayloads).toEqual([{ synthetic: 'claude-code_3-1-a.ready.json' }]);
+    expect(readdirSync(pending).sort()).toEqual([
+      '_1-2-a.ready.json.unattributed',
+      '_2-1-a.ready.json.unattributed',
+      '_2-2-b.ready.json',
+      '_2-3-c.ready.json',
+      'claude-code_1-1-big.ready.json.processing.oversized',
+    ]);
+    const ledger = join(dir, 'collection-gaps.json');
+    expect(readCollectionGapLedger(ledger).episodes.map((gap) => gap.reason)).toEqual([
+      'hook-envelope-unattributed',
+      'hook-quarantine-full',
+    ]);
+
+    // The full quarantine is one episode, and what it holds back cannot crowd out real work.
+    plant('claude-code_3-2-b.ready.json');
+    hooks.drainSpool();
+    expect(seenPayloads).toHaveLength(2);
+    expect(readCollectionGapLedger(ledger).episodes).toHaveLength(2);
+
+    // Once the owner clears room, the rest are set aside, and a later full quarantine is new.
+    rmSync(join(pending, 'claude-code_1-1-big.ready.json.processing.oversized'));
+    rmSync(join(pending, '_1-2-a.ready.json.unattributed'));
+    hooks.drainSpool();
+    expect(readdirSync(pending).filter((name) => !name.endsWith('.unattributed'))).toEqual([]);
+    expect(readCollectionGapLedger(ledger).episodes.map((gap) => gap.reason)).toEqual([
+      'hook-envelope-unattributed',
+      'hook-quarantine-full',
+      'hook-envelope-unattributed',
+    ]);
+  });
+
+  it('never overwrites a quarantined envelope that already holds the name', () => {
+    const { dir, hooks } = fixture();
+    const pending = join(dir, 'pending');
+    mkdirSync(pending);
+    writeFileSync(join(pending, '_1-1-a.ready.json'), '{"synthetic":"newer"}');
+    writeFileSync(join(pending, '_1-1-a.ready.json.unattributed'), '{"synthetic":"earlier"}');
+
+    hooks.drainSpool();
+
+    expect(readFileSync(join(pending, '_1-1-a.ready.json.unattributed'), 'utf8')).toBe(
+      '{"synthetic":"earlier"}',
+    );
+    expect(readFileSync(join(pending, '_1-1-a.ready.json'), 'utf8')).toBe('{"synthetic":"newer"}');
+    expect(readCollectionGapLedger(join(dir, 'collection-gaps.json')).episodes).toEqual([]);
+  });
+
+  it('removes an abandoned relay reaping guard and leaves the quota lock to the relay', () => {
+    const { dir, hooks } = fixture();
+    const pending = join(dir, 'pending');
+    mkdirSync(pending);
+    const guard = join(pending, HOOK_QUOTA_REAPING_DIR);
+    const lock = join(pending, HOOK_QUOTA_LOCK_FILE);
+    mkdirSync(guard);
+    writeFileSync(lock, '999999\n');
+
+    // A guard younger than the bound may belong to a reaper that is still running.
+    const recent = new Date(Date.now() - STALE_HOOK_QUOTA_REAPING_MS + 30_000);
+    utimesSync(guard, recent, recent);
+    hooks.drainSpool();
+    expect(existsSync(guard)).toBe(true);
+
+    const abandoned = new Date(Date.now() - STALE_HOOK_QUOTA_REAPING_MS - 1_000);
+    utimesSync(guard, abandoned, abandoned);
+    hooks.drainSpool();
+    expect(existsSync(guard)).toBe(false);
+    // Whether that owner is dead is the relay's question, asked under the guard it can now take.
+    expect(readFileSync(lock, 'utf8')).toBe('999999\n');
+  });
+
+  it('treats a reaping guard dated far in the future as abandoned', () => {
+    const { dir, hooks } = fixture();
+    const pending = join(dir, 'pending');
+    mkdirSync(pending);
+    const guard = join(pending, HOOK_QUOTA_REAPING_DIR);
+    mkdirSync(guard);
+
+    // Ordinary skew between the relay's and the daemon's view of now is not abandonment.
+    const skewed = new Date(Date.now() + 30_000);
+    utimesSync(guard, skewed, skewed);
+    hooks.drainSpool();
+    expect(existsSync(guard)).toBe(true);
+
+    // A clock set back by more than the bound would otherwise keep the guard until it caught up.
+    const future = new Date(Date.now() + STALE_HOOK_QUOTA_REAPING_MS + 1_000);
+    utimesSync(guard, future, future);
+    hooks.drainSpool();
+    expect(existsSync(guard)).toBe(false);
+  });
+
+  it('warns once about a reaping guard it cannot clear, not on every pass', () => {
+    const warnings: string[] = [];
+    const log: Logger = { info() {}, debug() {}, warn: (message) => warnings.push(message) };
+    const { dir, hooks } = fixture(() => true, { log });
+    const pending = join(dir, 'pending');
+    mkdirSync(pending);
+    const guard = join(pending, HOOK_QUOTA_REAPING_DIR);
+    const abandoned = new Date(Date.now() - STALE_HOOK_QUOTA_REAPING_MS - 1_000);
+
+    // Not empty, so rmdir refuses it. The relay never puts anything inside its guard.
+    mkdirSync(guard);
+    writeFileSync(join(guard, 'unexpected'), '');
+    utimesSync(guard, abandoned, abandoned);
+    for (let pass = 0; pass < 3; pass++) hooks.drainSpool();
+    expect(warnings).toEqual(['abandoned relay reaping guard was not removed']);
+
+    rmSync(join(guard, 'unexpected'));
+    utimesSync(guard, abandoned, abandoned);
+    hooks.drainSpool();
+    expect(existsSync(guard)).toBe(false);
+    expect(warnings.at(-1)).toBe('abandoned relay reaping guard removed');
+
+    // A file in the guard's place blocks every mkdir just the same. It is reported, not removed.
+    writeFileSync(guard, '');
+    for (let pass = 0; pass < 3; pass++) hooks.drainSpool();
+    expect(existsSync(guard)).toBe(true);
+    expect(warnings.slice(2)).toEqual(['relay reaping guard name is taken by a non-directory']);
   });
 
   it('preserves processing and pending files when persistence is deferred', () => {

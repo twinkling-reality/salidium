@@ -74,6 +74,18 @@ importers:
         specifier: workspace:*
         version: link:../../core
 
+  packages/adapters/opencode:
+    dependencies:
+      '@salidium/adapter-kit':
+        specifier: workspace:*
+        version: link:../../adapter-kit
+      '@salidium/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@salidium/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
+
   packages/cli:
     devDependencies:
       '@salidium/adapter-claude-code':
@@ -85,6 +97,9 @@ importers:
       '@salidium/adapter-kit':
         specifier: workspace:*
         version: link:../adapter-kit
+      '@salidium/adapter-opencode':
+        specifier: workspace:*
+        version: link:../adapters/opencode
       '@salidium/consumer-contract':
         specifier: workspace:*
         version: link:../consumer-contract
@@ -121,6 +136,9 @@ importers:
       '@salidium/adapter-kit':
         specifier: workspace:*
         version: link:../adapter-kit
+      '@salidium/adapter-opencode':
+        specifier: workspace:*
+        version: link:../adapters/opencode
       '@salidium/consumer-contract':
         specifier: workspace:*
         version: link:../consumer-contract

@@ -11,6 +11,8 @@ import {
   SessionLookupSchema,
   SessionReportSchema,
 } from '@salidium/consumer-contract';
+import type { EventBuilder } from '@salidium/core/testing';
+import type { CanonicalEvent } from '@salidium/protocol';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { type DaemonHandle, startDaemon } from '../daemon.ts';
@@ -20,7 +22,7 @@ import {
   listConsumerCredentials,
   revokeConsumerCredential,
 } from './credentials.ts';
-import { consumerDiscoveryPath } from './discovery.ts';
+import { consumerDiscovery, consumerDiscoveryPath, experimentalContracts } from './discovery.ts';
 import {
   CONSUMER_CANARIES,
   CONSUMER_SECRET,
@@ -35,6 +37,10 @@ const providers = join(root, 'providers');
 let daemon: DaemonHandle;
 let token: string;
 
+const CHECKOUT = '/Users/dev/acme/checkout';
+const LANE = '/Users/dev/acme/checkout-refunds';
+/** The scenario's scratch repository, whose name holds the secret, as it crosses: redacted. */
+const SCRATCH = '/Users/dev/scratch-ghp_[GITHUB_TOKEN#1]';
 const VERIFIED_ID = `claude-code:${SCENARIO_SESSIONS.verified.sessionId}`;
 const WORKING_ID = `claude-code:${SCENARIO_SESSIONS.working.sessionId}`;
 const FAILING_ID = `codex:${SCENARIO_SESSIONS.failing.sessionId}`;
@@ -140,7 +146,7 @@ describe('consumer discovery', () => {
       {
         name: 'salidium.consumer',
         major: 1,
-        minor: 0,
+        minor: 1,
         baseUrl: `http://127.0.0.1:${daemon.port}/consumer/v1`,
       },
     ]);
@@ -157,6 +163,170 @@ describe('consumer discovery', () => {
     );
     expect(served.instanceId).toBe(file.instanceId);
     expect(served.pid).toBe(process.pid);
+    expect(served.providers).toEqual(file.providers);
+  });
+
+  it('lists exactly the providers the instance launched with, which here is none', async () => {
+    const served = exactly(
+      ConsumerDiscoverySchema,
+      (await get('/consumer/v1/discovery', null)).body,
+    );
+    expect(served.providers).toEqual([]);
+  });
+
+  it('keeps listing what it observes when enabled providers change until it restarts', async () => {
+    const owner = (path: string, init: RequestInit = {}) =>
+      fetch(url(path), {
+        ...init,
+        headers: { Authorization: `Bearer ${daemon.token}`, ...(init.headers ?? {}) },
+      });
+    const before = (await (await owner('/api/operations')).json()) as {
+      config: { revision: number };
+    };
+    const changed = await owner('/api/operations/config', {
+      method: 'PUT',
+      headers: { 'If-Match': String(before.config.revision) },
+      body: JSON.stringify({ providers: { enabled: ['claude-code'] } }),
+    });
+    expect(changed.status).toBe(200);
+    const effective = (await changed.json()) as { revision: number; restartRequired: string[] };
+    expect(effective.restartRequired).toContain('providers.enabled');
+    const served = exactly(
+      ConsumerDiscoverySchema,
+      (await get('/consumer/v1/discovery', null)).body,
+    );
+    expect(served.providers).toEqual([]);
+    const restored = await owner('/api/operations/config?key=providers.enabled', {
+      method: 'DELETE',
+      headers: { 'If-Match': String(effective.revision) },
+    });
+    expect(restored.status).toBe(200);
+  });
+
+  it('lists no experimental contract unless the embedder supplies one', async () => {
+    const served = exactly(
+      ConsumerDiscoverySchema,
+      (await get('/consumer/v1/discovery', null)).body,
+    );
+    expect(served.experimental).toEqual([]);
+  });
+
+  it('lists supplied experimental contracts once each, sorted, valid, and at most eight', () => {
+    const entry = (name: string, path = 'map') => ({
+      name,
+      major: 0,
+      minor: 1,
+      baseUrl: `http://127.0.0.1:47822/${path}/v0`,
+    });
+    const reasons: string[] = [];
+    const listed = experimentalContracts(
+      () => [
+        entry('salidium.project-map'),
+        entry('salidium.another'),
+        entry('salidium.project-map'),
+        { ...entry('salidium.remote'), baseUrl: 'http://example.com:47822/x/v0' },
+        { ...entry('salidium.negative'), major: -1 },
+        { ...entry('salidium.elsewhere'), baseUrl: 'http://127.0.0.1:9/map/v0' },
+        { ...entry('salidium.no-such-port'), baseUrl: 'http://127.0.0.1:99999/map/v0' },
+        'not an entry',
+        ...Array.from({ length: 9 }, (_, i) => entry(`salidium.z${i}`)),
+      ],
+      47822,
+      (reason) => reasons.push(reason),
+    );
+    expect(listed.map((e) => e.name)).toEqual([
+      'salidium.another',
+      'salidium.project-map',
+      'salidium.z0',
+      'salidium.z1',
+      'salidium.z2',
+      'salidium.z3',
+      'salidium.z4',
+      'salidium.z5',
+    ]);
+    expect(reasons).toHaveLength(7);
+    // A supplier that fails or returns something else lists nothing and does not stop the daemon.
+    const failures: string[] = [];
+    expect(
+      experimentalContracts(
+        () => {
+          throw new Error('broken supplier');
+        },
+        47822,
+        (reason) => failures.push(reason),
+      ),
+    ).toEqual([]);
+    expect(
+      experimentalContracts(
+        () => ({ not: 'a list' }),
+        47822,
+        (r) => failures.push(r),
+      ),
+    ).toEqual([]);
+    expect(failures).toHaveLength(2);
+  });
+
+  it('serves the same experimental list in the file and at the endpoint, asked once', async () => {
+    const otherRoot = mkdtempSync(join(tmpdir(), 'salidium-experimental-'));
+    let calls = 0;
+    const other = await startDaemon({
+      home: join(otherRoot, 'salidium'),
+      userHome: join(otherRoot, 'providers'),
+      port: 0,
+      providers: [],
+      gitEnrichment: false,
+      historyDays: 0,
+      logLevel: 'silent',
+      alertSink: { publish: () => {} },
+      experimentalContracts: ({ port }) => {
+        calls += 1;
+        return [
+          {
+            name: 'salidium.project-map',
+            major: 0,
+            minor: 0,
+            baseUrl: `http://127.0.0.1:${port}/project-map/v0`,
+          },
+        ];
+      },
+    });
+    try {
+      const file = ConsumerDiscoverySchema.parse(
+        JSON.parse(readFileSync(consumerDiscoveryPath(join(otherRoot, 'salidium')), 'utf8')),
+      );
+      const response = await fetch(`http://127.0.0.1:${other.port}/consumer/v1/discovery`);
+      const served = exactly(ConsumerDiscoverySchema, await response.json());
+      expect(served.experimental).toEqual([
+        {
+          name: 'salidium.project-map',
+          major: 0,
+          minor: 0,
+          baseUrl: `http://127.0.0.1:${other.port}/project-map/v0`,
+        },
+      ]);
+      expect(file.experimental).toEqual(served.experimental);
+      expect(calls).toBe(1);
+    } finally {
+      await other.stop();
+      rmSync(otherRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('names each provider once, sorted, by the id lookup takes', () => {
+    const discovery = consumerDiscovery({
+      port: 47822,
+      providers: ['salidium/opencode', 'codex', 'claude-code', 'codex'],
+      pid: 1,
+      instanceId: '0'.repeat(32),
+      startedAt: '2026-10-02T00:00:00.000Z',
+      version: '0.0.0',
+      now: 0,
+    });
+    expect(exactly(ConsumerDiscoverySchema, discovery).providers).toEqual([
+      { id: 'claude-code' },
+      { id: 'codex' },
+      { id: 'salidium/opencode' },
+    ]);
   });
 });
 
@@ -332,17 +502,18 @@ describe('consumer documents', () => {
     expect(destructive?.items[0]?.instance).toBe('rm -rf node_modules/.cache');
     expect(report.verdict).toMatchObject({ tone: 'attention', provenance: 'observed' });
     expect(report.changes.files.map((file) => file.path)).toEqual([
-      'src/payments/refunds.ts',
-      'src/payments/ChargeService.test.ts',
-      'src/checkout/RetryWorker.ts',
-      'src/payments/ChargeService.ts',
+      `${SCRATCH}/notes.md`,
+      `${LANE}/src/payments/refunds.ts`,
+      `${CHECKOUT}/src/payments/ChargeService.test.ts`,
+      `${CHECKOUT}/src/checkout/RetryWorker.ts`,
+      `${CHECKOUT}/src/payments/ChargeService.ts`,
     ]);
     // Edited by a subagent: the interface's reason for it is the delegation brief, a tool input.
     const delegated = report.changes.files.find(
-      (file) => file.path === 'src/payments/ChargeService.test.ts',
+      (file) => file.path === `${CHECKOUT}/src/payments/ChargeService.test.ts`,
     );
     expect(delegated?.reason).toBeNull();
-    const [refunds, retry] = report.changes.files;
+    const [, refunds, retry] = report.changes.files;
     expect(refunds?.coverage).toEqual({ verifiedAfter: false, by: null, provenance: 'inferred' });
     expect(retry?.coverage).toMatchObject({ verifiedAfter: true, provenance: 'inferred' });
     expect(report.verification.runs[0]).toMatchObject({
@@ -350,7 +521,52 @@ describe('consumer documents', () => {
       outcome: 'pass',
       counts: { passed: 118, failed: null, skipped: null, total: 118 },
     });
-    expect(report.verification.unverifiedFiles).toEqual(['src/payments/refunds.ts']);
+    expect(report.verification.unverifiedFiles).toEqual([
+      `${SCRATCH}/notes.md`,
+      `${LANE}/src/payments/refunds.ts`,
+    ]);
+    // 1.1: where the work started and stands, and where each file lives. The agent wrote one file
+    // in a linked worktree of the session's repository, which session.repositoryRoot cannot say.
+    expect(report.revision).toEqual({
+      atStart: {
+        root: CHECKOUT,
+        head: '3f9a2c1d8e7b6a5f4c3d2e1f0a9b8c7d6e5f4a3b',
+        branch: 'fix/double-charge',
+        at: expect.any(String),
+        provenance: 'observed',
+      },
+      atLatestTurnEnd: {
+        root: CHECKOUT,
+        head: '8b1e4d7a2c9f6b3e0d5a8c1f4b7e2d9a6c3f0b5e',
+        // The branch name holds the secret, so it is not carried rather than carried altered.
+        branch: null,
+        at: expect.any(String),
+        provenance: 'observed',
+      },
+    });
+    expect(report.changes.files.map((file) => file.repository)).toEqual([
+      // The scratch repository's name holds the secret: its location is not carried at all.
+      null,
+      { root: LANE, path: 'src/payments/refunds.ts', mainRoot: CHECKOUT, provenance: 'observed' },
+      {
+        root: CHECKOUT,
+        path: 'src/payments/ChargeService.test.ts',
+        mainRoot: null,
+        provenance: 'observed',
+      },
+      {
+        root: CHECKOUT,
+        path: 'src/checkout/RetryWorker.ts',
+        mainRoot: null,
+        provenance: 'observed',
+      },
+      {
+        root: CHECKOUT,
+        path: 'src/payments/ChargeService.ts',
+        mainRoot: null,
+        provenance: 'observed',
+      },
+    ]);
     expect(report.review.groups.map((group) => group.rule)).toContain('destructive:rm-rf');
     expect(report.remaining.items).toEqual([
       expect.objectContaining({ text: 'Document refund behaviour for support', source: 'plan' }),
@@ -386,6 +602,9 @@ describe('consumer documents', () => {
     // Codex gave no title, and the prompt-derived fallback is not carried.
     expect(report.session.title).toBeNull();
     expect(report.session.repositoryRoot).toBeNull();
+    // Nothing watched this session's boundaries or located its files: null, never a guess.
+    expect(report.revision).toEqual({ atStart: null, atLatestTurnEnd: null });
+    expect(report.changes.files.map((file) => file.repository)).toEqual([null]);
     expect(report.session.endedAt).toBeNull();
     expect(report.explanation).toEqual({
       status: 'disabled',
@@ -413,7 +632,36 @@ describe('consumer documents', () => {
   it('does not serve Salidium’s own sessions or unknown ones', async () => {
     for (const segment of [encodeURIComponent(INTERNAL_ID), encodeURIComponent('codex:unknown')])
       expect((await get(`/consumer/v1/sessions/${segment}/report`)).status).toBe(404);
-    expect((await get('/consumer/v1/sessions/%E0%A4%A/report')).status).toBe(400);
+  });
+
+  it('answers a long session id or one with control characters in the contract’s own codes', async () => {
+    for (const id of [
+      `claude-code:${'a'.repeat(600)}`,
+      'a'.repeat(513),
+      'claude-code:a\u0001b',
+      'claude-code:a\u0000b',
+      'a\u007fb',
+      'claude-code:a\nb',
+    ]) {
+      const report = await get(`/consumer/v1/sessions/${encodeURIComponent(id)}/report`);
+      expect(report.status, JSON.stringify(id)).toBe(404);
+      expect(exactly(ConsumerErrorSchema, report.body).error).toBe('not-found');
+      const native = id.replace(/^claude-code:/, '');
+      const lookup = await get(
+        `/consumer/v1/sessions/lookup?provider=claude-code&sessionId=${encodeURIComponent(native)}`,
+      );
+      expect(lookup.status, JSON.stringify(id)).toBe(400);
+      expect(exactly(ConsumerErrorSchema, lookup.body).error).toBe('bad-request');
+    }
+  });
+
+  it('answers a session id with malformed percent-encoding as a bad request, not a failure', async () => {
+    for (const segment of ['%E0%A4%A', '%', 'claude-code%3A%ZZ']) {
+      const { status, headers, body } = await get(`/consumer/v1/sessions/${segment}/report`);
+      expect(status, segment).toBe(400);
+      expect(headers.get('cache-control')).toBe('no-store');
+      expect(exactly(ConsumerErrorSchema, body).error).toBe('bad-request');
+    }
   });
 });
 
@@ -533,7 +781,458 @@ describe('consumer change feed', () => {
   });
 });
 
+/*
+ * The store keeps whatever id a provider wrote, but the contract's native identity is bounded: at
+ * most 512 characters and no control characters. A stored session outside that cannot be named in
+ * a valid document, so it is left out rather than allowed to make the whole list, or the feed a
+ * consumer reads with `readFeedMessage`, fail validation.
+ */
+describe('sessions the contract cannot identify', () => {
+  const UNREPRESENTABLE = [
+    `codex:${'x'.repeat(600)}`,
+    'codex:bad\u0001id',
+    'codex:bad\u007fid',
+    'codex:bad\nid',
+  ];
+  const NEIGHBOUR = 'codex:representable-neighbour';
+  const message = (sessionId: string) => ({
+    id: `${sessionId}#m1`,
+    sessionId,
+    ts: '2026-09-20T16:13:00.000Z',
+    tsSource: 'provider' as const,
+    source: { provider: 'codex' as const, channel: 'rollout' as const },
+    kind: 'agent.message' as const,
+    text: 'Checked the migration.',
+  });
+
+  it('leaves them out of the list and the feed, and does not report them', async () => {
+    const before = exactly(SessionListSchema, (await get('/consumer/v1/sessions?limit=2000')).body);
+    const feed = await openFeed(token);
+    expect(await feed.next()).toMatchObject({ type: 'resync' });
+    try {
+      for (const id of [...UNREPRESENTABLE, NEIGHBOUR]) {
+        daemon.registry.ingest(id, [message(id)], { cwd: CHECKOUT });
+        daemon.registry.flush(id);
+      }
+      for (const id of UNREPRESENTABLE)
+        expect(daemon.registry.summaryOf(id), 'stored as the provider wrote it').toBeDefined();
+
+      // The first message after resync is the neighbour: nothing was sent for the others.
+      expect(await feed.next()).toMatchObject({ type: 'session.changed', sessionId: NEIGHBOUR });
+
+      const after = exactly(
+        SessionListSchema,
+        (await get('/consumer/v1/sessions?limit=2000')).body,
+      );
+      expect(after.total).toBe(before.total + 1);
+      expect(after.sessions.map((s) => s.id)).toContain(NEIGHBOUR);
+      for (const id of UNREPRESENTABLE) expect(after.sessions.map((s) => s.id)).not.toContain(id);
+      const bounded = exactly(SessionListSchema, (await get('/consumer/v1/sessions?limit=1')).body);
+      expect(bounded.total).toBe(after.total);
+
+      for (const id of UNREPRESENTABLE) {
+        const report = await get(`/consumer/v1/sessions/${encodeURIComponent(id)}/report`);
+        expect(report.status, JSON.stringify(id)).toBe(404);
+        expect(exactly(ConsumerErrorSchema, report.body).error).toBe('not-found');
+      }
+    } finally {
+      feed.close();
+      for (const id of [...UNREPRESENTABLE, NEIGHBOUR]) daemon.registry.forget(id);
+    }
+  });
+});
+
+/*
+ * The producer's rule: every document served under /consumer passes its own exact parse. These
+ * sessions are stored with values the contract bounds: a cwd longer than any path it carries, a
+ * model id longer than its field, a changed file path that cannot cross whole, and a plan step id
+ * that makes a remaining item's id too long.
+ */
+describe('values a stored session holds that the contract cannot carry', () => {
+  const LONG = (n: number) => `/repo/${'d'.repeat(n)}`;
+
+  async function store(sessionId: string, build: (b: EventBuilder) => CanonicalEvent[]) {
+    const { EventBuilder } = await import('@salidium/core/testing');
+    const b = new EventBuilder(sessionId, '2026-09-20T16:20:00.000Z');
+    const events = build(b);
+    daemon.registry.ingest(sessionId, events, { cwd: '/repo' });
+    daemon.registry.flush(sessionId);
+  }
+  const report = (id: string) => get(`/consumer/v1/sessions/${encodeURIComponent(id)}/report`);
+  const listed = async () =>
+    exactly(SessionListSchema, (await get('/consumer/v1/sessions?limit=2000')).body);
+
+  it('leaves out a session whose cwd cannot cross whole, everywhere a session is named', async () => {
+    const id = 'claude-code:cwd-too-long';
+    const neighbour = 'claude-code:cwd-neighbour';
+    const before = await listed();
+    const feed = await openFeed(token);
+    expect(await feed.next()).toMatchObject({ type: 'resync' });
+    try {
+      await store(id, (b) => [
+        b.sessionStarted(LONG(5000)),
+        b.turnStarted('Go'),
+        b.turnEnded('Done.'),
+      ]);
+      await store(neighbour, (b) => [b.sessionStarted('/repo'), b.turnStarted('Go')]);
+      expect(daemon.registry.summaryOf(id)?.cwd.length).toBeGreaterThan(4096);
+
+      let message = await feed.next();
+      while (message !== 'ended' && message.type === 'heartbeat') message = await feed.next();
+      expect(message).toMatchObject({ type: 'session.changed', sessionId: neighbour });
+
+      const after = await listed();
+      expect(after.total).toBe(before.total + 1);
+      expect(after.sessions.map((s) => s.id)).not.toContain(id);
+
+      const lookup = await get(
+        '/consumer/v1/sessions/lookup?provider=claude-code&sessionId=cwd-too-long',
+      );
+      expect(lookup.status).toBe(404);
+      expect(exactly(ConsumerErrorSchema, lookup.body).error).toBe('session-not-observed');
+      const r = await report(id);
+      expect(r.status).toBe(404);
+      expect(exactly(ConsumerErrorSchema, r.body).error).toBe('not-found');
+    } finally {
+      feed.close();
+      daemon.registry.forget(id);
+      daemon.registry.forget(neighbour);
+    }
+  });
+
+  it('serves a model id that cannot cross whole as null, and the session with it', async () => {
+    const id = 'claude-code:model-too-long';
+    try {
+      await store(id, (b) => [
+        b.sessionStarted('/repo', `model-${'m'.repeat(300)}`),
+        b.turnStarted('Go'),
+      ]);
+      const entry = (await listed()).sessions.find((s) => s.id === id);
+      expect(entry?.model).toBeNull();
+      const r = await report(id);
+      expect(r.status).toBe(200);
+      expect(exactly(SessionReportSchema, r.body).session.model).toBeNull();
+      const lookup = await get(
+        '/consumer/v1/sessions/lookup?provider=claude-code&sessionId=model-too-long',
+      );
+      expect(exactly(SessionLookupSchema, lookup.body).session.model).toBeNull();
+    } finally {
+      daemon.registry.forget(id);
+    }
+  });
+
+  it('leaves a changed file whose path cannot cross whole out of the report, and serves the rest', async () => {
+    const id = 'claude-code:path-too-long';
+    const long = LONG(4200);
+    try {
+      await store(id, (b) => [
+        b.sessionStarted('/repo'),
+        b.turnStarted('Edit two files'),
+        ...b.edit('e1', long, 3, 1),
+        ...b.edit('e2', '/repo/short.ts', 2, 0),
+        b.turnEnded('Done.'),
+      ]);
+      expect(Object.keys(daemon.registry.readSession(id)?.state.files ?? {})).toContain(long);
+      const r = await report(id);
+      expect(r.status).toBe(200);
+      const body = exactly(SessionReportSchema, r.body);
+      expect(body.changes.files.map((f) => f.path)).toEqual(['/repo/short.ts']);
+      expect(body.verification.unverifiedFiles).toEqual(['/repo/short.ts']);
+    } finally {
+      daemon.registry.forget(id);
+    }
+  });
+
+  it('answers not found for a report that fails its own schema, without losing the session', async () => {
+    const id = 'claude-code:plan-id-too-long';
+    try {
+      await store(id, (b) => [
+        b.sessionStarted('/repo'),
+        b.turnStarted('Plan it'),
+        b.plan([{ id: 'p'.repeat(700), text: 'Write the migration', status: 'pending' }]),
+      ]);
+      const r = await report(id);
+      expect(r.status).toBe(404);
+      expect(exactly(ConsumerErrorSchema, r.body).error).toBe('not-found');
+      // The entry itself is valid, so the session is still listed and can still be looked up.
+      expect((await listed()).sessions.map((s) => s.id)).toContain(id);
+      const lookup = await get(
+        '/consumer/v1/sessions/lookup?provider=claude-code&sessionId=plan-id-too-long',
+      );
+      expect(lookup.status).toBe(200);
+    } finally {
+      daemon.registry.forget(id);
+    }
+  });
+
+  it('drops what fails its schema from the list and feed, and logs where, never what', async () => {
+    const { createServer } = await import('node:http');
+    const { createConsumerRoutes } = await import('./routes.ts');
+    const { ConsumerCredentialVerifier } = await import('./credentials.ts');
+    const netHome = mkdtempSync(join(tmpdir(), 'salidium-consumer-net-'));
+    const { token: netToken } = createConsumerCredential(netHome, 'net test');
+    const good = daemon.registry.summaryOf(VERIFIED_ID);
+    if (!good) throw new Error('the verified session is seeded');
+    const SECRET_TIME = 'not-a-time-planted-value';
+    const badTime = {
+      ...good,
+      id: 'claude-code:bad-time',
+      providerSessionId: 'bad-time',
+      startedAt: SECRET_TIME,
+    };
+    const badId = {
+      ...good,
+      id: 'claude-code:bad\u0001planted',
+      providerSessionId: 'bad\u0001planted',
+    };
+    const summaries = [badTime, badId, good];
+    let publish: (summary: typeof good) => void = () => {};
+    const warn = vi.fn();
+    const routes = createConsumerRoutes({
+      registry: {
+        listSessions: () => summaries,
+        summaryOf: (sessionId: string) => summaries.find((s) => s.id === sessionId),
+        subscribeSummaries: (sub: typeof publish) => {
+          publish = sub;
+          return () => {};
+        },
+        subscribeRemovals: () => () => {},
+      } as never,
+      credentials: new ConsumerCredentialVerifier(netHome),
+      discovery: () => ({ format: 'salidium.consumer-discovery' }) as never,
+      now: () => SCENARIO_CLOCK,
+      log: { info: () => {}, warn, debug: () => {} },
+    });
+    const server = createServer((req, res) =>
+      routes.handle(req, res, new URL(req.url ?? '/', 'http://127.0.0.1')),
+    );
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as { port: number };
+    const at = (path: string) =>
+      fetch(`http://127.0.0.1:${port}${path}`, {
+        headers: { Authorization: `Bearer ${netToken}` },
+      });
+    try {
+      const list = exactly(SessionListSchema, await (await at('/consumer/v1/sessions')).json());
+      expect(list.sessions.map((s) => s.id)).toEqual([VERIFIED_ID]);
+      expect(list.total).toBe(1);
+
+      const lookup = await at(
+        '/consumer/v1/sessions/lookup?provider=claude-code&sessionId=bad-time',
+      );
+      expect(lookup.status).toBe(404);
+      expect(exactly(ConsumerErrorSchema, await lookup.json()).error).toBe('session-not-observed');
+
+      const discovery = await at('/consumer/v1/discovery');
+      expect(discovery.status).toBe(500);
+      expect(exactly(ConsumerErrorSchema, await discovery.json()).error).toBe('internal');
+
+      const controller = new AbortController();
+      const feed = await fetch(`http://127.0.0.1:${port}/consumer/v1/feed`, {
+        headers: { Authorization: `Bearer ${netToken}` },
+        signal: controller.signal,
+      });
+      const reader = feed.body?.getReader();
+      if (!reader) throw new Error('no feed body');
+      let received = '';
+      const until = async (needle: string) => {
+        while (!received.includes(needle)) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          received += new TextDecoder().decode(value);
+        }
+      };
+      await until('"resync"');
+      publish(badTime);
+      publish(badId);
+      publish(good);
+      await until(VERIFIED_ID);
+      controller.abort();
+      const messages = received
+        .split('\n\n')
+        .filter((frame) => frame.startsWith('data: '))
+        .map((frame) => readFeedMessage(frame.slice(6)));
+      expect(messages.map((m) => m?.type)).toEqual(['resync', 'session.changed']);
+      expect(messages[1]).toMatchObject({ sessionId: VERIFIED_ID });
+
+      const logged = JSON.stringify(warn.mock.calls);
+      expect(logged).toContain('startedAt');
+      expect(logged).toContain('sessionIdLength');
+      expect(logged).not.toContain(SECRET_TIME);
+      expect(logged).not.toContain('planted');
+      // Once per session and cause, however often it is asked for.
+      await at('/consumer/v1/sessions');
+      expect(warn.mock.calls.length).toBe(JSON.parse(logged).length);
+    } finally {
+      routes.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      rmSync(netHome, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('consumer contract edges', () => {
+  it('names the repository each revision anchor read, when the session moved into a clone', async () => {
+    const { applyEvent, createInitialState, createRedactor, projectSession, summarizeSession } =
+      await import('@salidium/core');
+    const { EventBuilder } = await import('@salidium/core/testing');
+    const { consumerText, toSessionReport } = await import('./report.ts');
+    const b = new EventBuilder('claude-code:moved', '2026-09-20T16:00:00.000Z');
+    const state = createInitialState({
+      sessionId: 'claude-code:moved',
+      provider: 'claude-code',
+      providerSessionId: 'moved',
+      cwd: '/work/a',
+    });
+    const head = 'c'.repeat(40);
+    const snapshot = (id: string, repoRoot: string, trigger: 'session.started' | 'turn.ended') =>
+      b.raw({ id, kind: 'git.snapshot', repoRoot, head, branch: 'main', trigger } as never);
+    for (const event of [
+      b.sessionStarted('/work/a'),
+      snapshot('git:a', '/work/a', 'session.started'),
+      b.turnStarted('Work in the clone'),
+      b.raw({ id: 'moved', kind: 'session.updated', cwd: '/work/b' } as never),
+      b.turnEnded('Done.'),
+      snapshot('git:b', '/work/b', 'turn.ended'),
+    ])
+      applyEvent(state, event);
+    const at = Date.parse('2026-09-20T16:01:00.000Z');
+    const report = exactly(
+      SessionReportSchema,
+      toSessionReport(
+        state,
+        projectSession(state, at),
+        summarizeSession(state, at),
+        at,
+        consumerText(createRedactor()),
+      ),
+    );
+    expect(report.session.repositoryRoot).toBe('/work/a');
+    expect(report.revision.atStart).toMatchObject({ root: '/work/a', head });
+    expect(report.revision.atLatestTurnEnd).toMatchObject({ root: '/work/b', head });
+  });
+
+  it('says a removed line count is a floor when a provider did not record what it replaced', async () => {
+    const { applyEvent, createInitialState, createRedactor, projectSession, summarizeSession } =
+      await import('@salidium/core');
+    const { EventBuilder } = await import('@salidium/core/testing');
+    const { consumerText, toSessionReport } = await import('./report.ts');
+    const b = new EventBuilder('claude-code:overwrite', '2026-09-20T16:00:00.000Z');
+    const state = createInitialState({
+      sessionId: 'claude-code:overwrite',
+      provider: 'claude-code',
+      providerSessionId: 'overwrite',
+      cwd: '/repo',
+    });
+    for (const event of [
+      b.sessionStarted('/repo'),
+      b.turnStarted('Rewrite the config'),
+      ...b.edit('e1', '/repo/exact.ts', 2, 1),
+      b.toolCalled('w1', 'write', { kind: 'fileWrite', path: '/repo/config.ts' }),
+      b.toolCompleted('w1', 'write', {
+        kind: 'fileChanges',
+        changes: [
+          {
+            path: '/repo/config.ts',
+            change: 'update',
+            linesAdded: 9,
+            linesRemoved: 0,
+            linesRemovedUnknown: true,
+            applied: true,
+          },
+        ],
+      }),
+    ])
+      applyEvent(state, event);
+    const at = Date.parse('2026-09-20T16:01:00.000Z');
+    const report = exactly(
+      SessionReportSchema,
+      toSessionReport(
+        state,
+        projectSession(state, at),
+        summarizeSession(state, at),
+        at,
+        consumerText(createRedactor()),
+      ),
+    );
+    expect(report.session.counts).toMatchObject({ linesRemoved: 1, linesRemovedExact: false });
+    expect(
+      Object.fromEntries(
+        report.changes.files.map((f) => [f.path, [f.linesRemoved, f.linesRemovedExact]]),
+      ),
+    ).toEqual({ '/repo/exact.ts': [1, true], '/repo/config.ts': [0, false] });
+  });
+
+  it('describes a running code cell in Salidium’s words, never its script', async () => {
+    const { applyEvent, createInitialState, createRedactor, projectSession, summarizeSession } =
+      await import('@salidium/core');
+    const { codexAdapter } = await import('@salidium/adapter-codex');
+    const { consumerText, toSessionReport } = await import('./report.ts');
+    const thread = '01a00001-0000-7000-8000-00000000c0de';
+    const script = `const r = await tools.exec_command({"cmd":"npm test ${CONSUMER_CANARIES.command}"});\ntext("${CONSUMER_CANARIES.output}");\n`;
+    const records = (cliVersion: string | undefined) => [
+      {
+        timestamp: '2026-09-20T16:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: thread,
+          cwd: '/repo',
+          originator: 'codex_work_desktop',
+          cli_version: cliVersion,
+        },
+      },
+      {
+        timestamp: '2026-09-20T16:00:01.000Z',
+        type: 'event_msg',
+        payload: { type: 'task_started', turn_id: 'turn-1' },
+      },
+      {
+        timestamp: '2026-09-20T16:00:02.000Z',
+        type: 'response_item',
+        payload: { type: 'custom_tool_call', call_id: 'call_cell', name: 'exec', input: script },
+      },
+    ];
+    // A current build's cell is a step; an unversioned one's is still the command. Neither crosses.
+    for (const [cliVersion, headline] of [
+      ['0.158.0-alpha.2.1', 'Working'],
+      [undefined, 'Running a command'],
+    ] as const) {
+      const parser = codexAdapter.createRecordParser({
+        sessionId: `codex:${thread}`,
+        providerSessionId: thread,
+        path: '/tmp/rollout.jsonl',
+        observedAt: '2026-09-20T16:00:00.000Z',
+      });
+      const state = createInitialState({
+        sessionId: `codex:${thread}`,
+        provider: 'codex',
+        providerSessionId: thread,
+        cwd: '/repo',
+      });
+      let seq = 0;
+      records(cliVersion).forEach((record, line) => {
+        for (const event of parser.parseRecord(JSON.stringify(record), line))
+          applyEvent(state, { ...event, seq: seq++ } as never);
+      });
+      const at = Date.parse('2026-09-20T16:01:00.000Z');
+      const report = exactly(
+        SessionReportSchema,
+        toSessionReport(
+          state,
+          projectSession(state, at),
+          summarizeSession(state, at),
+          at,
+          consumerText(createRedactor()),
+        ),
+      );
+      expect(report.verdict).toMatchObject({ tone: 'working', headline });
+      const serialized = JSON.stringify(report);
+      for (const canary of Object.values(CONSUMER_CANARIES))
+        expect(serialized).not.toContain(canary);
+      expect(serialized).not.toContain('tools.exec_command');
+    }
+  });
+
   it('labels a question read from the agent’s message as reported, and the verdict follows', async () => {
     const { applyEvent, createInitialState, projectSession } = await import('@salidium/core');
     const { EventBuilder } = await import('@salidium/core/testing');
@@ -599,10 +1298,38 @@ describe('consumer contract edges', () => {
   });
 });
 
+describe('identifiers at the boundary', () => {
+  it('redacts a located path like any text that crosses, and never clips or reflows it', async () => {
+    const { createRedactor } = await import('@salidium/core');
+    const { consumerText, repository } = await import('./report.ts');
+    const text = consumerText(createRedactor());
+    const spaced = '/Users/dev/My  Project';
+    expect(repository({ root: spaced, path: 'a  b.ts' }, text)).toEqual({
+      root: spaced,
+      path: 'a  b.ts',
+      mainRoot: null,
+      provenance: 'observed',
+    });
+    // One the redactor would change is not carried altered, which would name another path: null.
+    expect(repository({ root: `/tmp/${CONSUMER_SECRET}`, path: 'x.ts' }, text)).toBeNull();
+    expect(
+      repository({ root: '/tmp/repo', path: 'x.ts', mainRoot: `/srv/${CONSUMER_SECRET}` }, text),
+    ).toBeNull();
+    // Too long to carry whole: the whole location is null, because a clipped path names something
+    // else.
+    expect(repository({ root: `/${'d'.repeat(4096)}`, path: 'x.ts' }, text)).toBeNull();
+    expect(repository(null, text)).toBeNull();
+    expect(repository(undefined, text)).toBeNull();
+  });
+});
+
 describe('retained fixtures', () => {
   it('carry none of the planted content, because they are what other products copy', async () => {
     const dir = new URL('../../../consumer-contract/fixtures/v1/', import.meta.url);
-    const files = readdirSync(dir).filter((file) => file.endsWith('.json'));
+    // Every minor version's set: 1.0 at the top, later minors in their own directories.
+    const files = (readdirSync(dir, { recursive: true }) as string[]).filter((file) =>
+      file.endsWith('.json'),
+    );
     expect(files.length).toBeGreaterThan(0);
     for (const file of files) {
       const text = readFileSync(new URL(file, dir), 'utf8');

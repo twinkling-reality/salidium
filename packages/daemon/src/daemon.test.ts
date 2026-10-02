@@ -132,10 +132,12 @@ describe('daemon', () => {
     const home = join(root, 'salidium');
     const pending = join(home, 'spool', 'pending');
     mkdirSync(pending, { recursive: true });
-    const quarantined = join(pending, 'claude-code_visual.ready.json.processing.oversized');
-    writeFileSync(quarantined, 'metadata-only test fixture');
+    // No provider is enabled, so this envelope is retained unread and waits. A quarantined file
+    // would not do: it is kept as evidence, not as work, and holds no queue age.
+    const waiting = join(pending, 'claude-code_visual.ready.json');
+    writeFileSync(waiting, 'metadata-only test fixture');
     const old = new Date(Date.now() - 2 * 60_000);
-    utimesSync(quarantined, old, old);
+    utimesSync(waiting, old, old);
     updateOperationalConfig(home, {
       alerts: { nativeNotifications: true, queueAgeMinutes: 1 },
     });
@@ -165,7 +167,7 @@ describe('daemon', () => {
     const home = join(root, 'salidium');
     const pending = join(home, 'spool', 'pending');
     mkdirSync(pending, { recursive: true });
-    const queued = join(pending, 'claude-code_visual.ready.json.processing.oversized');
+    const queued = join(pending, 'claude-code_visual.ready.json');
     writeFileSync(queued, 'metadata-only test fixture');
     const old = new Date(Date.now() - 2 * 60_000);
     utimesSync(queued, old, old);
@@ -445,6 +447,40 @@ describe('daemon', () => {
     ]);
     controller.abort();
     expect(outcome).toBe('stopped');
+  });
+
+  it('does not ask Ollama for its models while the local route is not selected', async () => {
+    const { status, body } = await api<{ state: string; models: string[] }>(
+      '/api/settings/explainer/ollama-models',
+    );
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ state: 'refused', models: [] });
+  });
+
+  it('clears a model chosen for one writer when the API switches to another', async () => {
+    const put = (body: unknown) =>
+      api<{ backend: string; model: string | null }>('/api/settings/explainer', {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      });
+    expect((await put({ backend: 'ollama', model: 'local:1b' })).body).toMatchObject({
+      backend: 'ollama',
+      model: 'local:1b',
+    });
+    // Restating the same writer keeps the model.
+    expect((await put({ backend: 'ollama' })).body.model).toBe('local:1b');
+    expect((await put({ backend: 'claude' })).body).toMatchObject({
+      backend: 'claude',
+      model: null,
+    });
+    // Naming both still sets both.
+    expect((await put({ backend: 'codex', model: 'gpt-5.6-luna' })).body.model).toBe(
+      'gpt-5.6-luna',
+    );
+    expect((await put({ backend: 'auto', model: null })).body).toMatchObject({
+      backend: 'auto',
+      model: null,
+    });
   });
 
   it('rejects unauthenticated, wrong-host and cross-origin requests', async () => {

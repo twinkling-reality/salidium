@@ -9,6 +9,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import { codexAdapter } from './codexAdapter.ts';
 import { parseCodexHookPayload } from './hookPayloads.ts';
+import { writesCommandItems } from './rolloutParser.ts';
 import { buildSyntheticRollout } from './testing/syntheticRollout.ts';
 import { parseExecOutput } from './toolMapping.ts';
 
@@ -512,7 +513,7 @@ describe('CodexRolloutParser: item-based rollouts', () => {
         ['/repo/src/file2.swift', 'delete', 0, 36],
       ]);
       expect(changes.every((c) => c.applied && c.callId.startsWith('exec-'))).toBe(true);
-      // The cell that carried the patch stays a command of its own; nothing is read from its text.
+      // The cell that carried the patch stays a step of its own; nothing is read from its text.
       const cells = events.filter((e) => e.kind === 'tool.called' && e.toolName === 'exec');
       expect(cells).toHaveLength(3);
     });
@@ -670,37 +671,39 @@ describe('CodexRolloutParser: command exit codes from items', () => {
     return found;
   };
 
-  it('observes the exit code of a yielded command, failing then passing', () => {
+  const RUN1 = 'exec-01a00001-0000-7000-8000-000000000001';
+  const RUN2 = 'exec-01a00002-0000-7000-8000-000000000002';
+
+  it('observes each process as its own command, failing then passing', () => {
     const events = parseAll(lines, sessionId, THREAD);
     for (const e of events) expect(() => CanonicalEventSchema.parse(e)).not.toThrow();
-    expect(finalExit(events, FIRST)).toEqual({ code: 1, observation: 'explicit' });
-    expect(finalExit(events, SECOND)).toEqual({ code: 0, observation: 'explicit' });
+    expect(finalExit(events, RUN1)).toEqual({ code: 1, observation: 'explicit' });
+    expect(finalExit(events, RUN2)).toEqual({ code: 0, observation: 'explicit' });
     const runs = reduce(events).verifications;
     expect(runs.map((v) => [v.callId, v.method, v.outcome, v.exit?.observation])).toEqual([
-      [FIRST, 'test', 'fail', 'explicit'],
-      [SECOND, 'test', 'pass', 'explicit'],
+      [RUN1, 'test', 'fail', 'explicit'],
+      [RUN2, 'test', 'pass', 'explicit'],
     ]);
-    // Without the items the same rollout says nothing about how either process exited.
+    // Without the items, the cells say only that their scripts ran: no process, so no check.
     const without = parseAll(
       lines.filter((l) => !isItem(l)),
       sessionId,
       THREAD,
     );
-    expect(finalExit(without, FIRST)).toEqual({ observation: 'unknown' });
-    expect(finalExit(without, SECOND)).toEqual({ observation: 'unknown' });
+    expect(exits(without)).toEqual([]);
+    expect(reduce(without).verifications).toEqual([]);
   });
 
-  it('adds no activity of its own, so nothing is counted twice', () => {
-    const events = parseAll(lines, sessionId, THREAD);
-    const without = parseAll(
-      lines.filter((l) => !isItem(l)),
-      sessionId,
-      THREAD,
-    );
-    expect(events.map((e) => e.id)).toEqual(without.map((e) => e.id));
-    const state = reduce(events);
-    expect(state.counters.toolCalls).toBe(reduce(without).counters.toolCalls);
-    expect(Object.keys(state.activities).some((id) => id.startsWith('exec-'))).toBe(false);
+  it('counts each process once, as a command, and each cell as a step that is not one', () => {
+    const state = reduce(parseAll(lines, sessionId, THREAD));
+    const kinds = Object.values(state.activities).map((a) => [a.callId.slice(0, 9), a.kind]);
+    expect(kinds.filter(([, kind]) => kind === 'command')).toEqual([
+      ['exec-01a0', 'command'],
+      ['exec-01a0', 'command'],
+    ]);
+    expect(state.counters.commands).toBe(2);
+    expect(state.activities[FIRST]).toMatchObject({ kind: 'other', title: 'Code cell' });
+    expect(state.activities[SECOND]).toMatchObject({ kind: 'other', title: 'Code cell' });
   });
 
   it('keeps unknown when the item has no exit code', () => {
@@ -711,24 +714,22 @@ describe('CodexRolloutParser: command exit codes from items', () => {
       return JSON.stringify(o);
     });
     const events = parseAll(stripped, sessionId, THREAD);
-    expect(finalExit(events, FIRST)).toEqual({ observation: 'unknown' });
-    expect(finalExit(events, SECOND)).toEqual({ observation: 'unknown' });
+    expect(finalExit(events, RUN1)).toEqual({ observation: 'unknown' });
+    expect(finalExit(events, RUN2)).toEqual({ observation: 'unknown' });
   });
 
-  it('claims nothing for a command still running when the rollout ends', () => {
-    // The process exited and Codex recorded it, but the poll that returns the result never came.
+  it('reports a process when its item lands, though the poll returning its output never came', () => {
     const cut = lines.slice(0, lines.findIndex(isItem) + 1);
     const events = parseAll(cut, sessionId, THREAD);
-    // Only the provisional result the yielding call returned, which knows nothing of the exit.
-    expect(exits(events).filter((e) => e.callId === FIRST)).toEqual([
-      expect.objectContaining({
-        exit: { observation: 'unknown' },
-        id: expect.not.stringMatching(/final$/),
-      }),
-    ]);
-    expect(reduce(events).activities[FIRST]?.exit).toEqual({ observation: 'unknown' });
+    expect(finalExit(events, RUN1)).toEqual({ code: 1, observation: 'explicit' });
+    expect(reduce(events).activities[FIRST]?.kind).toBe('other');
   });
 
+  /*
+   * Without `session_meta`, as below, the version is unknown and the parser keeps the behaviour
+   * for rollouts that record no processes: the cell is the command, and an item's code is filed
+   * under the one open cell whose script names exactly that command.
+   */
   describe('a cell that finishes in one call', () => {
     const call = record(
       (o) =>
@@ -869,4 +870,238 @@ describe('CodexRolloutParser: command exit codes from items', () => {
     expect(Object.keys(state.activities).filter((id) => id === callId)).toHaveLength(1);
     expect(state.activities[callId]?.exit).toEqual({ code: 0, observation: 'explicit' });
   });
+});
+
+/*
+ * Owner decision D8: which record is a command inside a code-mode cell.
+ *
+ * A live session with hooks used to show each such command twice: once as the cell (call id
+ * `call_…`, its script parsed for commands) and once as the hook's nested command (`exec-<uuid>`).
+ * The architecture's reconciliation rule decides it: information content first, the durable record
+ * as tie-break. For one process, from the fixture below:
+ *
+ * - the `CommandExecution` item (rollout, durable) has the exact argv, the process's own exit code,
+ *   its output and duration, and the `exec-<uuid>` id the hook reports;
+ * - the cell has JavaScript (commands recovered from it best effort, none when built at run time),
+ *   the script's status rather than any process's, and at best one code for all its commands,
+ *   unknown when they differ, as `npm test` and `npm run lint` do here;
+ * - the hook's nested command has the exact command and its output, and no exit code.
+ *
+ * So the process is the unit, and the item, which shares the hook's id, is its durable record:
+ * hook-first and transcript-first ingestion meet on one call id. The cell becomes a step. Codex
+ * records processes as items from 0.149 (earlier builds write file-change items only), so older or
+ * unversioned rollouts keep the cell as the command. Stores written before this keep their cells as
+ * commands too, because stored events never change; the item's call names its cell, and the
+ * reducer folds it into a cell that is a command rather than showing the process twice.
+ */
+describe('CodexRolloutParser: the command inside a code cell (D8)', () => {
+  const THREAD = '01a00001-0000-7000-8000-000000000001';
+  const TURN = '01a00002-0000-7000-8000-000000000002';
+  const CELL = 'call_Cell001xxxxxxxxxxxxxxxxx';
+  const TEST = 'exec-01a00003-0000-7000-8000-000000000003';
+  const LINT = 'exec-01a00004-0000-7000-8000-000000000004';
+  const sessionId = makeSessionId('codex', THREAD);
+  const lines = readFileSync(
+    new URL('./testing/fixtures/codex-0.158-code-mode-commands.jsonl', import.meta.url),
+    'utf8',
+  )
+    .split('\n')
+    .filter(Boolean);
+  /** The same rollout as a build that recorded no version, or before items, would be read. */
+  const unversioned = lines.map((l) => {
+    const o = JSON.parse(l);
+    if (o.type === 'session_meta') delete o.payload.cli_version;
+    return JSON.stringify(o);
+  });
+  const rollout = parseAll(lines, sessionId, THREAD);
+
+  const hook = (callId: string, command: string, output: string, receivedAt: string) => [
+    ...parseCodexHookPayload(
+      {
+        session_id: THREAD,
+        hook_event_name: 'PreToolUse',
+        turn_id: TURN,
+        tool_name: 'Bash',
+        tool_use_id: callId,
+        tool_input: { command, workdir: '/repo' },
+        cwd: '/repo',
+      },
+      { receivedAt },
+    ),
+    ...parseCodexHookPayload(
+      {
+        session_id: THREAD,
+        hook_event_name: 'PostToolUse',
+        turn_id: TURN,
+        tool_name: 'Bash',
+        tool_use_id: callId,
+        tool_input: { command, workdir: '/repo' },
+        tool_response: output,
+      },
+      { receivedAt },
+    ),
+  ];
+  const hooks = [
+    ...hook(TEST, 'npm test', ' Tests  5 passed (5)', '2026-01-01T00:00:12.050Z'),
+    ...hook(LINT, 'npm run lint', '✖ 1 problem (1 error, 0 warnings)', '2026-01-01T00:00:14.050Z'),
+  ];
+
+  /** The store keeps the first event with a given id; a later one with the same id is dropped. */
+  const store = (...batches: CanonicalEvent[][]) => {
+    const seen = new Set<string>();
+    return batches.flat().filter((e) => !seen.has(e.id) && seen.add(e.id));
+  };
+  const reduce = (events: CanonicalEvent[]) => {
+    const state = createInitialState({ sessionId, provider: 'codex', providerSessionId: THREAD });
+    let seq = 0;
+    for (const e of events) applyEvent(state, { ...e, seq: seq++ } as StoredEvent);
+    return state;
+  };
+  /** What a reader sees: the activities, which are commands, their exits, and the checks. */
+  const shape = (events: CanonicalEvent[]) => {
+    const state = reduce(events);
+    return {
+      activities: Object.values(state.activities)
+        .map((a) => ({ id: a.callId, kind: a.kind, status: a.status, exit: a.exit ?? null }))
+        .sort((x, y) => x.id.localeCompare(y.id)),
+      commands: state.counters.commands,
+      toolCalls: state.counters.toolCalls,
+      checks: state.verifications
+        .map((v) => [v.callId, v.method, v.outcome, v.exit?.observation ?? null])
+        .sort((x, y) => String(x[0]).localeCompare(String(y[0]))),
+    };
+  };
+
+  it('reads processes as items from 0.149, prereleases included, and not without a version', () => {
+    expect(writesCommandItems('0.158.0-alpha.2.1')).toBe(true);
+    expect(writesCommandItems('0.149.0')).toBe(true);
+    expect(writesCommandItems('1.0.0')).toBe(true);
+    // 0.144 to 0.148 write file-change items but record no process as an item.
+    expect(writesCommandItems('0.148.0')).toBe(false);
+    expect(writesCommandItems('0.144.0')).toBe(false);
+    for (const unreadable of [undefined, null, '', 'nightly', '0.158', 158])
+      expect(writesCommandItems(unreadable)).toBe(false);
+  });
+
+  it('makes each process a command with its own exit, and the cell a step', () => {
+    for (const e of rollout) expect(() => CanonicalEventSchema.parse(e)).not.toThrow();
+    expect(shape(rollout)).toEqual({
+      activities: [
+        { id: CELL, kind: 'other', status: 'completed', exit: null },
+        {
+          id: TEST,
+          kind: 'command',
+          status: 'completed',
+          exit: { code: 0, observation: 'explicit' },
+        },
+        { id: LINT, kind: 'command', status: 'failed', exit: { code: 1, observation: 'explicit' } },
+      ].sort((x, y) => x.id.localeCompare(y.id)),
+      commands: 2,
+      toolCalls: 3,
+      checks: [
+        [TEST, 'test', 'pass', 'explicit'],
+        [LINT, 'lint', 'fail', 'explicit'],
+      ].sort((x, y) => String(x[0]).localeCompare(String(y[0]))),
+    });
+    const calls = rollout.filter((e) => e.kind === 'tool.called');
+    expect(calls.map((e) => e.kind === 'tool.called' && [e.callId, e.parentCallId])).toEqual([
+      [CELL, undefined],
+      [TEST, CELL],
+      [LINT, CELL],
+    ]);
+  });
+
+  it('converges whichever channel arrives first', () => {
+    const transcriptOnly = shape(store(rollout));
+    expect(shape(store(hooks, rollout))).toEqual(transcriptOnly);
+    expect(shape(store(rollout, hooks))).toEqual(transcriptOnly);
+    // Live interleaving: each hook lands while the cell is open, before the process's item.
+    const [meta, started, cellCall, testItem, lintItem, cellOutput, ended] = rollout.length
+      ? groupByRecord(rollout)
+      : [];
+    const interleaved = store(
+      meta ?? [],
+      started ?? [],
+      cellCall ?? [],
+      hooks.slice(0, 2),
+      testItem ?? [],
+      hooks.slice(2),
+      lintItem ?? [],
+      cellOutput ?? [],
+      ended ?? [],
+    );
+    expect(shape(interleaved)).toEqual(transcriptOnly);
+  });
+
+  it('adds nothing beside a cell an older Salidium stored as the command, when re-read', () => {
+    const legacy = parseAll(unversioned, sessionId, THREAD);
+    const before = shape(store(legacy));
+    expect(before.commands).toBe(1);
+    expect(before.activities.map((a) => a.id)).toEqual([CELL]);
+    // `salidium reingest`: the stored events stay, and only events with new ids are added.
+    expect(shape(store(legacy, rollout))).toEqual(before);
+  });
+
+  it('documents the exception: an old store whose hooks already recorded the process keeps it', () => {
+    // Retracting the checks, findings and history already derived from the hook's activity is not
+    // something replay can do honestly, so the old duplicate stays; the item still gives it its exit.
+    const legacyWithHooks = store(hooks, parseAll(unversioned, sessionId, THREAD));
+    const before = shape(legacyWithHooks);
+    expect(before.commands).toBe(3);
+    const after = shape(store(legacyWithHooks, rollout));
+    expect(after.commands).toBe(3);
+    expect(after.activities.find((a) => a.id === LINT)?.exit).toEqual({
+      code: 1,
+      observation: 'explicit',
+    });
+  });
+
+  it('documents the exception: an unversioned rollout with items and hooks shows the cell and the hook', () => {
+    // No version means the behaviour for rollouts without process items: the cell is the command,
+    // the items only lend it their codes, and the hook's nested commands stay beside it.
+    const legacy = parseAll(unversioned, sessionId, THREAD);
+    expect(legacy.some((e) => 'callId' in e && e.callId.startsWith('exec-'))).toBe(false);
+    expect(shape(store(hooks, legacy)).commands).toBe(3);
+  });
+
+  it('dates an item by its record when its own times are impossible or later', () => {
+    const odd = lines.map((l) => {
+      const o = JSON.parse(l);
+      if (o.payload?.item?.id === TEST) {
+        o.payload.started_at_ms = 1e20;
+        o.payload.completed_at_ms = Date.parse('2099-01-01T00:00:00.000Z');
+      }
+      return JSON.stringify(o);
+    });
+    const events = parseAll(odd, sessionId, THREAD);
+    const call = events.find((e) => e.kind === 'tool.called' && e.callId === TEST);
+    expect(call?.ts).toBe('2026-01-01T00:00:12.000Z');
+    const result = events.find((e) => e.kind === 'tool.completed' && e.callId === TEST);
+    expect(
+      result?.kind === 'tool.completed' && result.result.kind === 'command' && result.result.exit,
+    ).toEqual({
+      code: 0,
+      observation: 'explicit',
+    });
+  });
+
+  it('reads a repeated session_meta as the same start, so a resume cannot anchor a new one', () => {
+    // About a third of real rollouts carry a second session_meta. Both map to one event id, so the
+    // store keeps the first and a later copy never reaches the git snapshot enricher as a start.
+    const meta = lines.find((l) => l.includes('"session_meta"')) ?? '';
+    const events = parseAll([meta, ...lines.slice(1), meta], sessionId, THREAD);
+    const starts = events.filter((e) => e.kind === 'session.started');
+    expect(starts).toHaveLength(2);
+    expect(new Set(starts.map((e) => e.id)).size).toBe(1);
+  });
+
+  /** Events grouped by the rollout record that produced them, in record order. */
+  function groupByRecord(events: CanonicalEvent[]): CanonicalEvent[][] {
+    const groups = new Map<number, CanonicalEvent[]>();
+    for (const e of events) {
+      const line = e.source.ref?.line ?? -1;
+      groups.set(line, [...(groups.get(line) ?? []), e]);
+    }
+    return [...groups.values()];
+  }
 });

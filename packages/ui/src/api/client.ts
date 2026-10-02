@@ -6,6 +6,7 @@ import type {
   ExplainerSettings,
   ExplainerSettingsRequest,
   LocalAlertState,
+  OllamaModels,
   OperationalConfigPatch,
   OperationsOverview,
   PersonalizationSettings,
@@ -23,6 +24,7 @@ import {
   CollectionStatusSchema,
   EffectiveOperationalConfigSchema,
   LocalAlertStateSchema,
+  OllamaModelsSchema,
   OperationsOverviewSchema,
   PersonalizationSettingsSchema,
   PersonalizedExplanationSchema,
@@ -171,6 +173,11 @@ export class ApiClient {
    */
   explainerSettings(): Promise<ExplainerSettings> {
     return this.get('/api/settings/explainer');
+  }
+
+  /** The models installed in the local Ollama. Asking is a loopback request, so only on demand. */
+  async ollamaModels(): Promise<OllamaModels> {
+    return OllamaModelsSchema.parse(await this.get('/api/settings/explainer/ollama-models'));
   }
 
   async setExplainerSettings(settings: ExplainerSettingsRequest): Promise<ExplainerSettings> {

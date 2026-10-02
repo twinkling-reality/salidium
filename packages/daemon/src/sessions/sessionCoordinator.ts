@@ -14,6 +14,7 @@ import {
   CanonicalEventSchema,
   CanonicalTimestampSchema,
   EventSourceSchema,
+  type ExplainerBackend,
   type ExplainerCadence,
   type ExplanationStatus,
   type ProviderId,
@@ -23,12 +24,40 @@ import {
   type ToolInput,
 } from '@salidium/protocol';
 import { type ExplanationAttempt, explainWithStatus } from '../enrich/explainer.ts';
-import { configuredExplainerMode } from '../enrich/explainerBackends.ts';
+import { configuredExplainerMode, explainedConfiguration } from '../enrich/explainerBackends.ts';
 import type { SalidiumStore } from '../storage/salidiumStore.ts';
 
 export interface CoordinatorListener {
   onEvents(sessionId: string, events: StoredEvent[], changes: SemanticChange[]): void;
   onSummary(summary: SessionSummary): void;
+}
+
+export interface StoredExplainerChoice {
+  backend: ExplainerBackend;
+  model: string | null;
+}
+
+/** The choice is consumed when the default explainer is bound, so it is not carried further. */
+type ResolvedCoordinatorOptions = Required<Omit<CoordinatorOptions, 'explainerChoice'>>;
+
+function withoutChoice(
+  options: CoordinatorOptions | undefined,
+): Omit<CoordinatorOptions, 'explainerChoice'> {
+  if (!options) return {};
+  const { explainerChoice: _choice, ...rest } = options;
+  return rest;
+}
+
+/** The explainer the coordinator uses unless a test injects one. */
+export function explainWithStoredChoice(
+  choice: (() => StoredExplainerChoice) | undefined,
+): (state: RunState, signal?: AbortSignal) => Promise<ExplanationAttempt> {
+  return (state, signal) => {
+    if (!choice) return Promise.resolve({ status: 'unavailable' });
+    const current = choice();
+    const active = explainedConfiguration(current.backend, current.model, process.env);
+    return explainWithStatus(state, { mode: active.mode, model: active.model, signal });
+  };
 }
 
 export interface CoordinatorOptions {
@@ -47,7 +76,14 @@ export interface CoordinatorOptions {
   cadence?: ExplainerCadence;
   /** How long a `session`-stop session must be silent before it counts as over. */
   idleEndMs?: number;
-  /** Injected only by tests or a future backend registry. */
+  /**
+   * The stored helper choice, read at call time so a change applies without a restart. The
+   * default explainer resolves it against the environment exactly as the settings view does.
+   * Without it nothing is generated: an unconfigured caller must not drift to `auto` and reach a
+   * CLI while the stored choice says something else, such as the local Ollama route.
+   */
+  explainerChoice?: () => StoredExplainerChoice;
+  /** Injected only by tests; the default uses `explainerChoice`. */
   explainSession?: (state: RunState, signal?: AbortSignal) => Promise<ExplanationAttempt>;
   /**
    * What time it is, for the one derivation that asks: `effectiveStatus` calls a session that has
@@ -138,7 +174,7 @@ export class SessionCoordinator {
   private summaryTimer: NodeJS.Timeout | undefined;
   private eventsSinceCheckpoint = 0;
   private lastCheckpointSeq: number;
-  private readonly opts: Required<CoordinatorOptions>;
+  private readonly opts: ResolvedCoordinatorOptions;
   private closed = false;
   private flushFailures = 0;
   private explanationStatus: ExplanationStatus | undefined;
@@ -156,7 +192,7 @@ export class SessionCoordinator {
     store: SalidiumStore,
     listener: CoordinatorListener,
     seen: Set<string>,
-    opts: Required<CoordinatorOptions>,
+    opts: ResolvedCoordinatorOptions,
   ) {
     this.sessionId = sessionId;
     this.state = state;
@@ -186,7 +222,7 @@ export class SessionCoordinator {
   }): SessionCoordinator {
     const { sessionId, provider, providerSessionId, store, listener } = args;
     const envAllows = configuredExplainerMode(process.env) !== 'off';
-    const opts: Required<CoordinatorOptions> = {
+    const opts: ResolvedCoordinatorOptions = {
       flushDelayMs: 40,
       flushThreshold: 250,
       checkpointEvery: 500,
@@ -195,9 +231,9 @@ export class SessionCoordinator {
       // explicit opt-in, including in future coordinator call sites that bypass the registry.
       cadence: 'off',
       idleEndMs: IDLE_END_MS,
-      explainSession: (state, signal) => explainWithStatus(state, { signal }),
+      explainSession: explainWithStoredChoice(args.options?.explainerChoice),
       now: Date.now,
-      ...args.options,
+      ...withoutChoice(args.options),
     };
     const cp = store.latestCheckpoint(sessionId, REDUCER_VERSION);
     let state: RunState;

@@ -34,13 +34,20 @@ describe('explainer backend selection', () => {
     expect(chooseExplainerBackendId('codex', 'auto', new Set(['claude']))).toBe('claude');
   });
 
+  it('never sends a session from another provider to an agent CLI, only to a chosen local model', () => {
+    const available = new Set(['claude', 'codex', 'ollama']);
+    for (const mode of ['auto', 'claude', 'codex'] as const)
+      expect(chooseExplainerBackendId('salidium/opencode', mode, available)).toBeUndefined();
+    expect(chooseExplainerBackendId('salidium/opencode', 'ollama', available)).toBe('ollama');
+  });
+
   it('does not substitute another provider when one is explicitly configured', () => {
     expect(chooseExplainerBackendId('codex', 'claude', new Set(['codex']))).toBeUndefined();
   });
 
   it('keeps the original opt-out and rejects unknown configuration', () => {
     expect(configuredExplainerMode({ SALIDIUM_EXPLAIN: '0' })).toBe('off');
-    expect(configuredExplainerMode({ SALIDIUM_EXPLAINER: 'ollama' })).toBe('invalid');
+    expect(configuredExplainerMode({ SALIDIUM_EXPLAINER: 'gemini' })).toBe('invalid');
   });
 
   it('uses stored helper and model choices unless the launch environment overrides them', () => {

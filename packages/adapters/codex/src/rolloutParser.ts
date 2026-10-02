@@ -36,6 +36,8 @@ interface RememberedCall {
   turnId?: string;
   /** For `wait` / `write_stdin`: the cell/session this call polls. */
   polls?: RunningHandle;
+  /** A code-mode cell in an item-based rollout: a step whose processes are reported as items. */
+  codeCell?: boolean;
 }
 
 /** A command whose tool call yielded while the process was still running. */
@@ -58,7 +60,8 @@ type BaseFn = (id: string) => Omit<CanonicalEvent, 'kind'> & { turnId?: string }
  * Every line is `{timestamp, type, payload}`. The format is Codex-internal (types live in
  * codex-rs/protocol); this parser handles the legacy history mode observed locally and ignores
  * unknown records. Builds since 0.144 persist `item_completed` items instead of some legacy
- * events; of those, only `FileChange` is read, because nothing else records an applied patch.
+ * events: `FileChange` is read because nothing else records an applied patch, and from 0.149
+ * `CommandExecution` because it is the one record of a process's exit code (see `nestedCommand`).
  * Command exit codes are frequently unavailable in rollouts (exec_command_end is not persisted;
  * code-mode `exec` prints script status, not shell exit) — the parser records exactly what it can
  * observe and marks the rest unknown.
@@ -101,6 +104,12 @@ export class CodexRolloutParser implements RecordParser {
   >();
   /** Exit codes Codex recorded for function-tool commands, by call id. */
   private readonly callExits = new Map<string, number[]>();
+  /**
+   * Whether this rollout records every process as a `CommandExecution` item (see `nestedCommand`).
+   * Read from `session_meta.cli_version`; a missing or unreadable version keeps the behaviour for
+   * older rollouts.
+   */
+  private itemBased = false;
 
   constructor(ctx: RecordParserContext) {
     this.ctx = ctx;
@@ -153,6 +162,7 @@ export class CodexRolloutParser implements RecordParser {
     switch (type) {
       case 'session_meta': {
         const git = asObject(payload.git);
+        this.itemBased = writesCommandItems(payload.cli_version);
         return [
           {
             ...base(makeEventId(sid, 'session', 'start', 'rollout')),
@@ -516,6 +526,7 @@ export class CodexRolloutParser implements RecordParser {
             return [];
           }
           const cmds = extractCodeCellCommands(input);
+          if (this.itemBased) return this.codeCellCalled(callId, cmds, base);
           const command = cmds.length
             ? cmds.join(' && ')
             : (input.trim().split('\n')[0] ?? 'code cell');
@@ -565,6 +576,7 @@ export class CodexRolloutParser implements RecordParser {
         this.calls.delete(callId);
         if (!call) return [];
         if (call.polls) return this.pollResult(call, output, base);
+        if (call.codeCell) return this.codeCellCompleted(callId, output, base);
         if (call.toolName === 'exec') {
           const parsed = parseExecOutput(output);
           this.trackRunning(callId, 'exec', parsed);
@@ -614,8 +626,8 @@ export class CodexRolloutParser implements RecordParser {
     const thread = asString(p.thread_id);
     if (thread && thread !== this.ctx.providerSessionId) return [];
     if (type === 'CommandExecution') {
-      this.commandExecution(item);
-      return [];
+      const parent = this.commandExecution(item);
+      return this.itemBased ? this.nestedCommand(item, p, parent, base) : [];
     }
     const callId = asString(item?.id);
     if (!callId) return [];
@@ -633,29 +645,144 @@ export class CodexRolloutParser implements RecordParser {
    *
    * Item-based rollouts record every process a command tool started as a `CommandExecution` item
    * with its `exit_code`, which is the process's own status rather than a reading of its output.
-   * The item produces no event of its own. For a function tool its id is the call's, so the code
-   * waits for that call's result. Inside a code-mode cell the id is `exec-<uuid>`, which only a
-   * hook reports; an event under it would open a second activity beside the cell whenever no hook
-   * ran. So the code is filed under the one open cell whose script names exactly this command, and
-   * nowhere when none or several do. A missing `exit_code` is not a result.
+   * For a function tool its id is the call's, so the code waits for that call's result. Inside a
+   * code-mode cell the id is `exec-<uuid>`: the code is filed under the one open cell whose script
+   * names exactly this command, and nowhere when none or several do, and that cell is returned as
+   * the parent `nestedCommand` names. In a rollout from before 0.149, or with no version, the
+   * item produces no event of its own and the cell remains the command. A missing `exit_code` is
+   * not a result.
    */
-  private commandExecution(item: Record<string, unknown>): void {
+  private commandExecution(item: Record<string, unknown>): string | undefined {
     const code = item.exit_code;
-    if (typeof code !== 'number' || !Number.isInteger(code)) return;
+    if (typeof code !== 'number' || !Number.isInteger(code)) return undefined;
     const id = asString(item.id);
     if (id && (this.calls.get(id)?.input.kind === 'command' || this.isPending(id))) {
       this.callExits.set(id, [...(this.callExits.get(id) ?? []), code]);
-      return;
+      return undefined;
     }
     const command = shellCommand(item.command);
-    if (!command) return;
-    const cells = [...this.openCells.values()].filter((cell) => {
+    if (!command) return undefined;
+    const cells = [...this.openCells].filter(([, cell]) => {
       const named = cell.commands.filter((c) => c === command).length;
       return named > (cell.exits.get(command)?.length ?? 0);
     });
-    const [cell] = cells;
-    if (!cell || cells.length > 1) return;
+    const [match] = cells;
+    if (!match || cells.length > 1) return undefined;
+    const [cellId, cell] = match;
     cell.exits.set(command, [...(cell.exits.get(command) ?? []), code]);
+    return cellId;
+  }
+
+  /**
+   * A code-mode cell in an item-based rollout. The cell is JavaScript, not a shell process, and
+   * every process it starts is recorded as its own `CommandExecution` item, so the cell is a step
+   * and its commands are the activities (`nestedCommand`). It still opens when it is called, so a
+   * session without hooks shows work in progress, in Salidium's words rather than the script's.
+   */
+  private codeCellCalled(callId: string, commands: string[], base: BaseFn): CanonicalEvent[] {
+    const input: ToolInput = { kind: 'other', summary: 'code cell' };
+    this.calls.set(callId, { toolName: 'exec', input, turnId: this.currentTurnId, codeCell: true });
+    if (commands.length) this.openCells.set(callId, { commands, exits: new Map() });
+    return [
+      {
+        ...base(makeEventId(this.ctx.sessionId, 'tool', callId, 'call')),
+        kind: 'tool.called',
+        callId,
+        toolName: 'exec',
+        input,
+        title: 'Code cell',
+      },
+    ];
+  }
+
+  /** The cell's own result: whether its script ran. Its commands' results are their items'. */
+  private codeCellCompleted(callId: string, output: string, base: BaseFn): CanonicalEvent[] {
+    const parsed = parseExecOutput(output);
+    // A cell that yielded keeps its process running; the item that finishes it may come later.
+    if (!parsed.running) this.openCells.delete(callId);
+    return [
+      {
+        ...base(makeEventId(this.ctx.sessionId, 'tool', callId, 'result')),
+        kind: 'tool.completed',
+        callId,
+        toolName: 'exec',
+        result: { kind: 'generic', excerpt: excerpt(parsed.body, 600, 200).text || undefined },
+        isError: parsed.exit.observation === 'inferred-failure',
+      },
+    ];
+  }
+
+  /**
+   * One process a code cell started, from the item Codex recorded when it finished.
+   *
+   * This is the canonical unit for a command inside code mode. The item carries the exact argv,
+   * the process's own exit code, its output and duration, and the `exec-<uuid>` id Codex's hook
+   * reports for the same command, so a hook that saw it first and this record reduce to one
+   * activity through their shared call id, whichever arrives first. The call is stored under its
+   * own event id, so the cell that ran it (`parentCallId`) is kept even when the hook's call was
+   * stored first; the reducer uses that to fold it into a cell recorded as a command by an older
+   * Salidium, instead of showing the command twice there. Function-tool items are not this: their
+   * id is the call's own, and their code goes to that call (`commandExecution`).
+   */
+  private nestedCommand(
+    item: Record<string, unknown>,
+    p: Record<string, unknown>,
+    parentCallId: string | undefined,
+    base: BaseFn,
+  ): CanonicalEvent[] {
+    const callId = asString(item.id);
+    const command = shellCommand(item.command);
+    if (!callId?.startsWith('exec-') || !command) return [];
+    const sid = this.ctx.sessionId;
+    const turnId = asString(p.turn_id);
+    // The record's own time bounds the item's: a start or end after it, or one no date can hold,
+    // is not used, so an item cannot date a session into the future or fail the record.
+    const recorded = Date.parse(base('').ts);
+    const at = (field: unknown) =>
+      typeof field === 'number' && Number.isFinite(field) && field >= 0 && field <= recorded
+        ? new Date(field).toISOString()
+        : undefined;
+    const started = at(p.started_at_ms);
+    const completed = at(p.completed_at_ms);
+    const withTurn = (id: string) => ({ ...base(id), ...(turnId ? { turnId } : {}) });
+    const code = item.exit_code;
+    const exit =
+      typeof code === 'number' && Number.isInteger(code)
+        ? { code, observation: 'explicit' as const }
+        : { observation: 'unknown' as const };
+    const output = asString(item.aggregated_output) ?? asString(item.stdout) ?? '';
+    const ex = excerpt(output);
+    const durationMs =
+      started && completed
+        ? Date.parse(completed) - Date.parse(started)
+        : durationOf(item.duration);
+    return [
+      {
+        ...withTurn(makeEventId(sid, 'tool', callId, 'call', 'item')),
+        ...(started ? { ts: started } : {}),
+        kind: 'tool.called',
+        callId,
+        toolName: 'exec_command',
+        input: { kind: 'command', command, cwd: asString(item.cwd) },
+        title: `Run: ${excerpt(command.split('\n')[0] ?? '', 120, 0).text}`,
+        ...(parentCallId ? { parentCallId } : {}),
+      },
+      {
+        ...withTurn(makeEventId(sid, 'tool', callId, 'result')),
+        kind: 'tool.completed',
+        callId,
+        toolName: 'exec_command',
+        result: {
+          kind: 'command',
+          exit,
+          outputExcerpt: ex.text,
+          outputChars: output.length,
+          truncated: ex.truncated,
+        },
+        isError: exit.observation === 'explicit' && exit.code !== 0,
+        ...(durationMs !== undefined && durationMs >= 0 ? { durationMs } : {}),
+      },
+    ];
   }
 
   private isPending(callId: string): boolean {
@@ -1041,6 +1168,27 @@ function fileChangesFrom(raw: unknown, applied: boolean): FileChange[] {
  * The command a `CommandExecution` item ran, in the form a code cell's script names it: the
  * argument of a `sh -c` or `sh -lc` wrapper, otherwise the argument vector joined by spaces.
  */
+/**
+ * Codex builds from 0.149 on, prereleases included, record every process a code cell starts as a
+ * `CommandExecution` item. Builds from 0.144 already write `item_completed` records, but only for
+ * file changes: their code cells run commands that no item records, so there the cell is still the
+ * only record of its commands.
+ */
+export function writesCommandItems(version: unknown): boolean {
+  const match = typeof version === 'string' ? /^(\d+)\.(\d+)\.\d+/.exec(version) : null;
+  if (!match) return false;
+  const major = Number(match[1]);
+  return major > 0 || Number(match[2]) >= 149;
+}
+
+function durationOf(value: unknown): number | undefined {
+  const d = asObject(value);
+  const secs = d?.secs;
+  const nanos = d?.nanos;
+  if (typeof secs !== 'number' || typeof nanos !== 'number') return undefined;
+  return Math.round(secs * 1000 + nanos / 1e6);
+}
+
 function shellCommand(argv: unknown): string | undefined {
   if (!Array.isArray(argv) || !argv.every((a) => typeof a === 'string')) return undefined;
   const [shell, flag, script] = argv as string[];

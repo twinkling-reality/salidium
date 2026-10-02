@@ -7,10 +7,21 @@ import {
   type ExplainerBackend as ExplainerBackendSelection,
   ExplainerModelSchema,
   type ExplainerRoute,
+  type ExplainerRouteBackend,
   type ProviderId,
 } from '@salidium/protocol';
+import {
+  acquireExplainerSlot,
+  MAX_EXPLAINER_OUTPUT_BYTES,
+  MAX_EXPLAINER_PROCESSES,
+} from './explainerCapacity.ts';
+import {
+  createOllamaExplainerBackend,
+  ollamaGeneratorLabel,
+  resolveOllamaEndpoint,
+} from './ollamaBackend.ts';
 
-export type ExplainerMode = 'auto' | 'claude' | 'codex' | 'off';
+export type ExplainerMode = 'auto' | 'claude' | 'codex' | 'ollama' | 'off';
 
 export const DEFAULT_CLAUDE_EXPLAINER_MODEL = 'claude-haiku-4-5-20251001';
 export const DEFAULT_CODEX_EXPLAINER_MODEL = 'Codex CLI default (not pinned)';
@@ -31,12 +42,7 @@ export interface ExplainerBackendResult {
   model: string;
 }
 
-/** Built-in process output is rejected before it can grow memory or reach JSON parsing. */
-export const MAX_EXPLAINER_OUTPUT_BYTES = 128 * 1024;
-/** A hard process ceiling shared by explanations and presentation-only personalization. */
-export const MAX_EXPLAINER_PROCESSES = 2;
-
-let activeExplainerProcesses = 0;
+export { MAX_EXPLAINER_OUTPUT_BYTES, MAX_EXPLAINER_PROCESSES };
 
 /**
  * A generator turns bounded evidence into the shared explanation schema. It does not ingest agent
@@ -67,11 +73,12 @@ function runProcess(
   timeoutMs: number,
   signal?: AbortSignal,
 ): Promise<string> {
-  if (activeExplainerProcesses >= MAX_EXPLAINER_PROCESSES)
-    return Promise.reject(
-      new Error(`explainer process limit reached (${MAX_EXPLAINER_PROCESSES})`),
-    );
-  activeExplainerProcesses += 1;
+  let release: () => void;
+  try {
+    release = acquireExplainerSlot();
+  } catch (error) {
+    return Promise.reject(error);
+  }
   return new Promise((resolve, reject) => {
     const path = trustedPathEntries().join(delimiter);
     let child: ChildProcessWithoutNullStreams;
@@ -85,7 +92,7 @@ function runProcess(
         stdio: ['pipe', 'pipe', 'pipe'],
       });
     } catch (error) {
-      activeExplainerProcesses -= 1;
+      release();
       reject(error);
       return;
     }
@@ -93,15 +100,11 @@ function runProcess(
     let err = '';
     let outBytes = 0;
     let settled = false;
-    let capacityHeld = true;
     let timer: NodeJS.Timeout | undefined;
     const cleanup = () => {
       if (timer) clearTimeout(timer);
       signal?.removeEventListener('abort', abort);
-      if (capacityHeld) {
-        capacityHeld = false;
-        activeExplainerProcesses -= 1;
-      }
+      release();
     };
     const fail = (error: Error) => {
       if (settled) return;
@@ -277,14 +280,27 @@ function createCodexExplainerBackend(resolvedCommand?: string): ExplainerBackend
 export const claudeExplainerBackend = createClaudeExplainerBackend();
 export const codexExplainerBackend = createCodexExplainerBackend();
 
-const BUILT_IN_BACKEND_IDS = ['claude', 'codex'] as const;
+/**
+ * The writers `auto` may choose between. `ollama` is deliberately absent: a local model is used
+ * only when it is selected by name, never as a fallback for a missing CLI.
+ */
+const AUTO_BACKEND_IDS = ['claude', 'codex'] as const;
 
-function resolvedBuiltInBackends(environment: NodeJS.ProcessEnv): ExplainerBackend[] {
+/**
+ * The writers that can run now. The Ollama route is present only when its address is loopback and
+ * a model is named, because it has no default model to fall back to.
+ */
+function resolvedBuiltInBackends(
+  environment: NodeJS.ProcessEnv,
+  model?: string,
+): ExplainerBackend[] {
   const claude = resolveTrustedExecutable('claude', { environment });
   const codex = resolveTrustedExecutable('codex', { environment });
+  const ollama = model !== undefined && resolveOllamaEndpoint(environment).ok;
   return [
     ...(claude ? [createClaudeExplainerBackend(claude)] : []),
     ...(codex ? [createCodexExplainerBackend(codex)] : []),
+    ...(ollama ? [createOllamaExplainerBackend(environment)] : []),
   ];
 }
 
@@ -300,7 +316,11 @@ export function environmentExplainerMode(
   if (environment.SALIDIUM_EXPLAIN === '0') return 'off';
   if (environment.SALIDIUM_EXPLAINER === undefined) return undefined;
   const value = environment.SALIDIUM_EXPLAINER.trim().toLowerCase();
-  return value === 'auto' || value === 'claude' || value === 'codex' || value === 'off'
+  return value === 'auto' ||
+    value === 'claude' ||
+    value === 'codex' ||
+    value === 'ollama' ||
+    value === 'off'
     ? value
     : 'invalid';
 }
@@ -329,17 +349,27 @@ export function effectiveExplainerModel(
     : validModel(environment.SALIDIUM_EXPLAIN_MODEL);
 }
 
+/** Providers whose sessions an agent CLI may explain: the agents those CLIs belong to. */
+const HOSTED_EXPLAINABLE_PROVIDERS: ReadonlySet<ProviderId> = new Set(['claude-code', 'codex']);
+
 export function chooseExplainerBackendId(
   sourceProvider: ProviderId,
   mode: ExplainerMode | 'invalid',
   available: ReadonlySet<string>,
 ): string | undefined {
   if (mode === 'off' || mode === 'invalid') return undefined;
+  // An explicit choice is that writer or nothing. Selecting `ollama` and finding it unavailable
+  // must never fall through to a CLI that could contact a hosted service.
+  if (mode === 'ollama') return available.has(mode) ? mode : undefined;
+  // A CLI writer may call a hosted model. Sessions from any other provider (OpenCode is often run
+  // on local models so that nothing leaves the machine) are never routed to one; the local
+  // Ollama writer, when the person selected it, is their only explainer.
+  if (!HOSTED_EXPLAINABLE_PROVIDERS.has(sourceProvider)) return undefined;
   if (mode !== 'auto') return available.has(mode) ? mode : undefined;
 
   const matching = sourceProvider === 'codex' ? 'codex' : 'claude';
   if (available.has(matching)) return matching;
-  return BUILT_IN_BACKEND_IDS.find((id) => available.has(id));
+  return AUTO_BACKEND_IDS.find((id) => available.has(id));
 }
 
 export function resolveExplainerBackend(
@@ -347,6 +377,10 @@ export function resolveExplainerBackend(
   environment = process.env,
   mode: ExplainerMode | 'invalid' = configuredExplainerMode(environment),
 ): ExplainerBackend | undefined {
+  // When the local route is selected it is always the backend that runs, even without a model or
+  // with a refused address: its own refusal is then recorded as a failed attempt, as a CLI failure
+  // is, and nothing else is ever tried in its place.
+  if (mode === 'ollama') return createOllamaExplainerBackend(environment);
   const backends = resolvedBuiltInBackends(environment);
   const available = new Set(backends.map((backend) => backend.id));
   const id = chooseExplainerBackendId(sourceProvider, mode, available);
@@ -358,8 +392,10 @@ export interface ExplainedConfiguration {
   model: string | undefined;
   backendLocked: boolean;
   modelLocked: boolean;
-  availableBackends: Array<'claude' | 'codex'>;
+  availableBackends: ExplainerRouteBackend[];
   routes: { claudeCode: ExplainerRoute; codex: ExplainerRoute };
+  /** Present when the Ollama route is in force, so a refused address can say why. */
+  ollama?: { endpoint: string | null; refused: string | null };
 }
 
 /**
@@ -373,12 +409,14 @@ export function explainedConfiguration(
 ): ExplainedConfiguration {
   const mode = effectiveExplainerMode(storedBackend, environment);
   const model = effectiveExplainerModel(storedModel, environment);
-  const availableBackends = resolvedBuiltInBackends(environment).map(
-    (backend) => backend.id,
-  ) as Array<'claude' | 'codex'>;
+  const availableBackends = resolvedBuiltInBackends(
+    environment,
+    mode === 'ollama' ? model : undefined,
+  ).map((backend) => backend.id) as ExplainerRouteBackend[];
   const available = new Set<string>(availableBackends);
   const route = (provider: ProviderId): ExplainerRoute => {
     const backend = chooseExplainerBackendId(provider, mode, available);
+    if (backend === 'ollama' && model) return { backend, model: ollamaGeneratorLabel(model) };
     if (backend !== 'claude' && backend !== 'codex') return { backend: null, model: null };
     return {
       backend,
@@ -387,6 +425,7 @@ export function explainedConfiguration(
         (backend === 'claude' ? DEFAULT_CLAUDE_EXPLAINER_MODEL : DEFAULT_CODEX_EXPLAINER_MODEL),
     };
   };
+  const endpoint = mode === 'ollama' ? resolveOllamaEndpoint(environment) : undefined;
   return {
     mode,
     model,
@@ -394,6 +433,13 @@ export function explainedConfiguration(
     modelLocked: environment.SALIDIUM_EXPLAIN_MODEL !== undefined,
     availableBackends,
     routes: { claudeCode: route('claude-code'), codex: route('codex') },
+    ...(endpoint
+      ? {
+          ollama: endpoint.ok
+            ? { endpoint: endpoint.label, refused: null }
+            : { endpoint: null, refused: endpoint.reason },
+        }
+      : {}),
   };
 }
 
@@ -406,7 +452,8 @@ export interface ExplainerStatus {
 
 /** A side-effect-free diagnostic; executable presence does not imply that the CLI is authenticated. */
 export function getExplainerStatus(environment = process.env): ExplainerStatus {
-  const available = resolvedBuiltInBackends(environment).map((backend) => backend.id);
+  const model = effectiveExplainerModel(null, environment);
+  const available = resolvedBuiltInBackends(environment, model).map((backend) => backend.id);
   const set = new Set(available);
   const mode = configuredExplainerMode(environment);
   return {

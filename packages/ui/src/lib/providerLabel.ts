@@ -2,5 +2,6 @@
 export function providerLabel(provider: string): string {
   if (provider === 'claude-code') return 'Claude Code';
   if (provider === 'codex') return 'Codex';
+  if (provider === 'salidium/opencode') return 'OpenCode';
   return provider;
 }

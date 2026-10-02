@@ -20,7 +20,7 @@ import { z } from 'zod';
  * - Every property is always present. A value Salidium does not have is `null`, never an omitted
  *   key, so a missing key is a defect rather than a way of saying "unknown".
  */
-export const CONSUMER_CONTRACT = { name: 'salidium.consumer', major: 1, minor: 0 } as const;
+export const CONSUMER_CONTRACT = { name: 'salidium.consumer', major: 1, minor: 1 } as const;
 
 /** Every URL in this contract starts here. The major version is part of the path. */
 export const CONSUMER_BASE_PATH = '/consumer/v1';
@@ -118,6 +118,11 @@ export const SessionEntrySchema = z.object({
     filesChanged: Count,
     linesAdded: Count,
     linesRemoved: Count,
+    linesRemovedExact: z
+      .boolean()
+      .describe(
+        'False when a provider replaced some file without recording what it held, so linesRemoved is a lower bound rather than a count. Added in 1.1.',
+      ),
     reviewOpen: Count.describe('Open review items above informational severity.'),
     remaining: Count.describe('Plan steps still pending or in progress.'),
   }),
@@ -182,11 +187,38 @@ export const VerificationRunSchema = z.object({
 });
 export type VerificationRun = z.infer<typeof VerificationRunSchema>;
 
+/**
+ * Where a changed file sits in Git, added in 1.1. Salidium resolves it from the filesystem when the
+ * change happens, because agents often write in a worktree or checkout other than the one the
+ * session started in, so `session.repositoryRoot` says nothing about a particular file.
+ */
+export const FileRepositorySchema = z
+  .object({
+    root: Text(4096).describe('Top level of the Git working tree that holds the file.'),
+    path: Text(4096).describe('The file relative to root, with / separators.'),
+    mainRoot: Text(4096)
+      .nullable()
+      .describe(
+        'When root is a linked worktree, the repository it belongs to: the working tree that owns the shared Git directory, or that directory itself for a bare repository. Null for a main working tree.',
+      ),
+    provenance: z.literal('observed'),
+  })
+  .describe(
+    'Resolved from Git pointer files on disk when the change was live, without running git. Null when no repository held the file, when the change was imported from history, or when Salidium could not tell; nothing is guessed. Added in 1.1.',
+  );
+export type FileRepository = z.infer<typeof FileRepositorySchema>;
+
 export const ChangedFileSchema = z.object({
   path: Text(4096),
+  repository: FileRepositorySchema.nullable(),
   changeCount: Count,
   linesAdded: Count,
   linesRemoved: Count,
+  linesRemovedExact: z
+    .boolean()
+    .describe(
+      'False when some change replaced this file without recording what it held, so linesRemoved is a lower bound. Added in 1.1.',
+    ),
   kinds: z.array(z.enum(['add', 'update', 'delete', 'move'])),
   lastChangedAt: Timestamp,
   coverage: z
@@ -275,6 +307,27 @@ export const ExplanationSchema = z
   );
 export type Explanation = z.infer<typeof ExplanationSchema>;
 
+/**
+ * The repository state at one session boundary, read by Salidium from the session's own working
+ * directory when the boundary happened. Added in 1.1.
+ */
+export const RevisionAnchorSchema = z.object({
+  root: Text(4096)
+    .nullable()
+    .describe(
+      'The repository this anchor read, as Git reported its top level. A session can move between repositories, so this can differ from session.repositoryRoot and between the two anchors. Null when it could not cross whole.',
+    ),
+  head: z
+    .string()
+    .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/)
+    .nullable()
+    .describe('The full commit id HEAD named. Null for a repository with no commits yet.'),
+  branch: Text(256).nullable().describe('The checked-out branch. Null for a detached HEAD.'),
+  at: Timestamp,
+  provenance: z.literal('observed'),
+});
+export type RevisionAnchor = z.infer<typeof RevisionAnchorSchema>;
+
 const Envelope = <F extends string, V extends number>(format: F, version: V) => ({
   format: z.literal(format),
   version: z.literal(version),
@@ -312,6 +365,18 @@ export const SessionReportSchema = z.object({
       ),
     })
     .nullable(),
+  revision: z
+    .object({
+      atStart: RevisionAnchorSchema.nullable().describe(
+        'When the session started. Kept from the first start Salidium watched. A resume, clear, or compaction does not count as a start, so a session Salidium first watched after it started has none.',
+      ),
+      atLatestTurnEnd: RevisionAnchorSchema.nullable().describe(
+        'When the most recent turn ended. Commits made since then are in changes.commits.',
+      ),
+    })
+    .describe(
+      'Which revision the work started from and stands at, each in the repository its root names. Each anchor is null when Salidium did not watch that boundary live: history imports, sessions that began before Salidium was running, or git observation turned off. Added in 1.1.',
+    ),
   changes: z.object({
     glance: Text(300),
     files: z.array(ChangedFileSchema).describe('Most recently changed first.'),
@@ -392,6 +457,21 @@ export const ConsumerContractEntrySchema = z.object({
     .describe('Loopback only. The endpoints under it are fixed by that major version.'),
 });
 
+/**
+ * A local contract this daemon serves that is not part of `salidium.consumer` and makes no
+ * compatibility promise, such as a version 0 under trial. Added in 1.1.
+ */
+export const ExperimentalContractEntrySchema = z.object({
+  name: z.string().regex(/^salidium\.[a-z][a-z0-9-]{0,40}$/),
+  major: z.number().int().nonnegative(),
+  minor: z.number().int().nonnegative(),
+  baseUrl: z
+    .string()
+    .regex(/^http:\/\/127\.0\.0\.1:\d{1,5}\/[a-z][a-z0-9-]{0,40}\/v\d+$/)
+    .describe('Loopback only.'),
+});
+export type ExperimentalContractEntry = z.infer<typeof ExperimentalContractEntrySchema>;
+
 export const ConsumerDiscoverySchema = z.object({
   ...Envelope('salidium.consumer-discovery', 1),
   contracts: z
@@ -401,6 +481,18 @@ export const ConsumerDiscoverySchema = z.object({
       'Every major version this daemon serves. Use the entry whose major you implement and ignore the rest, so a later major never hides this one.',
     ),
   salidium: z.object({ version: Text(64) }),
+  providers: z
+    .array(z.object({ id: ProviderIdSchema }))
+    .max(32)
+    .describe(
+      "Providers this daemon instance observes, by the id lookup's provider= takes. An id not listed is not observed by this instance until it restarts with a new instanceId. Sorted by id, each once. Added in 1.1: check minor in your contract entry first; a 1.0 daemon does not send it.",
+    ),
+  experimental: z
+    .array(ExperimentalContractEntrySchema)
+    .max(8)
+    .describe(
+      'Experimental local contracts this instance serves. No compatibility promise; consumers must not depend on them without checking. Sorted by name, each once. Added in 1.1.',
+    ),
   instanceId: z
     .string()
     .regex(/^[0-9a-f]{32}$/)

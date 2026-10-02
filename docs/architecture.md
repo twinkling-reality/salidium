@@ -33,6 +33,15 @@ Hooks give low-latency notification. Provider session files are the durable sour
 history import, restart recovery, and richer records. The reducer reconciles both channels rather
 than treating arrival order as truth.
 
+Some providers keep their durable record in a database instead of line files. OpenCode 2.x writes
+its sessions to its own SQLite store, so a store tailer polls that file in place of the transcript
+tailer. It opens the database read only, through an authorizer that allowlists the tables and
+columns the adapter reads and refuses everything else, including the provider's credential and
+account tables, pragmas, ATTACH, and writes. Its positions live in the same source-cursor table as
+file offsets, and an accepted batch is durable before its cursor advances, exactly as for files.
+OpenCode has no hooks in Salidium: Salidium never connects to an OpenCode server, installs a plugin,
+or changes OpenCode's configuration.
+
 ## Package boundaries
 
 - `packages/protocol` owns runtime-validated events, provenance, semantic changes, and wire shapes.
@@ -109,7 +118,27 @@ old stream generation, loads a fresh snapshot, and reconnects from its new seque
 Hook delivery is asynchronous and must never block the coding agent. If the daemon cannot be
 reached, each hook invocation writes its own spool envelope and atomically renames it ready. The
 daemon atomically claims ready files before ingestion. Legacy shared spool files remain readable for
-upgrade recovery, but new senders never concurrently append to one record.
+upgrade recovery, but new senders never concurrently append to one record. The relay names each
+envelope by its provider without starting a subprocess, so a full process table cannot strip the
+provider from the name. An envelope whose name still carries no valid provider id is never read or
+deleted: the drain sets it aside under an `.unattributed` name, which never replaces an existing
+file, and records one collection gap without a loss count for each pass that sets any aside. At
+most 1,000 files are quarantined. Past that bound such envelopes stay in place, still counted by
+the relay against its ceiling, and one more gap records that the quarantine is full. Quarantined files appear in queue inspection under their own count. They do not count
+as waiting work, so they hold neither queue age nor the empty-queue precondition for storage
+optimization.
+
+Concurrent senders serialize spool publication with a quota lock. Reclaiming a dead owner's lock is
+reserved to one contender at a time by a reaping directory that the relay creates and removes with
+`mkdir` and `rmdir`. A reaper that dies between them, from a signal or because the shell exits when
+it cannot fork, leaves that directory behind, and no later sender could reclaim a dead owner's lock.
+The relay has no clock, so the drain removes a reaping directory whose timestamp is more than five
+minutes from now in either direction, so a clock set back cannot keep it. It leaves the lock itself
+to the relay, which re-reads the owner before unlinking. Recovery needs the daemon running: while it
+is down, spooling senders that meet an abandoned guard still spend their whole attempt budget. The
+guard's exclusion holds for reapers that finish within five minutes, so one paused longer, by
+SIGSTOP or a sleeping laptop, could overlap another; the worst case is a few files over the pending
+ceiling, never lost data.
 
 Operational policy is a versioned sparse document in `operations-config.json`. Owner-only,
 same-directory atomic replacement retains `operations-config.previous.json` as a recovery copy.
@@ -126,6 +155,17 @@ models and a durable preparation cursor without traversing the historical event 
 startup transaction. After the listener starts, a separate worker advances that cursor in bounded
 batches. A crash or deliberate stop leaves the cursor resumable. Historical retention, compaction,
 and storage optimization remain deferred or blocked until preparation is complete.
+
+A reducer change invalidates every checkpoint. After the listener starts, a background pass replays
+stored sessions without a checkpoint at the current reducer version, newest activity first, on the
+main event loop in slices of at most 2,000 events or about 150 ms with a yield between slices and
+between sessions. Each finished session is written as its first load would write it, the
+checkpoint and the rewritten change log, and its checkpoints from other reducer versions are
+dropped in the same transaction, as every checkpoint write now does. The pass creates no
+coordinator, so it neither marks a session loaded for retention nor schedules an explanation; it
+skips sessions a coordinator holds, pauses during collection pause and maintenance, and resumes
+after a restart from what remains, since a current checkpoint marks a session done. Its progress
+is the operations snapshot's `historyUpdate`.
 
 New physical stores use 16 KiB pages. `events` is an ordinary rowid table with a unique
 `(session_id, seq)` primary-key index, and JSON payloads at or above 1 KiB use a versioned fast gzip
@@ -213,6 +253,16 @@ checks its identity, and applies output redaction before returning it.
 
 If the source file was deleted, rotated, or rewritten, Salidium returns an explicit unavailable or
 changed-source reason. It does not display whatever unrelated record now occupies the old line.
+For a database-backed provider the reference names the store, the session and the row instead of a
+file line, and the identity is the SHA-256 of the row as ingested. The re-read goes through the same
+restricted connection, and a row the provider rewrote or deleted (OpenCode's revert deletes rows)
+answers changed or unavailable. One OpenCode row holds a whole model step, every tool call and its
+output, so the raw view returns only the part the event stands for (or, for usage, the step without
+its content), names the paths and commands in it, and is suppressed when any of them is sensitive,
+as an event would be. When the provider is not enabled, nothing is read, even for events already
+stored. A read-only reader of a database in write-ahead-log mode needs SQLite's `-wal` and `-shm`
+index files; when OpenCode is not running SQLite creates them empty beside the store, and the
+database itself is never written.
 Older stored records may lack a fingerprint until they are reingested. The schema upgrade queues
 every cursor and event-referenced provider file durably for that repair; missing files remain
 visible and retryable.
@@ -248,6 +298,22 @@ evidence position. Failures are recorded as failures, and explanation can be dis
 
 The provider CLI may contact its own service and consume the user's plan or API allowance. Salidium
 does not hide that network boundary or describe generated text as observed fact.
+
+The `ollama` backend is the route on which nothing crosses that boundary. The daemon itself sends
+the same evidence packet to a local Ollama's `/api/chat` over loopback HTTP; there is no agent CLI
+in between. The address is the literal `127.0.0.1` or `::1`, from the default or from `OLLAMA_HOST`
+only when that names a loopback address (`localhost` is mapped to `127.0.0.1`, never resolved).
+Redirects are refused, the response body is bounded by the CLI routes' output ceiling, and the call
+shares their concurrency limit, timeout, and cancellation. A model is required and is chosen from
+the installed list in `/api/tags`; Salidium never pulls one. Ollama cloud models, which Ollama
+proxies to ollama.com, are excluded: `cloud`-tagged names are refused, and each call first asks
+`/api/show` and refuses a model described as remote. The guarantee is about Salidium's connection;
+whatever listens on the loopback port is trusted as Ollama. The request asks for the JSON Schema
+as Ollama's `format` first; on the 501 "structured output is unavailable" answer that MLX builds
+give, it retries once with the schema stated in a system message and remembers that per model. The
+runtime validation is unchanged, and the explanation's generator label names the model.
+`ollama` is chosen only explicitly: `auto` never selects it, and selecting it never falls back to
+a CLI when it cannot run.
 
 Personalization is a separate presentation layer. One bounded reader-authored note is kept in an
 owner-only local file. An explicit Personalize action saves the note and sends it with the
@@ -289,7 +355,10 @@ provider still needs file matching, parsing, deterministic identifiers, provenan
 where supported, synthetic fixtures, and reconciliation tests.
 
 That registry is an internal and embedding seam, not a claim that the installed CLI supports
-third-party plug-ins. The CLI currently ships and configures only Claude Code and Codex. A safe
+third-party plug-ins. The CLI ships Claude Code, Codex and, as an experimental provider that is off
+until it is added to `providers.enabled`, OpenCode (`salidium/opencode`). A descriptor may carry a
+store source when its provider's record is a database; the source owns the restricted connection,
+and the daemon owns scheduling, cursors, persistence and redaction. A safe
 external provider system first needs a separately published stable adapter SDK, one descriptor that
 also declares setup, display, and capabilities, runtime contract tests, explicit user-declared
 absolute manifests, and process isolation with narrowly granted roots and hook capabilities.
@@ -332,16 +401,27 @@ records the decision; this is the durable shape.
 - **No side effects.** Consumer reads never load a session coordinator, write a checkpoint, count a
   session as loaded for retention, or schedule an explanation.
 - **Discovery.** The daemon writes `consumer.json` beside `daemon.json`, listing every major
-  version it serves with its base URL, plus a per-start instance id, and removes it on a clean stop.
-  It holds no secret. Everything under `/consumer`, refusals included, answers with contract
+  version it serves with its minor version and base URL, plus a per-start instance id, and removes
+  it on a clean stop. Since 1.1 it also lists the providers the instance observes, which are fixed
+  for its life because enabling one needs a restart, and an `experimental` list of local contracts
+  it serves without a compatibility promise, which an embedding application supplies once the port
+  is known. The file and the endpoint are produced by the same function and agree. It holds no
+  secret. Everything under `/consumer`, refusals included, answers with contract
   documents.
 - **Feed.** Notifications, not state: `resync` on every connection, then `session.changed` with the
   new evidence sequence, `session.removed`, `heartbeat`, and `closing`. No replay; a reader more than
   1 MiB behind is disconnected.
+- **Revisions and repositories (1.1).** A report's `revision` carries HEAD, the branch and the
+  repository read at the first session start and the latest turn end, from git snapshots that name
+  the boundary that triggered them; a resume, clear or compaction is not a start. Each changed file carries the Git working tree that holds it, resolved while the
+  change is live from `.git` pointer files alone: no git process, no file contents, bounded work,
+  files owned by the user only, and nothing under another user's home. Anything not established
+  is `null`.
 - **Compatibility.** The zod schemas in `@salidium/consumer-contract` are the source of truth; the
   committed JSON Schema is generated from them and checked in tests. Within a major version changes
   are additive only, consumers ignore what they do not know, and the producer is held to the exact
-  declared shape.
+  declared shape. Each published minor's schemas are kept unchanged in `schema/v1/released/`, and
+  every document the daemon serves in tests must validate against all of them.
 
 The consumer credential file is the authority, not the daemon. The CLI edits it under a lock whether
 or not the daemon is running, and the daemon re-reads it when its metadata changes.
@@ -385,6 +465,15 @@ do not.
 
 - Claude Code and Codex own their session formats; adapter updates may be needed when those formats
   change.
+- OpenCode support is verified only against OpenCode 2.0.18 and labelled experimental. Its store
+  does not keep permission prompts or replies, so a granted permission is unknown and only a
+  declined call is observed. Its `write` tool records no diff: a new file's lines are counted, but
+  an overwrite's removed lines are unknown and are carried as unknown rather than guessed. OpenCode
+  2.x has no to-do tool, so OpenCode sessions show plans only as the agent's text.
+- The OpenCode store must be a regular file on a local disk. Its reader is synchronous, so a store
+  on a network filesystem that stops answering would stall the daemon; that setup is unsupported.
+  A FIFO, device or directory at the store's path is never opened, and a store whose session
+  tables are not plain tables is refused.
 - Native Windows history import is supported, but the live hook relay currently requires POSIX
   `sh` and `curl`.
 - Raw evidence depends on local provider files. The upgrade can recover fingerprints only while the

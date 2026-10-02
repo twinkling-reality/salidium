@@ -24,7 +24,9 @@ should not open.
 The browser tab is a control panel, not the background service. Closing it does not stop Salidium
 or collection. Run `salidium open` to return to the same local service, `salidium status` to see its
 process ID, loopback address, state directory, queue, store size, and alerts, or
-`salidium status --watch` for a live terminal view. Pause, resume, drain, restart, and stop remain
+`salidium status --watch` for a live terminal view. After an upgrade that changes how sessions are
+read, status also shows "Updating session history: n of m" while Salidium brings stored sessions
+up to date in the background. Pause, resume, drain, restart, and stop remain
 available from the CLI without a browser window.
 
 ### Always-on mode on macOS
@@ -216,7 +218,10 @@ a few gigabytes. It is never run on a timer and never as part of health. The dae
 worker with its own connection, so collection and control are unaffected while it works, and the
 answer carries the moment it was true rather than presenting itself as live.
 
-`salidium maintenance queue` lists bounded queue metadata without reading payloads.
+`salidium maintenance queue` lists bounded queue metadata without reading payloads. Its totals count
+envelopes waiting to be stored. Quarantined files, an oversized payload or an envelope that names no
+provider, are listed after them with their own count: they are kept as evidence, each was recorded
+as a collection gap, and no drain will store them.
 `salidium maintenance drain` asks the running daemon to make bounded batches durable; repeat or add
 `--wait=SECONDS` to wait for empty. `salidium maintenance optimize --dry-run` reports the queue and
 free-space preflight. The actual optimize flow drains, pauses, stops, checkpoints, performs the
@@ -264,6 +269,39 @@ Typing a model name is kept under **Other model** for installations with a model
 seen. **Usage** keeps session tokens separate from the explanation ledger across all runs. The same
 control is available before the first session exists, so defaults can be set up front.
 
+### A local model in Ollama
+
+Choose **Local model** under **Explanation** to have a model you already run in Ollama on the same
+machine write the explanation. It is still a model call, so it is not **Local only**, but nothing
+leaves the machine on this route: Salidium sends the same bounded, redacted summary to Ollama's
+`/api/chat` at `127.0.0.1:11434` and calls nothing else. The explanation is labelled with the model
+that wrote it, for example `qwen3.6:35b-a3b-nvfp4 · Ollama`.
+
+- There is no default model. **Choose a model** lists the models Ollama already has installed, read
+  from its `/api/tags` only while this route is selected. Salidium never pulls a model.
+- Ollama cloud models are excluded. Ollama can present a model that runs on ollama.com under a
+  `cloud` tag and forward requests to it, so Salidium neither offers nor uses one: it refuses
+  `cloud`-tagged names, and before each call it asks Ollama's `/api/show` about the model and
+  refuses one Ollama describes as remote.
+- The promise covers Salidium's own connection. Whatever answers on that loopback port is trusted
+  as Ollama; a proxy or tunnel you run there would receive the summary.
+- `OLLAMA_HOST` may move the port, and is accepted only when it names a loopback address:
+  `127.0.0.1`, `::1`, or `localhost`, which Salidium reads as `127.0.0.1` without consulting a name
+  server. Any other value, including `0.0.0.0`, is refused, the panel says why, and nothing is called.
+- A redirect is refused rather than followed. A reply over the same 128 KB ceiling the CLI routes have
+  is cut off and recorded as a failure, and the call shares their two-at-a-time limit, timeout, and
+  cancellation.
+- **Same as coding** never chooses the local model, and choosing it never falls back to Claude or
+  Codex. When Ollama is not running or the model is missing, nothing is sent anywhere.
+- Personalize uses the same route when it is selected, so the saved terms and the generated wording
+  are sent to the same local model and nowhere else.
+
+Salidium first asks Ollama to constrain the answer to the explanation's JSON Schema. Some local builds,
+including MLX ones, answer HTTP 501 "structured output is unavailable". Salidium then asks once more
+with the schema stated in the request instead, and remembers that for the model until the daemon
+restarts. The answer is validated the same way in both cases; one that does not fit is a failure.
+Ollama calls create no agent transcript, so they do not appear in the explanation token ledger.
+
 The selected **Local only**, **When done**, or **Each reply** mode is visible in the rail. In Local
 only mode the agent and model controls stay hidden because neither can be used.
 
@@ -296,9 +334,10 @@ The call sends the saved terms with the existing generated Why and How; it does 
 transcript, prompts, commands, diffs, or raw records. Personalized presentations are never folded
 into Verified, Left, Review, history, checkpoints, raw evidence, session exports, or the intelligence
 sync outbox. The selected agent CLI may contact its provider when you explicitly personalize, under
-that provider's own data policy. Deleting the saved terms cannot delete a record kept by that agent.
+that provider's own data policy; with **Local model** selected, the call goes to the local Ollama
+only. Deleting the saved terms cannot delete a record kept by that agent.
 
-Set `SALIDIUM_EXPLAINER` to `auto`, `claude`, `codex`, or `off` to enforce a helper choice when the
+Set `SALIDIUM_EXPLAINER` to `auto`, `claude`, `codex`, `ollama`, or `off` to enforce a helper choice when the
 daemon starts. `SALIDIUM_EXPLAIN_MODEL` similarly enforces a model override. Environment choices
 lock the matching controls in the interface until the override is removed. With explanations off,
 nothing is sent to an agent and the deterministic report remains available.
@@ -326,10 +365,17 @@ salidium consumer revoke <id>
 Revoking takes effect on the tool's next request and closes an open change feed within seconds.
 
 A report read this way carries Salidium's findings: the verdict, changed files, checks, review items,
-what remains, and the optional generated Why and How, each labelled with how Salidium knows it. It
-does not carry your prompts, the agent's full messages, command lines, command output, or raw
-records. While Salidium runs, the tool finds it through `~/.salidium/consumer.json`, which contains
-no secret. The contract itself is described in
+what remains, and the optional generated Why and How, each labelled with how Salidium knows it.
+Since contract version 1.1 it also says which commit the session started from and stood at after
+its latest turn, and which Git working tree holds each changed file, including a worktree outside
+the directory the session started in. Salidium reads that from Git's own files while the change
+happens, without running git or reading file contents, and only when Git observation is on. It does
+not carry your prompts, the agent's full messages, command lines, command output, or raw records.
+
+While Salidium runs, the tool finds it through `~/.salidium/consumer.json`, which contains no
+secret. That file also lists the agents this Salidium watches, so the tool knows which sessions it
+can expect to find, and any experimental local contracts it serves, which carry no compatibility
+promise. Enabling or disabling an agent shows there after Salidium restarts. The contract itself is described in
 [ADR 0005](decisions/0005-read-only-consumer-contract.md) and in the
 `@salidium/consumer-contract` package.
 

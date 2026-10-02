@@ -1,5 +1,6 @@
 import { type ProviderId, ProviderIdSchema } from '@salidium/protocol';
 import type { ProviderAdapter } from './providerAdapter.ts';
+import type { StoreSource } from './storeSource.ts';
 
 /** Increment only for an intentional, documented break in the adapter contract. */
 export const PROVIDER_ADAPTER_CONTRACT_VERSION = 2 as const;
@@ -26,6 +27,8 @@ export interface ProviderDescriptor {
   /** Declared hook traffic and pressure behavior, including an empty declaration when unsupported. */
   hookEventBudget: HookEventBudget;
   adapter: ProviderAdapter;
+  /** Present when the provider's durable record is a database the daemon polls, not line files. */
+  storeSource?: StoreSource;
 }
 
 /**

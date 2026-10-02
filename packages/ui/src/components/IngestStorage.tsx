@@ -8,6 +8,7 @@ import type {
 } from '@salidium/protocol';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { relativeTime } from '../lib/format.ts';
+import { providerLabel } from '../lib/providerLabel.ts';
 import { type OperationsAction, useAppStore } from '../store/appStore.ts';
 import { ToolButton } from './Controls.tsx';
 import { Loading } from './Loading.tsx';
@@ -618,7 +619,7 @@ function PolicySettings({ config }: { config: EffectiveOperationalConfig }) {
           </label>
           <fieldset disabled={busy || locked(config.values.providers.enabled.source)}>
             <legend>Providers after restart</legend>
-            {(['claude-code', 'codex'] as const).map((provider) => {
+            {(['claude-code', 'codex', 'salidium/opencode'] as const).map((provider) => {
               const enabled = config.values.providers.enabled.value.includes(provider);
               return (
                 <label className="operations-check" key={provider}>
@@ -635,7 +636,8 @@ function PolicySettings({ config }: { config: EffectiveOperationalConfig }) {
                       })
                     }
                   />
-                  {provider === 'claude-code' ? 'Claude Code' : 'Codex'}
+                  {providerLabel(provider)}
+                  {provider === 'salidium/opencode' && ' (experimental, read only)'}
                 </label>
               );
             })}

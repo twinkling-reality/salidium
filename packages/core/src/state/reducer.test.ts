@@ -5,7 +5,7 @@ import { cloneState, replayEvents } from '../history/replay.ts';
 import { projectSession } from '../projections/projectSession.ts';
 import { summarizeSession } from '../projections/summarizeSession.ts';
 import { EventBuilder } from '../testing/eventBuilders.ts';
-import { createInitialState } from './createInitialState.ts';
+import { createInitialState, reviveState } from './createInitialState.ts';
 import { applyEvent } from './reducer.ts';
 import type { RunState } from './runState.ts';
 
@@ -455,5 +455,292 @@ describe('reducer: idempotence, duplicates and checkpoint replay', () => {
     expect(v?.outcomeEpistemic).toBe('inferred');
     expect(v?.caveats).toContain('exit-inferred');
     expect(v?.caveats).toContain('no-summary-parsed');
+  });
+});
+
+describe('reducer: revision anchors and file locations', () => {
+  const A = 'a'.repeat(40);
+  const B = 'b'.repeat(40);
+  const C = 'c'.repeat(40);
+  const D = 'd'.repeat(40);
+
+  function snapshot(
+    b: EventBuilder,
+    id: string,
+    head: string,
+    trigger?: 'session.started' | 'turn.ended' | 'commit',
+    branch = 'main',
+  ): StoredEvent {
+    return b.raw({ id, kind: 'git.snapshot', repoRoot: '/repo', head, branch, dirty: [], trigger });
+  }
+
+  function session() {
+    const b = new EventBuilder();
+    return [
+      b.sessionStarted(),
+      snapshot(b, 'git:start', A, 'session.started'),
+      b.turnStarted('First'),
+      snapshot(b, 'git:commit', B, 'commit'),
+      b.turnEnded('Done.'),
+      snapshot(b, 'git:end1', B, 'turn.ended'),
+      // A resume starts the session again; the anchor at start stays the first one.
+      b.sessionStarted(),
+      snapshot(b, 'git:resume', C, 'session.started', 'feature'),
+      b.turnStarted('Second'),
+      b.turnEnded('Done again.'),
+      snapshot(b, 'git:end2', D, 'turn.ended', 'feature'),
+      b.raw({
+        id: 'located:1',
+        kind: 'file.located',
+        files: [
+          {
+            path: '/work/tree/src/a.ts',
+            repository: { root: '/work/tree', path: 'src/a.ts', mainRoot: '/repo' },
+          },
+          { path: '/tmp/scratch.txt', repository: null },
+        ],
+      }),
+      b.raw({
+        id: 'located:2',
+        kind: 'file.located',
+        files: [
+          {
+            path: '/work/tree/src/a.ts',
+            repository: { root: '/repo', path: 'work/tree/src/a.ts' },
+          },
+        ],
+      }),
+    ];
+  }
+
+  it('anchors the first session start and the latest turn end, and nothing else', () => {
+    const { state } = run(session());
+    expect(state.git.atStart).toMatchObject({ head: A, branch: 'main' });
+    expect(state.git.atTurnEnd).toMatchObject({ head: D, branch: 'feature' });
+    expect(state.git.head).toBe(D);
+  });
+
+  it('gives each anchor the repository it read, when the session moves into another one', () => {
+    const b = new EventBuilder();
+    const clone = (root: string, id: string, trigger: 'session.started' | 'turn.ended') =>
+      b.raw({
+        id,
+        kind: 'git.snapshot',
+        repoRoot: root,
+        head: A,
+        branch: 'main',
+        dirty: [],
+        trigger,
+      });
+    const { state } = run([
+      b.sessionStarted('/work/a'),
+      clone('/work/a', 'git:a', 'session.started'),
+      b.turnStarted('Try it in the clone'),
+      b.raw({ id: 'moved', kind: 'session.updated', cwd: '/work/b' }),
+      b.turnEnded('Done in the clone.'),
+      clone('/work/b', 'git:b', 'turn.ended'),
+    ]);
+    // The same commit id in two repositories is two different facts; the root says which.
+    expect(state.git.atStart).toMatchObject({ root: '/work/a', head: A });
+    expect(state.git.atTurnEnd).toMatchObject({ root: '/work/b', head: A });
+    expect(state.repoRoot).toBe('/work/a');
+  });
+
+  it('does not guess a boundary for a snapshot written before snapshots named their trigger', () => {
+    const b = new EventBuilder();
+    const { state } = run([b.sessionStarted(), snapshot(b, 'git:old', A), b.turnEnded('Done.')]);
+    expect(state.git.head).toBe(A);
+    expect(state.git.atStart).toBeUndefined();
+    expect(state.git.atTurnEnd).toBeUndefined();
+  });
+
+  it('keeps the latest location of each path, including that none was found', () => {
+    const { state } = run(session());
+    expect(state.fileLocations).toEqual({
+      '/work/tree/src/a.ts': { root: '/repo', path: 'work/tree/src/a.ts' },
+      '/tmp/scratch.txt': null,
+    });
+  });
+
+  it('replays to the same anchors and locations from a checkpoint as from the start', () => {
+    const events = session();
+    const whole = run(events).state;
+    const split = events.findIndex((e) => e.id === 'git:resume');
+    const checkpoint = cloneState(replayEvents(fresh(), events.slice(0, split)).state);
+    const resumed = replayEvents(JSON.parse(JSON.stringify(checkpoint)), events.slice(split)).state;
+    expect(resumed.git.atStart).toEqual(whole.git.atStart);
+    expect(resumed.git.atTurnEnd).toEqual(whole.git.atTurnEnd);
+    expect(resumed.fileLocations).toEqual(whole.fileLocations);
+  });
+});
+
+describe('reducer: a better record of a command that already finished', () => {
+  it('derives its check once, however many records of the call arrive', () => {
+    const b = new EventBuilder('codex:t');
+    const input = { kind: 'command' as const, command: 'pnpm vitest run' };
+    const result = (exit: { code?: number; observation: 'explicit' | 'unknown' }) => ({
+      kind: 'command' as const,
+      exit,
+      outputExcerpt: VITEST_PASS,
+      outputChars: VITEST_PASS.length,
+      truncated: false,
+    });
+    const { state } = run([
+      b.sessionStarted(),
+      b.turnStarted('Run the tests'),
+      // A hook reports the call and its result first, without an exit code.
+      ...[
+        b.raw({
+          id: 'tool:x:call',
+          kind: 'tool.called',
+          callId: 'x',
+          toolName: 'Bash',
+          input,
+          title: 'Run',
+        }),
+        b.raw({
+          id: 'tool:x:result:hook',
+          kind: 'tool.completed',
+          callId: 'x',
+          toolName: 'Bash',
+          result: result({ observation: 'unknown' }),
+          isError: false,
+        }),
+      ].map((e) => ({ ...e, source: { provider: 'codex', channel: 'hook' } }) as StoredEvent),
+      // Then the provider's own records of the same call, under their own ids.
+      b.raw({
+        id: 'tool:x:call:item',
+        kind: 'tool.called',
+        callId: 'x',
+        toolName: 'exec_command',
+        input,
+        title: 'Run: pnpm vitest run',
+      }),
+      b.raw({
+        id: 'tool:x:result',
+        kind: 'tool.completed',
+        callId: 'x',
+        toolName: 'exec_command',
+        result: result({ code: 0, observation: 'explicit' }),
+        isError: false,
+      }),
+    ]);
+    expect(state.verifications.map((v) => [v.callId, v.outcome, v.exit?.observation])).toEqual([
+      ['x', 'pass', 'explicit'],
+    ]);
+    expect(state.counters.commands).toBe(1);
+  });
+});
+
+describe('reducer: a removed line count that is unknown', () => {
+  it('marks the file and the session for good, and never treats the count as exact again', () => {
+    const b = new EventBuilder();
+    const overwrite = (callId: string) => [
+      b.toolCalled(callId, 'write', { kind: 'fileWrite', path: '/repo/a.ts' }),
+      b.toolCompleted(callId, 'write', {
+        kind: 'fileChanges',
+        changes: [
+          {
+            path: '/repo/a.ts',
+            change: 'update',
+            linesAdded: 12,
+            linesRemoved: 0,
+            linesRemovedUnknown: true,
+            applied: true,
+          },
+        ],
+      }),
+    ];
+    const { state } = run([
+      b.sessionStarted(),
+      b.turnStarted('Rewrite a'),
+      ...b.edit('e1', '/repo/b.ts', 2, 1),
+      ...overwrite('w1'),
+      // An exact change afterwards does not make the earlier unknown count known.
+      ...b.edit('e2', '/repo/a.ts', 1, 1),
+    ]);
+    expect(state.files['/repo/a.ts']?.linesRemovedUnknown).toBe(true);
+    expect(state.files['/repo/b.ts']?.linesRemovedUnknown).toBeUndefined();
+    expect(state.counters.linesRemovedUnknown).toBe(true);
+    expect(state.counters.linesRemoved).toBe(2);
+    expect(summarizeSession(state, Date.parse('2026-08-16T11:00:00.000Z')).counts).toMatchObject({
+      linesRemoved: 2,
+      linesRemovedExact: false,
+    });
+  });
+
+  it('calls a session with only known counts exact', () => {
+    const b = new EventBuilder();
+    const { state } = run([b.sessionStarted(), ...b.edit('e1', '/repo/b.ts', 2, 1)]);
+    expect(summarizeSession(state, Date.parse('2026-08-16T11:00:00.000Z')).counts).toMatchObject({
+      linesRemovedExact: true,
+    });
+  });
+});
+
+describe('reducer: provider paths are data', () => {
+  it('records a location for a path named __proto__ without touching any prototype', () => {
+    const b = new EventBuilder();
+    const { state } = run([
+      b.sessionStarted(),
+      b.raw({
+        id: 'located:proto',
+        kind: 'file.located',
+        files: [
+          { path: '__proto__', repository: { root: '/repo', path: '__proto__' } },
+          { path: 'constructor', repository: null },
+        ],
+      }),
+    ]);
+    expect(Object.getPrototypeOf(state.fileLocations)).toBeNull();
+    expect(Object.hasOwn(state.fileLocations, '__proto__')).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(state.fileLocations, '__proto__')?.value).toEqual({
+      root: '/repo',
+      path: '__proto__',
+    });
+    expect(({} as Record<string, unknown>).root).toBeUndefined();
+    // It survives a checkpoint, which is JSON.
+    const restored = JSON.parse(JSON.stringify(state.fileLocations));
+    expect(Object.getOwnPropertyDescriptor(restored, '__proto__')?.value).toEqual({
+      root: '/repo',
+      path: '__proto__',
+    });
+  });
+});
+
+describe('reducer: provider ids are keys like any other', () => {
+  const hostile = ['constructor', '__proto__', 'toString'];
+
+  function session(b: EventBuilder): StoredEvent[] {
+    return [
+      b.sessionStarted(),
+      b.turnStarted('Run tests'),
+      ...hostile.flatMap((id) =>
+        b.command(id, `pnpm vitest run ${id}`, VITEST_FAIL, { exitCode: 1 }),
+      ),
+      ...hostile.flatMap((id) => b.edit(`edit-${id}`, id, 2, 1)),
+    ];
+  }
+
+  it('records calls and files named after Object.prototype members', () => {
+    const { state } = run(session(new EventBuilder()));
+    expect(state.counters.toolCalls).toBe(6);
+    expect(state.verifications.map((v) => v.callId).sort()).toEqual([...hostile].sort());
+    expect(Object.keys(state.files).sort()).toEqual([...hostile].sort());
+    expect(Object.getPrototypeOf(state.files)).toBeNull();
+    expect(Object.getPrototypeOf({})).toBe(Object.prototype);
+  });
+
+  it('keeps them working after a checkpoint is read back', () => {
+    const b = new EventBuilder();
+    const events = session(b);
+    const half = Math.floor(events.length / 2);
+    const first = run(events.slice(0, half)).state;
+    const restored = reviveState(JSON.parse(JSON.stringify(first)) as RunState);
+    expect(Object.getPrototypeOf(restored.activities)).toBeNull();
+    const resumed = run(events.slice(half), restored).state;
+    const whole = run(events).state;
+    expect(resumed.counters).toEqual(whole.counters);
+    expect(Object.keys(resumed.activities).sort()).toEqual(Object.keys(whole.activities).sort());
   });
 });

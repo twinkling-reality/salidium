@@ -67,7 +67,18 @@ export interface RunState {
   /** Activities by callId; `activityOrder` preserves ingestion order. */
   activities: Record<string, Activity>;
   activityOrder: string[];
+  /**
+   * Calls folded into the call that ran them, by child call id. Only a parent already recorded as
+   * a command absorbs its children: that is a Codex code cell stored by a Salidium that predates
+   * reading its processes as commands of their own.
+   */
+  absorbedCalls: Record<string, string>;
   files: Record<string, FileState>;
+  /**
+   * The repository Salidium found holding each changed path, by absolute path, from `file.located`.
+   * Null when it looked and no repository held the path; absent when it never looked.
+   */
+  fileLocations: Record<string, FileLocation | null>;
   verifications: Verification[];
   plan: PlanState;
   claims: Claim[];
@@ -155,6 +166,8 @@ export interface FileState {
   /** Latest hunks (bounded) for the raw drill-through; older hunks live in the event log. */
   lastHunks?: Hunk[];
   userModifiedBefore?: boolean;
+  /** Some change replaced the file without its prior content, so `linesRemoved` is a floor. */
+  linesRemovedUnknown?: true;
 }
 
 export type VerificationMethod = 'test' | 'typecheck' | 'lint' | 'build' | 'other';
@@ -278,7 +291,30 @@ export interface SubagentState {
   eventId: string;
 }
 
+/** A changed path's place in a Git working tree, as Salidium observed it when the change was live. */
+export interface FileLocation {
+  root: string;
+  path: string;
+  mainRoot?: string;
+}
+
+/** HEAD and branch at one session boundary, from the snapshot that boundary triggered. */
+export interface RevisionAnchor {
+  /**
+   * The repository the snapshot read, as git reported its top level. A session can move into
+   * another repository, so each anchor names its own rather than relying on `repoRoot`.
+   */
+  root: string;
+  head?: string;
+  branch?: string;
+  at: string;
+}
+
 export interface GitState {
+  /** The first snapshot a session start triggered. Later starts (resumes) do not replace it. */
+  atStart?: RevisionAnchor;
+  /** The snapshot the latest turn end triggered. */
+  atTurnEnd?: RevisionAnchor;
   head?: string;
   branch?: string;
   dirtyCount?: number;
@@ -291,6 +327,8 @@ export interface GitState {
 }
 
 export interface Counters {
+  /** Some file's removed line count is unknown, so `linesRemoved` is a floor. */
+  linesRemovedUnknown?: true;
   turns: number;
   toolCalls: number;
   toolFailures: number;

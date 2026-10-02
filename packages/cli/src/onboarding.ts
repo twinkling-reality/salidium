@@ -5,8 +5,9 @@ import type {
   IntegrationContext,
   IntegrationValidation,
   ProviderIntegration,
+  StoreIntegration,
 } from './integrations.ts';
-import { providerIntegrations } from './integrations.ts';
+import { providerIntegrations, storeIntegrations } from './integrations.ts';
 import { homeRelative, type TerminalTone, TerminalUi } from './terminalUi.ts';
 
 export interface OnboardingIO {
@@ -21,6 +22,8 @@ export interface OnboardingOptions {
   assumeYes?: boolean;
   firstRun?: boolean;
   integrations?: readonly ProviderIntegration[];
+  /** Providers read from their own database; listed, never connected or changed by setup. */
+  stores?: readonly StoreIntegration[];
 }
 
 export interface OnboardingResult {
@@ -51,6 +54,9 @@ export async function runFirstRunOnboarding(
   const detected = integrations.filter((provider) => provider.detect(context).detected);
   const hookCapable = detected.filter((provider) => provider.liveHooksSupported(context));
   const historyOnly = detected.filter((provider) => !provider.liveHooksSupported(context));
+  const storesFound = (options.stores ?? storeIntegrations).filter((store) =>
+    store.detect(context),
+  );
   const inspections = new Map(
     hookCapable.map((provider) => [provider.id, provider.inspect(context)] as const),
   );
@@ -87,6 +93,16 @@ export async function runFirstRunOnboarding(
           ),
         );
       }
+    }
+    for (const store of storesFound) {
+      io.write(
+        ui.status(
+          '○',
+          store.name,
+          `Found · ${store.experimental ? 'experimental, ' : ''}off until enabled (salidium doctor)`,
+          'muted',
+        ),
+      );
     }
     if (historyOnly.length > 0) {
       io.write(ui.spacer());

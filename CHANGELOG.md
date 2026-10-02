@@ -1,5 +1,88 @@
 # Changelog
 
+## 0.7.0 - 2026-10-02
+
+- Observe OpenCode 2.x sessions, read only, as the provider `salidium/opencode`. Experimental and
+  off by default; turn it on with `salidium config set providers.enabled
+  claude-code,codex,salidium/opencode` or the providers setting in Ingest & Storage. Salidium reads
+  OpenCode's own store (`$XDG_DATA_HOME/opencode/opencode.db`, else
+  `~/.local/share/opencode/opencode.db`) through a read-only connection that cannot reach its
+  credential or account tables, and never connects to an OpenCode server, installs a plugin, or
+  changes OpenCode's configuration. Reports cover turns, messages, file changes with line counts,
+  commands with their exit codes, reads and searches, subagents, and token usage. A consumer looks
+  a session up by provider `salidium/opencode` and OpenCode's own `ses_` id. Verified against
+  OpenCode 2.0.18. When OpenCode replaces a whole file it does not record what the file held, so
+  the removed line count is only a lower bound and consumer contract 1.1 says so
+  (`linesRemovedExact: false`).
+- Each command in a Codex code-mode session shows once. With hooks on, a command used to appear
+  twice, as the code cell and as the hook's own record. From Codex 0.149, which records every
+  process it starts, each process is its own command with its own exit code and output, and the
+  cell that ran it is a step. So `npm test` and `npm run lint` in one cell pass or fail separately,
+  where together they read unknown. Rollouts from Codex builds before 0.149, or that name no
+  version, read as before.
+- Let a local Ollama model write the Why and How explanation, with nothing leaving the machine.
+  Choose **Local model** under Models & Usage, or `salidium config set explainer.backend ollama`,
+  then pick one of the models Ollama already has installed; there is no default model and Salidium
+  never downloads one. The daemon calls Ollama directly at `127.0.0.1:11434`, accepts `OLLAMA_HOST`
+  only when it names a loopback address, refuses redirects, and bounds the reply like the CLI routes.
+  `auto` never chooses it, and when it cannot run nothing else is tried in its place. Builds that
+  cannot hold an answer to a JSON Schema (Ollama's 501, as MLX builds give) are asked once more with
+  the schema in the request. Ollama cloud models, which Ollama forwards to ollama.com, are neither
+  offered nor used. Personalize uses the same route when it is selected.
+- Opening an older session right after upgrading no longer holds Salidium up. A new release that
+  changes how sessions are read used to replay a stored session in one piece the first time it was
+  opened, and a large one could stall hooks, the CLI and `salidium stop` for seconds. Salidium now
+  brings stored sessions up to date in the background after it starts, newest first, in small
+  slices that let everything else run between them, pausing while collection is paused or
+  maintenance runs. `salidium status` shows it as "Updating session history: n of m". A session
+  you open before it is reached is updated on opening, as before. Checkpoints left by the older
+  release are removed as each session is updated. SQLite reuses that space inside the file; run
+  `salidium retention compact` if you want the file itself to shrink. On a large store the
+  background pass takes minutes, and Salidium answers throughout, more slowly than usual while it
+  runs. Once a session has been updated it opens as quickly as before the upgrade.
+- Salidium no longer runs `git status` in the repositories agents work in. A repository's own
+  configuration can make `git status` run commands, so a repository an agent was working in could
+  have run code as Salidium. Repository snapshots now read only the top-level directory, HEAD and
+  branch, with an environment that passes no `GIT_` variable, and no longer list uncommitted files.
+- A turn end that came right after a commit could go without a repository snapshot. Every turn end
+  now gets one, and each snapshot records which boundary it was taken at.
+- Stop a full process table from writing hook envelopes that name no provider. The relay built the
+  provider part of a queued file's name in a subprocess, and when that fork failed it wrote
+  `_<time>-<pid>-<random>.json` and carried on. The drain read those as a disabled provider and
+  kept them forever, which held the queue's oldest item at the day they were written. The relay now
+  names the provider without a subprocess, and refuses an id with more than one slash. An envelope
+  that still names no provider is quarantined unread with an `.unattributed` suffix, up to 1,000
+  quarantined files, and each drain pass that quarantines any records one collection gap without a
+  loss count.
+- Recover the relay's quota lock after a sender dies while reclaiming it. A reaper that the shell
+  abandoned mid-reclaim, for example when it could not fork under a full process table, left its
+  reaping directory in the spool for good, and every later sender that met a dead owner's lock then
+  waited out its whole attempt budget. The daemon now removes a reaping directory dated more than
+  five minutes from now in either direction and leaves the lock itself to the relay's owner check.
+  Recovery needs the daemon running; while it is down, spooling senders still spend their attempt
+  budget. A reaper paused for longer than five minutes, by SIGSTOP or a sleeping laptop, could
+  overlap another, which at worst puts a few files over the pending ceiling and never loses data.
+- Count quarantined files apart from waiting work in `salidium maintenance queue`, and measure queue
+  age, the drain result, and the storage optimization precondition from waiting work only.
+- Consumer contract 1.1, for tools that read Salidium's reports (`@salidium/consumer-contract`
+  1.1.0, additive to 1.0). A report says which commit a session started from and stood at after
+  its latest turn, in which repository, and which Git working tree holds each changed file,
+  including a linked worktree outside the directory the session started in. Salidium reads that
+  from Git's own pointer files while the change happens, without running git or reading file
+  contents, under the same setting as git snapshots. Line counts say when a removed count is only
+  a lower bound. Discovery lists the agents the daemon watches and any experimental local
+  contracts it serves.
+- To bring sessions recorded before this release in line, run `salidium reingest --all`. For Codex
+  code-mode sessions it adds each process's exit code without adding a second row. Sessions
+  stored before this release keep their cells as commands, and where a hook had already recorded a
+  process, those older sessions keep the duplicate they had: removing it would mean retracting
+  checks and history already derived from it. If you use the macOS always-on service, run
+  `salidium service install` first so the service runs the new copy.
+- Downgrade note: once the explainer backend is set to `ollama`, Salidium 0.6.x cannot read
+  `operations-config.json`. It uses the previous saved copy when that is readable and otherwise
+  falls back to safe defaults for every setting, with explanations off. Set the backend back to
+  `auto`, `claude` or `codex` before downgrading to keep your choices.
+
 ## 0.6.1 - 2026-10-02
 
 - Record file changes from current Codex builds. Since Codex 0.144, applied patches are written as

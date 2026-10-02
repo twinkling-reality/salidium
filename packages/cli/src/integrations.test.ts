@@ -3,7 +3,13 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { IntegrationContext } from './integrations.ts';
-import { ProviderIntegrationRegistry, providerIntegrations } from './integrations.ts';
+import {
+  enableStoreCommand,
+  ProviderIntegrationRegistry,
+  providerIntegrations,
+  storeIntegrationLines,
+  storeIntegrations,
+} from './integrations.ts';
 
 const temporaryDirectories: string[] = [];
 
@@ -86,5 +92,39 @@ describe('provider integration boundaries', () => {
       expect.objectContaining({ level: 'info', message: expect.stringMatching(/history-only/) }),
     ]);
     expect(() => codex?.install(context)).toThrow(/history only|history-only/);
+  });
+});
+
+describe('store integrations', () => {
+  it('lists OpenCode from its store alone, off until enabled, and installs nothing', () => {
+    const home = temporaryDirectory();
+    const xdg = join(home, 'xdg');
+    const context: IntegrationContext = {
+      userHome: home,
+      salidiumHome: join(home, '.salidium'),
+      env: { XDG_DATA_HOME: xdg },
+    };
+    const openCode = storeIntegrations.find(
+      (integration) => integration.id === 'salidium/opencode',
+    );
+    expect(openCode).toMatchObject({ name: 'OpenCode', experimental: true });
+    if (!openCode) return;
+    expect(openCode.storePath(context)).toBe(join(xdg, 'opencode', 'opencode.db'));
+    expect(openCode.detect(context)).toBe(false);
+    expect(storeIntegrationLines(context, ['claude-code', 'codex'])).toEqual([
+      'OpenCode (experimental) not detected; off',
+    ]);
+
+    mkdirSync(join(xdg, 'opencode'), { recursive: true });
+    writeFileSync(join(xdg, 'opencode', 'opencode.db'), '');
+    expect(storeIntegrationLines(context, ['claude-code', 'codex'])).toEqual([
+      'OpenCode (experimental) store found; off. To observe it: salidium config set providers.enabled claude-code,codex,salidium/opencode',
+    ]);
+    expect(storeIntegrationLines(context, ['salidium/opencode'])).toEqual([
+      'OpenCode (experimental) observed read only; store found',
+    ]);
+    expect(enableStoreCommand(openCode, ['salidium/opencode'])).toBe(
+      'salidium config set providers.enabled salidium/opencode',
+    );
   });
 });

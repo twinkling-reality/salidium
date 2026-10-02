@@ -1,6 +1,8 @@
 import type {
   ExplanationStatus,
+  FileRepository,
   Provenance,
+  RevisionAnchor,
   SessionEntry,
   SessionReport,
   SessionStatus,
@@ -8,9 +10,11 @@ import type {
   VerificationRun,
 } from '@salidium/consumer-contract';
 import type {
+  FileLocation,
   Line,
   Redactor,
   RunState,
+  RevisionAnchor as RunStateAnchor,
   SessionView,
   VerificationRow,
   WaitingState,
@@ -98,19 +102,23 @@ function workingHeadline(state: RunState, callId: string | undefined): string {
 export interface ConsumerText {
   (value: string, max: number): string;
   (value: string | undefined, max: number): string | null;
+  /** Redacted only: never clipped or reflowed, for identifiers such as paths. */
+  exact(value: string): string;
 }
 
 /** Redact, then clip: clipping first could cut a secret in half and hide it from the redactor. */
 export function consumerText(redactor: Redactor): ConsumerText {
-  return ((value: string | undefined, max: number) =>
+  const text = ((value: string | undefined, max: number) =>
     value === undefined ? null : clip(redactor.redact(value).text, max)) as ConsumerText;
+  text.exact = (value: string) => redactor.redact(value).text;
+  return text;
 }
 
 /**
  * The same staleness rule the reducer's projection applies, for summaries read from the store
  * without replaying their state: a session that stopped reporting mid-turn is not still working.
  */
-function currentStatus(summary: SessionSummary, now: number): SessionStatus {
+export function currentStatus(summary: SessionSummary, now: number): SessionStatus {
   if (summary.status === 'working' && summary.lastEventAt) {
     const age = now - Date.parse(summary.lastEventAt);
     if (Number.isFinite(age) && age > WORKING_STALE_MS) return 'idle';
@@ -118,6 +126,10 @@ function currentStatus(summary: SessionSummary, now: number): SessionStatus {
   return STATUS[summary.status];
 }
 
+/**
+ * A pure function of the summary, and of `now` only through `currentStatus`: the list's entry cache
+ * in `routes.ts` relies on that, so anything else that varies with time belongs in its key too.
+ */
 export function toSessionEntry(
   summary: SessionSummary,
   now: number,
@@ -129,9 +141,12 @@ export function toSessionEntry(
     // A provider's own title only. Salidium's fallback is the first line of the prompt, and prompts
     // do not cross this boundary; a summary that does not say which it holds is treated as a prompt.
     title: summary.titleSource === 'provider' ? text(summary.title, 200) : null,
-    cwd: summary.cwd,
-    repositoryRoot: summary.repoRoot ?? null,
-    model: summary.model ?? null,
+    // `cwd` is required in v1, so it crosses redacted; `repositoryRoot` is nullable and follows
+    // the identifier rule, as every 1.1 path and branch does.
+    cwd: text.exact(summary.cwd),
+    repositoryRoot: identifier(summary.repoRoot, 4096, text),
+    // Nullable, so one the contract cannot carry whole is null rather than clipped into another id.
+    model: identifier(summary.model, 200, text),
     status: currentStatus(summary, now),
     startedAt: summary.startedAt ?? null,
     lastEventAt: summary.lastEventAt ?? null,
@@ -143,6 +158,8 @@ export function toSessionEntry(
       filesChanged: summary.counts.filesChanged,
       linesAdded: summary.counts.linesAdded,
       linesRemoved: summary.counts.linesRemoved,
+      // Summaries written before the field existed predate any provider that could leave it false.
+      linesRemovedExact: summary.counts.linesRemovedExact ?? true,
       reviewOpen: summary.counts.reviewOpen,
       remaining: summary.counts.remaining,
     },
@@ -175,6 +192,45 @@ function statement(line: Line | undefined, text: ConsumerText): Statement | null
   };
 }
 
+/**
+ * An observed identifier in a nullable field crosses whole or not at all. One the redactor would
+ * change, because it holds something credential-shaped, is null rather than altered, so it never
+ * names a different path or branch, and two fields naming the same repository never seem to
+ * differ because one was redacted. Too long is null too, because a clipped one names something
+ * else.
+ */
+function identifier(value: string | undefined, max: number, text: ConsumerText): string | null {
+  if (value === undefined || value.length > max) return null;
+  return text.exact(value) === value ? value : null;
+}
+
+const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+function anchor(value: RunStateAnchor | undefined, text: ConsumerText): RevisionAnchor | null {
+  if (!value) return null;
+  return {
+    root: identifier(value.root, 4096, text),
+    head: value.head && FULL_SHA.test(value.head) ? value.head : null,
+    branch: identifier(value.branch, 256, text),
+    at: value.at,
+    provenance: 'observed',
+  };
+}
+
+export function repository(
+  location: FileLocation | null | undefined,
+  text: ConsumerText,
+): FileRepository | null {
+  if (!location) return null;
+  const root = identifier(location.root, 4096, text);
+  const path = identifier(location.path, 4096, text);
+  if (root === null || path === null) return null;
+  const mainRoot =
+    location.mainRoot === undefined ? null : identifier(location.mainRoot, 4096, text);
+  if (location.mainRoot !== undefined && mainRoot === null) return null;
+  return { root, path, mainRoot, provenance: 'observed' };
+}
+
 function run(row: VerificationRow, text: ConsumerText): VerificationRun {
   return {
     id: row.id,
@@ -199,14 +255,29 @@ function run(row: VerificationRow, text: ConsumerText): VerificationRun {
   };
 }
 
+/** A path is required wherever it appears and never clipped, so the contract's bound is a limit. */
+export const MAX_CONSUMER_PATH = 4096;
+
+/**
+ * Builds the report. A changed file whose path cannot cross whole, which redaction can cause by
+ * lengthening it, is left out of `changes.files` and `verification.unverifiedFiles`; the contract
+ * has no count of omitted files, so each one is passed to `omitted` by length for the caller to log.
+ */
 export function toSessionReport(
   state: RunState,
   view: SessionView,
   summary: SessionSummary,
   now: number,
   text: ConsumerText,
+  omitted: (pathLength: number) => void = () => {},
 ): SessionReport {
   const session = toSessionEntry(summary, now, text);
+  const carried = (path: string): string | undefined => {
+    const crossing = text.exact(path);
+    if (crossing.length <= MAX_CONSUMER_PATH) return crossing;
+    omitted(crossing.length);
+    return undefined;
+  };
   const explained = view.explained;
   const current = explained ? explanationIsCurrent(summary.latestSeq, explained.basedOnSeq) : false;
   return {
@@ -235,22 +306,38 @@ export function toSessionReport(
           provenance: PROVENANCE[view.strip.waiting.epistemic],
         }
       : null,
+    revision: {
+      atStart: anchor(state.git.atStart, text),
+      atLatestTurnEnd: anchor(state.git.atTurnEnd, text),
+    },
     changes: {
       glance: text(view.changes.glance, 300),
-      files: view.changes.files.map((file) => ({
-        path: file.path,
-        changeCount: file.changeCount,
-        linesAdded: file.linesAdded,
-        linesRemoved: file.linesRemoved,
-        kinds: [...file.kinds],
-        lastChangedAt: file.lastChangedAt,
-        coverage: {
-          verifiedAfter: file.verifiedAfter,
-          by: text(file.verifiedBy, 300),
-          provenance: 'inferred',
-        },
-        reason: statement(file.reason, text),
-      })),
+      files: view.changes.files.flatMap((file) => {
+        // Identifiers cross whole; like every string that crosses, they pass the redactor again.
+        const path = carried(file.path);
+        if (path === undefined) return [];
+        return {
+          path,
+          repository: repository(
+            Object.hasOwn(state.fileLocations, file.path)
+              ? state.fileLocations[file.path]
+              : undefined,
+            text,
+          ),
+          changeCount: file.changeCount,
+          linesAdded: file.linesAdded,
+          linesRemoved: file.linesRemoved,
+          linesRemovedExact: !state.files[file.path]?.linesRemovedUnknown,
+          kinds: [...file.kinds],
+          lastChangedAt: file.lastChangedAt,
+          coverage: {
+            verifiedAfter: file.verifiedAfter,
+            by: text(file.verifiedBy, 300),
+            provenance: 'inferred',
+          },
+          reason: statement(file.reason, text),
+        };
+      }),
       commits: view.changes.commits.map((commit) => ({ sha: commit.sha, at: commit.at })),
     },
     verification: {
@@ -260,7 +347,7 @@ export function toSessionReport(
         ...run(row, text),
         laterUnreadable: row.laterUnreadable,
       })),
-      unverifiedFiles: [...view.verified.unverifiedFiles],
+      unverifiedFiles: view.verified.unverifiedFiles.flatMap((path) => carried(path) ?? []),
       statements: view.verified.claims.flatMap((line) => statement(line, text) ?? []),
     },
     review: {

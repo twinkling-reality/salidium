@@ -240,6 +240,15 @@ describe('recordFacts', () => {
       ['permission.requested', { toolName: 'Bash', summary: 'run rm' }],
       ['notification', { message: 'hi' }],
       ['git.snapshot', { repoRoot: '/repo', dirty: [] }],
+      [
+        'file.located',
+        {
+          files: [
+            { path: '/repo/a.ts', repository: { root: '/repo', path: 'a.ts' } },
+            { path: '/tmp/b.ts', repository: null },
+          ],
+        },
+      ],
       ['ingest.warning', { code: 'malformed-record' }],
     ];
     for (const [kind, rest] of kinds) {

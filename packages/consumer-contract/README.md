@@ -8,7 +8,7 @@ This package holds the contract, not a client: TypeScript types, zod runtime sch
 truth), JSON Schema files generated from them, and retained example documents. It has no I/O and no
 network code, and it does not expose Salidium's internal events or state.
 
-Status: `1.0.0`, wire version 1.0, frozen unchanged from the `1.0.0-rc.0` release candidate.
+Status: `1.1.0`, wire version 1.1, which only adds to wire 1.0 (published as `1.0.0`).
 
 ## Consent first
 
@@ -91,6 +91,33 @@ command lines, command output, or raw records, and the session title is present 
 provider supplied one. Text fields are short, redacted, and still untrusted input: escape them when
 rendering.
 
+## What 1.1 adds
+
+Check that your discovery entry's `minor` is at least 1 before relying on any of these.
+
+- `report.revision`: the repository read (`root`), the commit `HEAD` named and the branch when the
+  session started (`atStart`, kept from the first start; a resume is not a start) and when its
+  latest turn ended (`atLatestTurnEnd`). A session can move between repositories, so compare
+  `root`, not only `session.repositoryRoot`. Each anchor is `null` when Salidium did not watch that
+  boundary live.
+- Paths, roots and branches in these fields cross whole or not at all: one that redaction would
+  change, or that is too long, is `null` rather than altered.
+- `changes.files[].repository`: the Git working tree that holds the file (`root`), the file's
+  path inside it (`path`), and for a linked worktree the repository it belongs to (`mainRoot`).
+  Agents often write outside the directory the session started in, so this can differ from
+  `session.repositoryRoot`. Salidium reads it from Git's pointer files when the change happens,
+  without running git; it is `null` for history imports and wherever no repository holds the file.
+- `linesRemovedExact` on each changed file and on a session's `counts`: `false` when a provider
+  replaced a file without recording what it held, so `linesRemoved` is a lower bound rather than
+  a count. Claude Code and Codex always record it today.
+- Discovery's top-level `providers`: the providers this daemon instance observes, as `{ id }`
+  objects with the ids `lookup` takes. An id that is not listed is not observed until Salidium
+  restarts with a new `instanceId`, so gate lookups on it rather than on the version. A 1.0 daemon
+  does not send it: treat its absence as unknown.
+- Discovery's top-level `experimental`: local contracts the instance serves that are not part of
+  this one and carry no compatibility promise, each with a name, version and loopback base URL.
+  Do not depend on one without checking it yourself.
+
 ## Compatibility
 
 The major version is in the path. Within major version 1:
@@ -108,8 +135,9 @@ six months and two Salidium minor releases, announced with `Deprecation` and `Su
 
 Two ways, neither of which touches anyone's real data.
 
-**Recorded fixtures.** `fixtures/v1/` holds one real document of every kind and every feed message
-type, captured from a daemon serving synthetic sessions. They are MIT-licensed like the rest of
+**Recorded fixtures.** Each minor version has one real document of every kind and every feed
+message type, captured from a daemon serving synthetic sessions: 1.0's in `fixtures/v1/`, and each
+later minor's in `fixtures/v1/<major.minor>/`. They are MIT-licensed like the rest of
 Salidium; copy them into your own tests.
 
 **A real, isolated daemon.** From a Salidium checkout, run:
@@ -137,7 +165,7 @@ installs hooks; only first-run `salidium` and `salidium install-hooks` do.
   `@salidium/consumer-contract/schema/v1/<name>.schema.json`.
 - `schema/v1/released/<major.minor>/*.schema.json`: each published minor version's schemas, copied
   unchanged. Every later document validates against all of them.
-- `fixtures/v1/*.json`: real documents captured from a daemon serving synthetic sessions, to test a
-  consumer against.
+- `fixtures/v1/*.json` (1.0) and `fixtures/v1/<major.minor>/*.json` (later minors): real
+  documents captured from a daemon serving synthetic sessions, to test a consumer against.
 - Runtime exports: every schema (`SessionReportSchema`, `SessionListSchema`, and so on), their
   types, `readFeedMessage`, `consumerJsonSchema`, and `CONSUMER_CONTRACT`.

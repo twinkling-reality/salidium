@@ -99,6 +99,8 @@ function title(e: StoredEvent): string {
       return 'Notification';
     case 'git.snapshot':
       return 'Repository snapshot';
+    case 'file.located':
+      return 'Changed files located';
     case 'ingest.warning':
       return 'A record could not be read';
     case 'salidium.explanation':
@@ -322,17 +324,31 @@ function facts(e: StoredEvent): Fact[] {
         ...opt('Branch', e.branch, true),
         {
           label: 'Dirty',
-          value: e.dirty.length === 0 ? 'nothing uncommitted' : plural(e.dirty.length, 'path'),
+          // Newer snapshots do not read uncommitted changes at all, which is not the same as none.
+          value: !e.dirty
+            ? 'not read'
+            : e.dirty.length === 0
+              ? 'nothing uncommitted'
+              : plural(e.dirty.length, 'path'),
           note: e.dirtyTruncated ? 'the list is capped, so there may be more' : undefined,
         },
         // Porcelain codes are two columns and one of them is often a space, so a raw code can be
         // blank; the path is the fact either way and the code is a note on it.
-        ...e.dirty.map((d) => ({
+        ...(e.dirty ?? []).map((d) => ({
           label: d.status.trim() === '' ? 'unchanged' : d.status.trim(),
           value: d.path,
           mono: true,
         })),
       ];
+    case 'file.located':
+      return e.files.map((f) => ({
+        label: f.repository ? f.repository.path : 'not in a repository',
+        value: f.path,
+        mono: true,
+        note: f.repository
+          ? `in ${f.repository.root}${f.repository.mainRoot ? `, a worktree of ${f.repository.mainRoot}` : ''}`
+          : undefined,
+      }));
     case 'ingest.warning':
       return [{ label: 'Problem', value: e.code }, ...opt('Detail', e.detail, true, false, true)];
     case 'salidium.explanation':

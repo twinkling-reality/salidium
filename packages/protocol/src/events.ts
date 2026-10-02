@@ -321,6 +321,12 @@ export const ToolCalledEventSchema = Base.extend({
   input: ToolInputSchema,
   /** Human-readable one-liner derived deterministically from input (e.g. "Edit src/auth.ts"). */
   title: z.string(),
+  /**
+   * The call this one ran inside, when the provider records both: a process a Codex code-mode
+   * cell started names the cell. A reader that holds the parent as the activity for this work
+   * folds the child into it rather than showing the work twice.
+   */
+  parentCallId: z.string().optional(),
 });
 
 export const ToolCompletedEventSchema = Base.extend({
@@ -398,12 +404,49 @@ export const NotificationEventSchema = Base.extend({
 /** Salidium's own read-only observation of the repository (enricher output). */
 export const GitSnapshotEventSchema = Base.extend({
   kind: z.literal('git.snapshot'),
+  /**
+   * What prompted the observation. Absent on snapshots recorded before it was written, which is
+   * why nothing may treat an absent trigger as any particular boundary.
+   */
+  trigger: z.enum(['session.started', 'turn.ended', 'commit']).optional(),
   repoRoot: z.string(),
   head: z.string().optional(),
   branch: z.string().optional(),
-  /** Porcelain v2 status codes for dirty paths (bounded list). */
-  dirty: z.array(z.object({ path: z.string(), status: z.string() })),
+  /**
+   * Porcelain v2 status codes for dirty paths (bounded list). Absent from snapshots taken after
+   * Salidium stopped running `git status`, which can run a repository's own commands: absent
+   * means not read, never clean.
+   */
+  dirty: z.array(z.object({ path: z.string(), status: z.string() })).optional(),
   dirtyTruncated: z.boolean().optional(),
+});
+
+/**
+ * Where Salidium found changed files on disk, by its own read-only look at the filesystem when the
+ * change was live: the Git working tree that holds each path and the path relative to it. Never
+ * written for history imports, because the filesystem now says nothing about the filesystem then.
+ * `repository` is null when no repository holds the path or Salidium could not tell; nothing is
+ * guessed. An entry supersedes the session's earlier entry for the same path.
+ */
+export const FileLocatedEventSchema = Base.extend({
+  kind: z.literal('file.located'),
+  files: z
+    .array(
+      z.object({
+        path: z.string(),
+        repository: z
+          .object({
+            /** Top level of the working tree that holds the path. */
+            root: z.string(),
+            /** The path relative to `root`, with `/` separators. */
+            path: z.string(),
+            /** For a linked worktree, the repository it belongs to; absent for a main tree. */
+            mainRoot: z.string().optional(),
+          })
+          .nullable(),
+      }),
+    )
+    .max(64),
 });
 
 /** Ingest problems are events too, so the UI can say "3 records could not be parsed" honestly. */
@@ -507,6 +550,7 @@ export const CanonicalEventSchema = z.discriminatedUnion('kind', [
   PermissionRequestedEventSchema,
   NotificationEventSchema,
   GitSnapshotEventSchema,
+  FileLocatedEventSchema,
   IngestWarningEventSchema,
   ExplanationEventSchema,
 ]);

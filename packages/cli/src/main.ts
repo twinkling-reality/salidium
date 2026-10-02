@@ -38,6 +38,7 @@ import {
   isOperationalConfigKey,
   OPERATIONAL_CONFIG_KEYS,
   observeCollectionStatus,
+  oldestWaitingAt,
   readDaemonJson,
   readMaintenanceState,
   readSettings,
@@ -74,8 +75,14 @@ import {
 import { auditClaims, renderAudit } from './auditClaims.ts';
 import { runConsumerCommand } from './consumerCommand.ts';
 import { explanationMode, parseExplanationMode } from './explanationMode.ts';
+import { explanationWriter } from './explanationWriter.ts';
 import type { IntegrationContext, IntegrationValidation } from './integrations.ts';
-import { integrationById, providerIntegrations } from './integrations.ts';
+import {
+  integrationById,
+  providerIntegrations,
+  storeIntegrationLines,
+  storeIntegrations,
+} from './integrations.ts';
 import {
   activateMacOSService,
   describeMacOSService,
@@ -164,8 +171,8 @@ Environment:
   SALIDIUM_HOME          State directory (default ~/.salidium)
   SALIDIUM_PORT          Loopback port (default ${DEFAULT_PORT})
   SALIDIUM_HISTORY_DAYS  Whole days of transcript history to import, 0 or greater (default 7)
-  SALIDIUM_NO_GIT=1      Disable read-only git snapshots
-  SALIDIUM_EXPLAINER     Visual explainer: auto, claude, codex, or off (default auto)
+  SALIDIUM_NO_GIT=1      Disable read-only git snapshots and changed-file locations
+  SALIDIUM_EXPLAINER     Visual explainer: auto, claude, codex, ollama, or off (default auto)
   SALIDIUM_EXPLAIN_MODEL Optional model override for the selected explainer
 
 Native Windows imports transcript history but does not install the POSIX live-hook relay.
@@ -613,7 +620,7 @@ async function main(argv: string[]): Promise<number> {
         const state = await currentExplanationState(d, presence);
         const mode = explanationMode(state.effective);
         process.stdout.write(
-          `Explanations: ${explanationStateLabel(state)}\n${mode.detail}. Reports, evidence, and quantities stay local.\nChange with: salidium explanations off|when-done|each-reply\n`,
+          `Explanations: ${explanationStateLabel(state)}\n${state.writer ? `Written by: ${state.writer}\n` : ''}${mode.detail}. Reports, evidence, and quantities stay local.\nChange with: salidium explanations off|when-done|each-reply\n`,
         );
         return 0;
       }
@@ -826,7 +833,10 @@ async function main(argv: string[]): Promise<number> {
           return 1;
         }
         for (const s of matching) {
-          if (!existsSync(s.path)) missing++;
+          // A store-backed provider's cursor key is `<store path>#<session id>`, not a file.
+          const hash = s.path.lastIndexOf('#');
+          const file = hash > 0 && !existsSync(s.path) ? s.path.slice(0, hash) : s.path;
+          if (!existsSync(file)) missing++;
           store.enqueueReingest(s);
           queued++;
         }
@@ -1267,7 +1277,7 @@ async function readOperationsOverview(
     {
       files: queue.totalFiles ?? 0,
       bytes: queue.totalBytes ?? 0,
-      oldestAt: queue.entries[0]?.queuedAt ?? null,
+      oldestAt: oldestWaitingAt(queue),
     },
   );
   const db = daemonPaths(salidiumHome).db;
@@ -1616,6 +1626,10 @@ async function statusCommand(options: {
         process.stdout.write(
           `Maintenance: ${health.maintenance ? `${maintenancePhaseLabel(health.maintenance.phase)} · ${health.maintenance.message}` : 'Idle'}\n`,
         );
+        if (health.historyUpdate)
+          process.stdout.write(
+            `Updating session history: ${health.historyUpdate.sessionsUpdated} of ${health.historyUpdate.sessionsTotal}${health.historyUpdate.state === 'paused' ? ' (paused)' : ''}\n`,
+          );
         process.stdout.write(
           `Alerts: ${operations.alerts.active.length} active${operations.alerts.active.some((alert) => alert.state === 'acknowledged') ? ' (some acknowledged)' : ''}\n`,
         );
@@ -1710,6 +1724,10 @@ async function maintenanceCommand(
             ? `Queue: ${queue.totalFiles} files, ${formatBytes(queue.totalBytes ?? 0)} (exact)\n`
             : 'Queue totals unavailable; the scan safety ceiling was reached.\n',
         );
+        if (queue.quarantinedFiles)
+          process.stdout.write(
+            `Quarantined: ${queue.quarantinedFiles} files, ${formatBytes(queue.quarantinedBytes ?? 0)} kept as evidence; a drain will not store them\n`,
+          );
         for (const entry of queue.entries)
           process.stdout.write(
             `${entry.queuedAt}  ${String(entry.provider ?? 'unknown').padEnd(12)} ${entry.state.padEnd(10)} ${formatBytes(entry.bytes)}  ${entry.id}\n`,
@@ -2031,13 +2049,17 @@ interface ExplanationState {
   stored: ExplainerCadence;
   effective: ExplainerCadence;
   envOff: boolean;
+  /** Which writer the daemon will use, when a running daemon could say. */
+  writer?: string;
 }
 
 function explanationStateFromApi(settings: ExplainerSettings): ExplanationState {
+  const writer = explanationWriter(settings);
   return {
     stored: settings.cadence,
     effective: settings.envOff ? 'off' : settings.cadence,
     envOff: settings.envOff,
+    ...(writer ? { writer } : {}),
   };
 }
 
@@ -2616,6 +2638,23 @@ async function doctor(options: {
     lines.push(`Codex hook trust ${hookTrustLabel(trust.trust).toLowerCase()}`);
     if (trust.trust === 'untrusted' || trust.trust === 'modified') problems++;
   }
+  // Providers read from their own database have nothing to install; say whether each is found
+  // and whether it is observed. A config that cannot be read leaves the shipped defaults.
+  let enabledProviders: readonly string[] = ['claude-code', 'codex'];
+  try {
+    enabledProviders = (await readEffectiveOperationalConfig(d, presence)).values.providers.enabled
+      .value;
+  } catch {
+    /* defaults */
+  }
+  lines.push(...storeIntegrationLines(context, enabledProviders));
+  const storeResults = storeIntegrations.map((integration) => ({
+    id: integration.id,
+    name: integration.name,
+    experimental: integration.experimental,
+    detected: integration.detect(context),
+    observed: enabledProviders.includes(integration.id),
+  }));
   const collection = await collectionStatus(d, presence, configuredHookPresent());
   lines.push(`collection ${collectionStatusLabel(collection).toLowerCase()}`);
   lines.push(`queue ${queueLabel(collection)}`);
@@ -2688,6 +2727,7 @@ async function doctor(options: {
         validations,
         settingsProblem: settingsProblem ?? null,
         providers: providerResults,
+        stores: storeResults,
         collection,
         diagnosticBundle: bundle ?? null,
       })}\n`,

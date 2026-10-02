@@ -7,17 +7,21 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { ProviderAdapter } from '@salidium/adapter-kit';
+import { isolateProviders } from '@salidium/adapter-kit/testing';
 import type { CanonicalEvent } from '@salidium/protocol';
 import { describe, expect, it } from 'vitest';
 import { writeRelayScript } from './daemon.ts';
 import { HookIngress } from './ingest/hookIngress.ts';
 import {
+  HOOK_QUOTA_LOCK_FILE,
+  HOOK_QUOTA_REAPING_DIR,
   HOOK_SHED_FIRST_FILE,
   HOOK_SHED_RETAIN_FILE,
   HOOK_SHED_SECOND_FILE,
@@ -26,6 +30,7 @@ import {
   MAX_HOOK_SHED_FIRST_PENDING_FILES,
   MAX_HOOK_SHED_SECOND_PENDING_FILES,
   MAX_INGEST_PAYLOAD_BYTES,
+  STALE_HOOK_QUOTA_REAPING_MS,
   TRUNCATED_HOOK_PAYLOAD_KEY,
 } from './ingest/limits.ts';
 import type { TranscriptTailer } from './ingest/transcriptTailer.ts';
@@ -72,12 +77,15 @@ describe('the installed hook relay', () => {
       });
       expect(result.status).toBe(0);
 
+      // Publishing the envelope is not the sender's last act: its exit trap then drops the quota
+      // lock. Wait for both, or the empty-spool assertion below races that trap.
       let ready: string | undefined;
-      for (let attempt = 0; attempt < 100 && !ready; attempt++) {
+      for (let attempt = 0; attempt < 100; attempt++) {
         ready = existsSync(pendingDir)
           ? readdirSync(pendingDir).find((name) => name.endsWith('.ready.json'))
           : undefined;
-        if (!ready) await sleep(10);
+        if (ready && !existsSync(join(pendingDir, '.quota-lock'))) break;
+        await sleep(10);
       }
       expect(ready).toMatch(/^example~agent_.*\.ready\.json$/);
       expect(existsSync(join(pendingDir, 'example'))).toBe(false);
@@ -120,6 +128,72 @@ describe('the installed hook relay', () => {
       expect(seen).toEqual([payload]);
       expect(readdirSync(pendingDir)).toEqual([]);
     } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /*
+   * On 2026-09-09 a full process table left envelopes named `_<time>-<pid>-<random>.json`, and one
+   * `_<time>-<pid>-.json`. macOS /bin/sh reproduces both under a tight `ulimit -u`: when the fork
+   * inside a `$(... | tr ...)` substitution fails, the substitution expands to nothing and the
+   * script carries on. A `tr` that prints nothing stands in for that failed fork here. The random
+   * suffix may still come out empty; the provider must not.
+   */
+  it('names the provider in a spooled envelope even when a subprocess produces nothing', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'salidium-relay-nofork-'));
+    const isolation = isolateProviders();
+    try {
+      const home = join(root, 'state');
+      const pendingDir = join(home, 'spool', 'pending');
+      const failingBin = join(root, 'installed', 'bin');
+      mkdirSync(failingBin, { recursive: true });
+      writeFileSync(join(failingBin, 'tr'), '#!/bin/sh\nexit 1\n');
+      chmodSync(join(failingBin, 'tr'), 0o700);
+      const relay = writeRelayScript(join(home, 'hooks'), home, {
+        PATH: [failingBin, '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(delimiter),
+      });
+
+      for (const provider of ['claude-code', 'salidium/opencode', 'a/b/c']) {
+        const result = spawnSync('/bin/sh', [relay, provider, 'Stop', 'lifecycle'], {
+          env: isolation.environment({}, {}),
+          encoding: 'utf8',
+          input: JSON.stringify({ synthetic: provider }),
+        });
+        expect(result.status).toBe(0);
+      }
+
+      let ready: string[] = [];
+      for (let attempt = 0; attempt < 200; attempt++) {
+        ready = existsSync(pendingDir)
+          ? readdirSync(pendingDir).filter((name) => name.endsWith('.ready.json'))
+          : [];
+        if (ready.length === 2 && !existsSync(join(pendingDir, '.quota-lock'))) break;
+        await sleep(10);
+      }
+      expect(ready.sort()).toEqual([
+        expect.stringMatching(/^claude-code_\d+-\d+-[0-9a-f]*\.ready\.json$/),
+        expect.stringMatching(/^salidium~opencode_\d+-\d+-[0-9a-f]*\.ready\.json$/),
+      ]);
+      // Two slashes is no provider id. The relay refuses it rather than write a name holding a slash.
+      expect(readdirSync(pendingDir).some((name) => name.startsWith('a~'))).toBe(false);
+      expect(existsSync(join(pendingDir, 'a~b'))).toBe(false);
+      // The drain must read the relay's encoding back as a provider id, even for a provider it does
+      // not have: those envelopes are retained for a later enable, never quarantined.
+      new HookIngress({
+        adapters: [],
+        registry: { ingest: () => 1, flush: () => true } as unknown as SessionRegistry,
+        tailer: { track() {} } as unknown as TranscriptTailer,
+        spoolDir: join(home, 'spool'),
+        breakerFile: join(home, 'hooks-off'),
+        userHome: root,
+        log: createLogger('silent'),
+      }).drainSpool();
+      expect(readdirSync(pendingDir).sort()).toEqual(ready);
+      const script = readFileSync(relay, 'utf8');
+      const naming = script.slice(script.lastIndexOf('\nPROVIDER='));
+      expect(naming.slice(0, naming.indexOf('\nFILE='))).not.toContain('$(');
+    } finally {
+      isolation.dispose();
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -378,6 +452,118 @@ describe('the installed hook relay', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  /*
+   * Found on a real machine: a reaping guard left since 2026-09-09, the minute the process table was
+   * full. The shell exits at once when it cannot fork, so a reaper that cannot start `rmdir` leaves
+   * its guard for good, and every later sender that meets a dead owner's lock spins out its whole
+   * attempt budget. An `rmdir` that fails stands in for that fork here.
+   *
+   * Every wait is on observable state with a generous deadline, never on elapsed time, because this
+   * runs sender processes that a loaded machine can delay by many seconds.
+   */
+  it('recovers lock reclaiming after a reaper leaves its guard behind', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'salidium-relay-reaping-'));
+    const isolation = isolateProviders();
+    const senders: ReturnType<typeof spawn>[] = [];
+    try {
+      const home = join(root, 'state');
+      const pending = join(home, 'spool', 'pending');
+      mkdirSync(pending, { recursive: true });
+      const lock = join(pending, HOOK_QUOTA_LOCK_FILE);
+      const guard = join(pending, HOOK_QUOTA_REAPING_DIR);
+      const deadOwner = () => `${spawnSync('/bin/sh', ['-c', 'exit 0']).pid}\n`;
+      const waitUntil = async (what: string, ready: () => boolean) => {
+        const deadline = Date.now() + 90_000;
+        while (!ready()) {
+          if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+          await sleep(20);
+        }
+      };
+      const start = (relay: string, name: string) => {
+        const input = join(pending, name);
+        writeFileSync(input, JSON.stringify({ synthetic: name }));
+        const child = spawn(
+          '/bin/sh',
+          [relay, '--send', 'claude-code', 'Stop', 'lifecycle', input],
+          { env: isolation.environment({}, {}), stdio: 'ignore' },
+        );
+        senders.push(child);
+        let exit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+        child.once('exit', (code, signal) => {
+          exit = { code, signal };
+        });
+        return { exit: () => exit };
+      };
+      const installedBin = (name: string, files: Record<string, string>) => {
+        const bin = join(root, name, 'bin');
+        mkdirSync(bin, { recursive: true });
+        for (const [file, text] of Object.entries(files)) {
+          writeFileSync(join(bin, file), text);
+          chmodSync(join(bin, file), 0o700);
+        }
+        return bin;
+      };
+
+      const broken = writeRelayScript(join(root, 'broken-hooks'), home, {
+        PATH: [installedBin('broken', { rmdir: '#!/bin/sh\nexit 1\n' }), '/usr/bin', '/bin'].join(
+          delimiter,
+        ),
+      });
+      writeFileSync(lock, deadOwner());
+      const first = start(broken, 'claude-code_1-1-a.json');
+      await waitUntil('the first sender to exit', () => first.exit() !== undefined);
+      expect(first.exit()).toEqual({ code: 0, signal: null });
+      expect(existsSync(join(pending, 'claude-code_1-1-a.ready.json'))).toBe(true);
+      expect(existsSync(guard)).toBe(true);
+
+      // Another owner dies holding the lock. The lock loop is the relay's only `sleep`, so a sender
+      // that has slept has failed to take the lock and failed to take the guard. From then on it may
+      // not publish while the guard is there; it spins on its attempt budget instead.
+      const spun = join(root, 'spun');
+      const relay = writeRelayScript(join(home, 'hooks'), home, {
+        PATH: [
+          installedBin('observed', { sleep: `#!/bin/sh\n: > '${spun}'\nexec /bin/sleep "$@"\n` }),
+          '/usr/bin',
+          '/bin',
+        ].join(delimiter),
+      });
+      const deadLock = deadOwner();
+      writeFileSync(lock, deadLock);
+      const spinner = start(relay, 'claude-code_2-1-spin.json');
+      await waitUntil('the sender to meet the guard', () => existsSync(spun));
+      expect(spinner.exit()).toBeUndefined();
+      expect(existsSync(join(pending, 'claude-code_2-1-spin.ready.json'))).toBe(false);
+      expect(readFileSync(lock, 'utf8')).toBe(deadLock);
+      expect(existsSync(guard)).toBe(true);
+
+      const abandoned = new Date(Date.now() - STALE_HOOK_QUOTA_REAPING_MS - 1_000);
+      utimesSync(guard, abandoned, abandoned);
+      const warnings: string[] = [];
+      new HookIngress({
+        adapters: [],
+        registry: { ingest: () => 1, flush: () => true } as unknown as SessionRegistry,
+        tailer: { track() {} } as unknown as TranscriptTailer,
+        spoolDir: join(home, 'spool'),
+        breakerFile: join(home, 'hooks-off'),
+        userHome: root,
+        log: { info() {}, debug() {}, warn: (message) => warnings.push(message) },
+      }).drainSpool();
+      // Not asserted on the filesystem: the live sender may take a fresh guard the moment it is gone.
+      expect(warnings).toContain('abandoned relay reaping guard removed');
+
+      // The same sender, still within its budget, now reclaims the dead owner's lock and publishes.
+      await waitUntil('the spinning sender to exit', () => spinner.exit() !== undefined);
+      expect(spinner.exit()).toEqual({ code: 0, signal: null });
+      expect(existsSync(join(pending, 'claude-code_2-1-spin.ready.json'))).toBe(true);
+      expect(existsSync(lock)).toBe(false);
+      expect(existsSync(guard)).toBe(false);
+    } finally {
+      for (const sender of senders) if (sender.exitCode === null) sender.kill('SIGKILL');
+      isolation.dispose();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 240_000);
 
   /**
    * The regression that matters most, and the cheapest one to state: an earlier relay measured the

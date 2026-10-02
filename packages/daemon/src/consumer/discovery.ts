@@ -4,7 +4,10 @@ import {
   CONSUMER_BASE_PATH,
   CONSUMER_CONTRACT,
   type ConsumerDiscovery,
+  type ExperimentalContractEntry,
+  ExperimentalContractEntrySchema,
 } from '@salidium/consumer-contract';
+import type { ProviderId } from '@salidium/protocol';
 import { writePrivateJsonAtomic } from '../operations/files.ts';
 
 /**
@@ -22,6 +25,10 @@ export function consumerDiscoveryPath(home: string): string {
 
 export function consumerDiscovery(options: {
   port: number;
+  /** The providers this instance launched with. Fixed for its life: a change needs a restart. */
+  providers: readonly ProviderId[];
+  /** Experimental contracts this instance serves, already checked by `experimentalContracts`. */
+  experimental?: readonly ExperimentalContractEntry[];
   pid: number;
   instanceId: string;
   startedAt: string;
@@ -41,6 +48,8 @@ export function consumerDiscovery(options: {
       },
     ],
     salidium: { version: options.version },
+    providers: [...new Set(options.providers)].sort().map((id) => ({ id })),
+    experimental: [...(options.experimental ?? [])],
     instanceId: options.instanceId,
     pid: options.pid,
     startedAt: options.startedAt,
@@ -50,6 +59,54 @@ export function consumerDiscovery(options: {
       create: 'salidium consumer create <label>',
     },
   };
+}
+
+/**
+ * The experimental contract entries discovery may carry: each one valid, one per name, sorted by
+ * name, at most eight. An entry that is not valid is dropped and reported, rather than making the
+ * whole discovery document invalid for every consumer.
+ */
+export function experimentalContracts(
+  supply: () => unknown,
+  port: number,
+  onInvalid: (reason: string) => void = () => {},
+): ExperimentalContractEntry[] {
+  let entries: unknown;
+  try {
+    entries = supply();
+  } catch (error) {
+    onInvalid(`experimental contracts could not be listed: ${String(error)}`);
+    return [];
+  }
+  if (!Array.isArray(entries)) {
+    onInvalid('experimental contracts must be supplied as a list; none are listed');
+    return [];
+  }
+  const byName = new Map<string, ExperimentalContractEntry>();
+  for (const entry of entries) {
+    const parsed = ExperimentalContractEntrySchema.safeParse(entry);
+    if (!parsed.success) {
+      onInvalid('experimental contract entry is not valid; it is not listed');
+      continue;
+    }
+    // Only this daemon's own port: discovery must never point a consumer somewhere else.
+    if (Number(/:(\d{1,5})\//.exec(parsed.data.baseUrl)?.[1]) !== port) {
+      onInvalid(`experimental contract ${parsed.data.name} is not on this daemon's port`);
+      continue;
+    }
+    if (byName.has(parsed.data.name)) {
+      onInvalid(`experimental contract ${parsed.data.name} is listed more than once`);
+      continue;
+    }
+    byName.set(parsed.data.name, parsed.data);
+  }
+  // Code point order, which is the same everywhere, unlike a locale's.
+  const sorted = [...byName.values()].sort((a, b) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+  );
+  if (sorted.length > 8)
+    onInvalid('more than eight experimental contracts; the rest are not listed');
+  return sorted.slice(0, 8);
 }
 
 export function writeConsumerDiscovery(home: string, discovery: ConsumerDiscovery): void {

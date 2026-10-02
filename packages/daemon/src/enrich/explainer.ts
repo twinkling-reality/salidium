@@ -13,8 +13,9 @@ import {
  *
  * Everything else in this system is observed or deterministically derived. This is not: a causal
  * chain requires understanding relationships between findings, and no amount of parsing produces
- * one from prose reliably. So the explanation is generated, and paid for by the
- * subscription the user already has, through a replaceable local CLI backend with a JSON schema.
+ * one from prose reliably. So the explanation is generated, through a replaceable backend with a
+ * JSON schema: the user's own agent CLI on the subscription they already have, or a local Ollama
+ * model over loopback when they choose one.
  *
  * Three rules keep it honest:
  *  - It is `explained` provenance and is rendered as generated wherever it appears.
@@ -244,9 +245,9 @@ export async function explainWithStatus(
 ): Promise<ExplanationAttempt> {
   const environment = opts.environment ?? process.env;
   const mode = opts.mode ?? configuredExplainerMode(environment);
+  const model = opts.model ?? environment.SALIDIUM_EXPLAIN_MODEL;
   const backend = opts.backend ?? resolveExplainerBackend(state.provider, environment, mode);
   if (!backend) return { status: mode === 'off' ? 'disabled' : 'unavailable' };
-  const model = opts.model ?? environment.SALIDIUM_EXPLAIN_MODEL;
   const timeoutMs = opts.timeoutMs ?? 60_000;
   // Evidence and its attribution are one immutable snapshot. The live reducer can advance while
   // the backend is generating; stamping the response from that later state would claim the model

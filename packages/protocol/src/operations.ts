@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ProviderIdSchema } from './provenance.ts';
 import { CanonicalTimestampSchema } from './timestamps.ts';
+import { ExplainerBackendSchema } from './wire.ts';
 
 /** Stable automation boundary for the local operations subsystem. */
 export const OPERATIONS_CONTRACT_VERSION = 1 as const;
@@ -26,7 +27,7 @@ export const OperationalConfigSettingsSchema = z
     explainer: z
       .object({
         cadence: z.enum(['off', 'session', 'turn']),
-        backend: z.enum(['auto', 'claude', 'codex']),
+        backend: ExplainerBackendSchema,
         model: z.string().trim().min(1).max(120).nullable(),
       })
       .strict(),
@@ -75,7 +76,7 @@ export const StoredOperationalConfigSchema = z
         explainer: z
           .object({
             cadence: z.enum(['off', 'session', 'turn']).optional(),
-            backend: z.enum(['auto', 'claude', 'codex']).optional(),
+            backend: ExplainerBackendSchema.optional(),
             model: z.string().trim().min(1).max(120).nullable().optional(),
           })
           .strict()
@@ -147,7 +148,7 @@ export const EffectiveOperationalConfigSchema = z
         explainer: z
           .object({
             cadence: effective(z.enum(['off', 'session', 'turn'])),
-            backend: effective(z.enum(['auto', 'claude', 'codex'])),
+            backend: effective(ExplainerBackendSchema),
             model: effective(z.string().trim().min(1).max(120).nullable()),
           })
           .strict(),
@@ -284,6 +285,20 @@ export const MaintenanceStateSchema = z
   .strict();
 export type MaintenanceState = z.infer<typeof MaintenanceStateSchema>;
 
+/**
+ * Stored sessions being brought up to a new reducer in the background after an upgrade, with exact
+ * counts. Absent from snapshots taken before it existed; null when nothing is left to update.
+ */
+export const HistoryUpdateSchema = z
+  .object({
+    state: z.enum(['running', 'paused']),
+    sessionsUpdated: z.number().int().nonnegative(),
+    sessionsTotal: z.number().int().nonnegative(),
+    reducerVersion: z.string().min(1).max(32),
+  })
+  .strict();
+export type HistoryUpdate = z.infer<typeof HistoryUpdateSchema>;
+
 export const DerivedEstimateSchema = z
   .object({
     value: z.number().finite(),
@@ -360,6 +375,7 @@ export const OperationsHealthSnapshotSchema = z
     store: OperationsStoreMeasurementSchema,
     gaps: OperationsGapSummarySchema,
     maintenance: MaintenanceStateSchema.nullable(),
+    historyUpdate: HistoryUpdateSchema.nullable().optional(),
     hooks: z.array(HookHealthSchema),
     estimates: z
       .object({
@@ -454,8 +470,13 @@ export const QueueInspectionSchema = z
   .object({
     contractVersion: z.literal(OPERATIONS_CONTRACT_VERSION),
     observedAt: CanonicalTimestampSchema,
+    /** Files waiting to be stored. Quarantined files are excluded; nothing will drain them. */
     totalFiles: z.number().int().nonnegative().nullable(),
     totalBytes: z.number().int().nonnegative().nullable(),
+    /** Files kept as evidence but set aside from the drain. Absent from older daemons. */
+    quarantinedFiles: z.number().int().nonnegative().nullable().optional(),
+    quarantinedBytes: z.number().int().nonnegative().nullable().optional(),
+    /** Waiting entries first, then quarantined ones, each oldest first. */
     entries: z.array(QueueEntrySchema),
     entriesTruncated: z.boolean(),
     exactTotals: z.boolean(),

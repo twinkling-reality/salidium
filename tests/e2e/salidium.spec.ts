@@ -556,6 +556,106 @@ test('models and usage keeps both ledgers and explanation controls in one rail',
   await expectNoA11yViolations(page);
 });
 
+test('a local Ollama model is a distinct writer that offers only installed models', async ({
+  page,
+  daemon,
+}, testInfo) => {
+  test.skip(testInfo.project.name.includes('narrow'), 'desktop flow');
+  // Both answers are stood in for, so this test can never reach a real Ollama or load a model.
+  const settings = {
+    cadence: 'session',
+    backend: 'auto' as string,
+    model: null as string | null,
+    envOff: false,
+    backendLocked: false,
+    modelLocked: false,
+    activeBackend: 'auto' as string,
+    activeModel: null as string | null,
+    availableBackends: ['claude', 'codex'],
+    routes: {
+      claudeCode: { backend: 'claude', model: 'test-explainer' } as {
+        backend: string | null;
+        model: string | null;
+      },
+      codex: { backend: 'codex', model: 'Codex CLI default (not pinned)' } as {
+        backend: string | null;
+        model: string | null;
+      },
+    },
+  };
+  const answer = () => {
+    if (settings.backend !== 'ollama') return { ...settings };
+    const route = settings.model
+      ? { backend: 'ollama', model: `${settings.model} · Ollama` }
+      : { backend: null, model: null };
+    return {
+      ...settings,
+      activeBackend: 'ollama',
+      activeModel: settings.model,
+      routes: { claudeCode: route, codex: route },
+      ollama: { endpoint: 'http://127.0.0.1:11434', refused: null },
+    };
+  };
+  let modelListRequests = 0;
+  await page.route('**/api/settings/explainer/ollama-models', async (route) => {
+    modelListRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        state: 'ready',
+        endpoint: 'http://127.0.0.1:11434',
+        models: ['local-a:1b', 'local-b:7b'],
+        reason: null,
+      }),
+    });
+  });
+  await page.route('**/api/settings/explainer', async (route) => {
+    if (route.request().method() === 'PUT') {
+      const change = route.request().postDataJSON() as { backend?: string; model?: string | null };
+      if (change.backend !== undefined) settings.backend = change.backend;
+      if (change.model !== undefined) settings.model = change.model;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(answer()),
+    });
+  });
+  await openSalidium(page, daemon);
+  await page.getByRole('button', { name: 'Models & Usage', exact: true }).click();
+  const models = page.getByRole('complementary', { name: 'Models & Usage' });
+  expect(modelListRequests).toBe(0);
+
+  await models.getByRole('button', { name: 'Local model', exact: true }).click();
+  await expect(models.getByRole('button', { name: 'Local model', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await expect(models).toContainText('Ollama on this machine (http://127.0.0.1:11434)');
+  await expect(models).toContainText('Nothing leaves it');
+  await expect(models).toContainText('Choose an installed model. The local route has no default.');
+  // Local only still means no model call; the two are never the same button.
+  await expect(models.getByRole('button', { name: 'Local only', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'false',
+  );
+
+  await models.getByRole('button', { name: 'Choose a model' }).click();
+  const choices = models.getByRole('list', { name: 'Explanation model choices' });
+  await expect(choices.getByRole('button')).toHaveCount(2);
+  await expect(choices.getByRole('button', { name: /Automatic/ })).toHaveCount(0);
+  await expect(choices.getByRole('button', { name: /Other model/ })).toHaveCount(0);
+  await choices.getByRole('button', { name: /local-b:7b Installed in Ollama/ }).click();
+  await expect(
+    choices.getByRole('button', { name: /local-b:7b Installed in Ollama/ }),
+  ).toHaveAttribute('aria-current', 'true');
+  await expect(models).toContainText('local-b:7b · Ollama');
+  await expect(models).not.toContainText('Choose an installed model');
+  expect(settings).toMatchObject({ backend: 'ollama', model: 'local-b:7b' });
+  await expectNoA11yViolations(page);
+});
+
 test('the narrow layout uses the same models and usage rail', async ({
   page,
   daemon,

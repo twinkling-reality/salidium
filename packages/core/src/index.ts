@@ -36,7 +36,7 @@ export {
   isSensitivePath,
 } from './redaction/sensitivePaths.ts';
 export { basename, clip, shortSha } from './state/changeLog.ts';
-export { createInitialState, REDUCER_VERSION } from './state/createInitialState.ts';
+export { createInitialState, REDUCER_VERSION, reviveState } from './state/createInitialState.ts';
 export { deriveStatus } from './state/deriveStatus.ts';
 export { applyEvent, describeVerification } from './state/reducer.ts';
 export * from './state/runState.ts';

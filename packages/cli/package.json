@@ -1,6 +1,6 @@
 {
   "name": "salidium",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "type": "module",
   "files": [
     "bundle",
@@ -47,6 +47,7 @@
     "@salidium/protocol": "workspace:*",
     "@salidium/adapter-claude-code": "workspace:*",
     "@salidium/adapter-codex": "workspace:*",
+    "@salidium/adapter-opencode": "workspace:*",
     "@salidium/core": "workspace:*",
     "@salidium/consumer-contract": "workspace:*"
   }

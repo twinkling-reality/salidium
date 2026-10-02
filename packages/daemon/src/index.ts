@@ -107,6 +107,7 @@ export {
   inspectQueue,
   MAX_HEALTH_SAMPLES,
   MAX_QUEUE_STATUS_FILES,
+  oldestWaitingAt,
   retainHealthSample,
   sampleFromSnapshot,
 } from './operations/health.ts';

@@ -1,6 +1,8 @@
 import {
   closeSync,
   existsSync,
+  linkSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readdirSync,
@@ -8,12 +10,13 @@ import {
   readSync,
   realpathSync,
   renameSync,
+  rmdirSync,
   statSync,
   unlinkSync,
 } from 'node:fs';
 import { basename, dirname, join, sep } from 'node:path';
 import { normalizeProviderTimestamp, type ProviderAdapter } from '@salidium/adapter-kit';
-import { CanonicalTimestampSchema, type ProviderId } from '@salidium/protocol';
+import { CanonicalTimestampSchema, type ProviderId, ProviderIdSchema } from '@salidium/protocol';
 import type { Logger } from '../logging/logger.ts';
 import type { SessionRegistry } from '../sessions/sessionRegistry.ts';
 import {
@@ -23,6 +26,7 @@ import {
 } from './collectionGaps.ts';
 import {
   HOOK_BREAKER_FILE,
+  HOOK_QUOTA_REAPING_DIR,
   HOOK_SHED_FIRST_FILE,
   HOOK_SHED_RETAIN_FILE,
   HOOK_SHED_SECOND_FILE,
@@ -31,8 +35,11 @@ import {
   MAX_HOOK_SHED_SECOND_PENDING_FILES,
   MAX_HOOK_SPOOL_RECORD_BYTES,
   MAX_INGEST_PAYLOAD_BYTES,
+  MAX_QUARANTINED_FILES,
   MAX_SPOOL_DRAIN_BATCH,
+  STALE_HOOK_QUOTA_REAPING_MS,
   TRUNCATED_HOOK_PAYLOAD_KEY,
+  UNATTRIBUTED_SUFFIX,
 } from './limits.ts';
 import type { TranscriptTailer } from './transcriptTailer.ts';
 
@@ -52,6 +59,14 @@ export class HookIngress {
   private readonly userHome: string;
   private readonly maxPayloadBytes: number;
   private readonly maxSpoolRecordBytes: number;
+  private readonly maxQuarantinedFiles: number;
+  /**
+   * Whether the current full-quarantine episode already has its gap. Held in memory, so a restart
+   * during one long episode records it once more; a durable marker would be the alternative.
+   */
+  private quarantineFullRecorded = false;
+  /** The reaping-guard problem already logged, so a guard the drain cannot clear warns once. */
+  private reapingWarning: string | undefined;
   private readonly collectionEnabled: () => boolean;
   private spoolTimer: NodeJS.Timeout | undefined;
   /** Set only while a capped drain pass has more of the same backlog still to read. */
@@ -72,6 +87,7 @@ export class HookIngress {
     /** Test seams; production uses the shared hostile-input ceilings. */
     maxPayloadBytes?: number;
     maxSpoolRecordBytes?: number;
+    maxQuarantinedFiles?: number;
     /** Dynamic collection gate shared with transcript ingest. */
     collectionEnabled?: () => boolean;
   }) {
@@ -86,6 +102,7 @@ export class HookIngress {
     this.log = args.log;
     this.maxPayloadBytes = args.maxPayloadBytes ?? MAX_INGEST_PAYLOAD_BYTES;
     this.maxSpoolRecordBytes = args.maxSpoolRecordBytes ?? MAX_HOOK_SPOOL_RECORD_BYTES;
+    this.maxQuarantinedFiles = args.maxQuarantinedFiles ?? MAX_QUARANTINED_FILES;
     this.collectionEnabled = args.collectionEnabled ?? (() => true);
   }
 
@@ -327,8 +344,10 @@ export class HookIngress {
   private drainOrphanedPending(): boolean {
     const pending = join(this.spoolDir, 'pending');
     if (!existsSync(pending)) return false;
+    this.recoverStaleQuotaReaping(pending);
     const cutoff = Date.now() - 10_000;
-    const all = readdirSync(pending)
+    const listing = readdirSync(pending);
+    const all = listing
       .filter(
         (f) =>
           f.endsWith('.ready.json') ||
@@ -348,10 +367,28 @@ export class HookIngress {
     // them, so an enabled provider's envelopes sat behind them and were never read at all while
     // the pass re-armed itself indefinitely. Set them aside before the batch is cut; they rejoin
     // it unchanged the moment their provider is enabled again.
-    const drainable = all.filter((f) =>
-      this.adapters.has(this.providerFromPendingName(f) as ProviderId),
+    //
+    // A name that carries no valid provider id is different. No configuration change can ever make
+    // it drainable, so retaining it as though its provider were merely disabled kept it waiting
+    // forever and pinned the queue's oldest item. It joins the batch only to be quarantined, and
+    // only while the quarantine has room. Past that it stays where it is, still counted by the relay
+    // and still waiting, and is kept out of the batch so it cannot crowd out drainable work.
+    let quarantineRoom = Math.max(
+      0,
+      this.maxQuarantinedFiles - listing.filter((f) => quarantinedName(f)).length,
     );
-    const retained = all.length - drainable.length;
+    let unattributedLeft = 0;
+    const drainable = all.filter((f) => {
+      const provider = this.providerFromPendingName(f);
+      if (attributable(provider)) return this.adapters.has(provider as ProviderId);
+      if (quarantineRoom > 0) {
+        quarantineRoom -= 1;
+        return true;
+      }
+      unattributedLeft += 1;
+      return false;
+    });
+    const retained = all.length - drainable.length - unattributedLeft;
     if (retained > 0)
       this.log.debug('retaining envelopes for providers that are not enabled', { files: retained });
     const files = drainable.slice(0, MAX_SPOOL_DRAIN_BATCH);
@@ -361,6 +398,7 @@ export class HookIngress {
     const claimedBatch: { file: string; processing: string; sessionId?: string }[] = [];
     const touched = new Set<string>();
     let recovered = 0;
+    let earliestUnattributed: string | undefined;
     for (const f of files) {
       const path = join(pending, f);
       const alreadyProcessing = f.endsWith('.processing');
@@ -369,6 +407,15 @@ export class HookIngress {
         const st = statSync(path);
         const ready = f.endsWith('.ready.json') || f.endsWith('.ready.json.processing');
         if (!ready && !alreadyProcessing && st.mtimeMs > cutoff) continue;
+        if (!attributable(this.providerFromPendingName(f))) {
+          const queuedAt = st.mtime.toISOString();
+          if (
+            this.quarantineUnattributed(pending, f) &&
+            (!earliestUnattributed || queuedAt < earliestUnattributed)
+          )
+            earliestUnattributed = queuedAt;
+          continue;
+        }
         if (!alreadyProcessing) {
           try {
             renameSync(path, processing);
@@ -411,6 +458,8 @@ export class HookIngress {
       }
     }
 
+    this.recordUnattributedGaps(earliestUnattributed, unattributedLeft);
+
     // One transaction per session in the batch rather than one per envelope. A large backlog
     // spread across a few sessions is the common shape, so this is the difference between one
     // commit per queued file and one per session.
@@ -445,6 +494,114 @@ export class HookIngress {
         remaining: more,
       });
     return more;
+  }
+
+  /**
+   * The relay's reaping guard is made and removed by the external `mkdir` and `rmdir` commands. A
+   * reaper that dies between them leaves it behind: a signal can do that, and so can a full process
+   * table, because the shell exits at once when it cannot fork `rm` or `rmdir`. From then on no
+   * sender can reclaim a dead owner's quota lock, and each one that spools waits out its whole
+   * attempt budget instead. The relay has no clock, so expiry belongs here, to the one process that
+   * drains this queue. Only the guard is removed. The lock itself is still reclaimed by the relay's
+   * own protocol, which re-reads the owner before unlinking so a replacement owner is never removed.
+   */
+  private recoverStaleQuotaReaping(pending: string): void {
+    const guard = join(pending, HOOK_QUOTA_REAPING_DIR);
+    let ageMs: number;
+    try {
+      const st = lstatSync(guard);
+      if (!st.isDirectory()) {
+        // Not something the relay makes, so it is not removed here. It blocks reaping all the same.
+        this.warnReapingOnce(
+          'not-a-directory',
+          'relay reaping guard name is taken by a non-directory',
+          {
+            path: guard,
+          },
+        );
+        return;
+      }
+      ageMs = Date.now() - st.mtimeMs;
+    } catch {
+      this.reapingWarning = undefined;
+      return;
+    }
+    // A guard dated in the future is as untrustworthy as an old one: after the clock is set back,
+    // waiting for it to come of age would bring back the very hang this recovery exists to end.
+    if (Math.abs(ageMs) < STALE_HOOK_QUOTA_REAPING_MS) {
+      this.reapingWarning = undefined;
+      return;
+    }
+    try {
+      rmdirSync(guard);
+    } catch (err) {
+      this.warnReapingOnce('unremovable', 'abandoned relay reaping guard was not removed', {
+        path: guard,
+        err: String(err),
+      });
+      return;
+    }
+    this.reapingWarning = undefined;
+    this.log.warn('abandoned relay reaping guard removed', {
+      ageSeconds: Math.round(ageMs / 1000),
+    });
+  }
+
+  private warnReapingOnce(kind: string, message: string, fields: Record<string, unknown>): void {
+    if (this.reapingWarning === kind) return;
+    this.reapingWarning = kind;
+    this.log.warn(message, fields);
+  }
+
+  /**
+   * Sets aside an envelope whose name says nothing about which provider produced it. Its payload is
+   * not read, because attributing it from untrusted content would be a guess presented as fact, and
+   * it is not deleted, because it may be the only copy of real evidence. A hard link claims the
+   * quarantine name: unlike a rename it fails on an existing file instead of replacing it, so one
+   * quarantined envelope can never overwrite another. Returns whether the envelope was set aside.
+   */
+  private quarantineUnattributed(pending: string, file: string): boolean {
+    const source = join(pending, file);
+    const quarantined = `${source}${UNATTRIBUTED_SUFFIX}`;
+    try {
+      linkSync(source, quarantined);
+    } catch (err) {
+      this.log.warn('hook envelope without a provider was left in place', {
+        file,
+        err: String(err),
+      });
+      return false;
+    }
+    try {
+      unlinkSync(source);
+    } catch {
+      // Gone already. The quarantined link holds the same file, which is all that must survive.
+    }
+    this.log.warn('hook envelope without a provider quarantined', { file, quarantined });
+    return true;
+  }
+
+  /**
+   * One gap per pass rather than one per file: the ledger keeps a bounded number of episodes, and a
+   * single pass of unattributed files must not evict the pressure gaps already in it. The files
+   * themselves are the exact count, in queue inspection. Gaps are recorded after the renames, so a
+   * crash between them leaves quarantined files without their gap. They are still counted there.
+   */
+  private recordUnattributedGaps(earliest: string | undefined, left: number): void {
+    try {
+      if (earliest) this.recordObservedGap('hook-envelope-unattributed', null, earliest);
+      if (left === 0) this.quarantineFullRecorded = false;
+      else if (!this.quarantineFullRecorded) {
+        this.recordObservedGap('hook-quarantine-full', null, null);
+        this.quarantineFullRecorded = true;
+        this.log.warn('hook quarantine is full; unattributed envelopes left in place', {
+          files: left,
+          limit: this.maxQuarantinedFiles,
+        });
+      }
+    } catch (err) {
+      this.log.warn('unattributed hook envelopes were not recorded as a gap', { err: String(err) });
+    }
   }
 
   private providerFromSpoolName(file: string): string {
@@ -499,6 +656,16 @@ export class HookIngress {
     if (this.catchUp) clearTimeout(this.catchUp);
     this.catchUp = undefined;
   }
+}
+
+/** Files set aside from the drain: oversized payloads and envelopes that name no provider. */
+function quarantinedName(file: string): boolean {
+  return file.endsWith('.oversized') || file.endsWith(UNATTRIBUTED_SUFFIX);
+}
+
+/** Whether a name-derived provider is one any adapter could ever own. */
+function attributable(provider: string): boolean {
+  return ProviderIdSchema.safeParse(provider).success;
 }
 
 type BoundedLine = { line: string; oversized?: false } | { oversized: true };

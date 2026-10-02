@@ -1,0 +1,6 @@
+{
+  "format": "salidium.consumer-error",
+  "version": 1,
+  "error": "unauthorized",
+  "message": "a consumer credential is required; create one with `salidium consumer create <label>`"
+}

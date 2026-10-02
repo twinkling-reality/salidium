@@ -1,6 +1,8 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveTrustedExecutable } from '@salidium/adapter-kit';
+import { openCodeStorePath, restrictedReadsSupported } from '@salidium/adapter-opencode';
+import type { ProviderId } from '@salidium/protocol';
 import type { HookInspection, HookProviderId, InstallResult } from './hookInstaller.ts';
 import { inspectHooks, installClaudeCodeHooks, installCodexHooks } from './hookInstaller.ts';
 
@@ -217,4 +219,61 @@ export const providerIntegrations: readonly ProviderIntegration[] =
 
 export function integrationById(id: string): ProviderIntegration | undefined {
   return providerIntegrationRegistry.get(id);
+}
+
+/**
+ * A provider Salidium reads from its own database, with nothing to install. Enabling it is one
+ * entry in `providers.enabled`; setup writes no file of the provider's.
+ */
+export interface StoreIntegration {
+  id: ProviderId;
+  name: string;
+  /** Whether the provider is new enough here that its reading is labelled experimental. */
+  experimental: boolean;
+  storePath(context: IntegrationContext): string;
+  detect(context: IntegrationContext): boolean;
+  /** Whether this runtime can read the store under its restrictions at all. */
+  supported(): boolean;
+}
+
+const openCode: StoreIntegration = {
+  id: 'salidium/opencode',
+  name: 'OpenCode',
+  experimental: true,
+  storePath(context) {
+    return openCodeStorePath(context.userHome, environment(context));
+  },
+  detect(context) {
+    return existsSync(this.storePath(context));
+  },
+  supported: restrictedReadsSupported,
+};
+
+export const storeIntegrations: readonly StoreIntegration[] = [openCode];
+
+/** The command that turns a store provider on, keeping the providers already enabled. */
+export function enableStoreCommand(
+  integration: StoreIntegration,
+  enabled: readonly string[],
+): string {
+  const next = enabled.includes(integration.id) ? enabled : [...enabled, integration.id];
+  return `salidium config set providers.enabled ${next.join(',')}`;
+}
+
+/** One line per store provider for doctor: found or not, observed or not. */
+export function storeIntegrationLines(
+  context: IntegrationContext,
+  enabled: readonly string[],
+): string[] {
+  return storeIntegrations.map((integration) => {
+    const found = integration.detect(context);
+    const on = enabled.includes(integration.id);
+    const label = integration.experimental ? ' (experimental)' : '';
+    if (!integration.supported())
+      return `${integration.name}${label} cannot be read by this Node.js, which cannot restrict SQLite reads; ${on ? 'enabled but nothing is read' : 'off'}`;
+    if (on)
+      return `${integration.name}${label} observed read only; store ${found ? 'found' : 'not found yet'}`;
+    if (!found) return `${integration.name}${label} not detected; off`;
+    return `${integration.name}${label} store found; off. To observe it: ${enableStoreCommand(integration, enabled)}`;
+  });
 }

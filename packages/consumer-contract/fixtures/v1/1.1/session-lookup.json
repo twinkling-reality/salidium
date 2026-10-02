@@ -1,0 +1,37 @@
+{
+  "format": "salidium.session-lookup",
+  "version": 1,
+  "generatedAt": "2026-09-20T16:20:00.000Z",
+  "session": {
+    "id": "codex:0199a3f2-7c4e-7b10-8d2a-5e6f9c1b3a47",
+    "native": {
+      "provider": "codex",
+      "sessionId": "0199a3f2-7c4e-7b10-8d2a-5e6f9c1b3a47"
+    },
+    "title": null,
+    "cwd": "/Users/dev/acme/images",
+    "repositoryRoot": null,
+    "model": "gpt-5.5-codex",
+    "status": "waiting",
+    "startedAt": "2026-09-20T16:05:00.000Z",
+    "lastEventAt": "2026-09-20T16:05:25.000Z",
+    "endedAt": null,
+    "evidenceSeq": 7,
+    "counts": {
+      "turns": 1,
+      "toolCalls": 2,
+      "filesChanged": 1,
+      "linesAdded": 12,
+      "linesRemoved": 4,
+      "linesRemovedExact": true,
+      "reviewOpen": 2,
+      "remaining": 0
+    },
+    "lastVerification": {
+      "outcome": "fail",
+      "at": "2026-09-20T16:05:20.000Z",
+      "provenance": "observed"
+    },
+    "explanation": "disabled"
+  }
+}

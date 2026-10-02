@@ -41,6 +41,32 @@ export const HOOK_SHED_FIRST_FILE = 'hooks-shed-first';
 export const HOOK_SHED_SECOND_FILE = 'hooks-shed-second';
 export const HOOK_SHED_RETAIN_FILE = 'hooks-shed-retain';
 
+/** The relay's quota lock, beside the envelopes it serializes publication of. */
+export const HOOK_QUOTA_LOCK_FILE = '.quota-lock';
+
+/** The directory a relay makes to become the one contender allowed to reclaim a dead owner's lock. */
+export const HOOK_QUOTA_REAPING_DIR = `${HOOK_QUOTA_LOCK_FILE}.reaping`;
+
+/**
+ * Age at which the daemon treats a reaping directory as abandoned. A live reaper holds it across a
+ * few shell builtins and two short commands, so this is far beyond any real reclaim.
+ */
+export const STALE_HOOK_QUOTA_REAPING_MS = 5 * 60_000;
+
+/**
+ * Suffix for a pending envelope whose name carries no valid provider id. It stays beside the queue,
+ * outside every pattern the relay counts or the drain claims.
+ */
+export const UNATTRIBUTED_SUFFIX = '.unattributed';
+
+/**
+ * Quarantined files the drain will keep beside the queue. A quarantined file has left the relay's
+ * quota count, so without this bound quarantine would reopen the physical ceiling ADR 0003 closed.
+ * It also keeps the relay's hard bound plus every quarantined file inside the queue status scan
+ * ceiling, so queue totals stay exact. Past it, unattributed envelopes stay where they are.
+ */
+export const MAX_QUARANTINED_FILES = 1000;
+
 /**
  * Spool envelopes recovered in one drain pass before the daemon yields.
  *

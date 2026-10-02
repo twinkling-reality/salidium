@@ -1,4 +1,5 @@
 import type { SemanticChange, StoredEvent } from '@salidium/protocol';
+import { reviveState } from '../state/createInitialState.ts';
 import { applyEvent } from '../state/reducer.ts';
 import type { RunState } from '../state/runState.ts';
 
@@ -23,5 +24,5 @@ export function replayEvents(
 
 /** Deep-clones a state so a checkpoint can be replayed forward without mutating the original. */
 export function cloneState(state: RunState): RunState {
-  return structuredClone(state);
+  return reviveState(structuredClone(state));
 }

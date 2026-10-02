@@ -26,6 +26,7 @@ export function applyEvent(state: RunState, event: StoredEvent): SemanticChange[
   state.revision += 1;
   state.lastEventAt = maxTs(state.lastEventAt, event.ts);
   if (event.redactions) state.counters.redactions += event.redactions;
+  if (absorbed(state, event)) return log.changes;
 
   switch (event.kind) {
     case 'session.started':
@@ -132,6 +133,17 @@ export function applyEvent(state: RunState, event: StoredEvent): SemanticChange[
       break;
     case 'git.snapshot':
       onGitSnapshot(state, event, log);
+      break;
+    case 'file.located':
+      // Defined, not assigned: a path is provider data, and assigning `__proto__` would replace
+      // the record's prototype instead of adding an entry.
+      for (const file of event.files)
+        Object.defineProperty(state.fileLocations, file.path, {
+          value: file.repository,
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
       break;
     case 'ingest.warning':
       state.counters.ingestWarnings += 1;
@@ -540,6 +552,47 @@ function failureFidelity(e: StoredEventOf<'tool.failed'>): number {
   return information * 10 + sourceFidelity(e);
 }
 
+/**
+ * True for a tool event that belongs to a call folded into its parent, which then only remembers
+ * the event for drill-through.
+ *
+ * A child is folded when it names a parent that is already a command and it has no activity of its
+ * own yet. In practice that is one case: a Codex code cell that an older Salidium stored as a
+ * command, re-read now that each process inside it is reported separately. Showing both would
+ * count the command twice, and the cell already carries the exit code the process's record gave
+ * it. A parent that is a step, as every code cell now is, keeps its children as activities, and a
+ * child that already has an activity (a hook reported it first) keeps it: retracting checks,
+ * findings and history already derived from it is not something replay can do honestly.
+ */
+function absorbed(state: RunState, e: StoredEvent): boolean {
+  if (e.kind !== 'tool.called' && e.kind !== 'tool.completed' && e.kind !== 'tool.failed')
+    return false;
+  // Call ids are provider data: only own entries count, so an id such as `constructor` is not
+  // mistaken for a folded call, and `__proto__` is recorded rather than assigned.
+  const own = <T>(record: Record<string, T>, key: string): T | undefined =>
+    Object.hasOwn(record, key) ? record[key] : undefined;
+  let parentId = own(state.absorbedCalls, e.callId);
+  if (
+    !parentId &&
+    e.kind === 'tool.called' &&
+    e.parentCallId &&
+    !own(state.activities, e.callId) &&
+    own(state.activities, e.parentCallId)?.kind === 'command'
+  ) {
+    parentId = e.parentCallId;
+    Object.defineProperty(state.absorbedCalls, e.callId, {
+      value: parentId,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  if (!parentId) return false;
+  const parent = own(state.activities, parentId);
+  if (parent) rememberEventId(parent, e.id);
+  return true;
+}
+
 function rememberEventId(a: Activity, id: string): void {
   if (!a.eventIds.includes(id)) a.eventIds.push(id);
   // Channel-specific ids make equivalent observations coexist. A lexical order is stable across
@@ -628,7 +681,11 @@ function upgradeLateToolCall(
   if (previousInputKind === 'command' && e.input.kind !== 'command') state.counters.commands -= 1;
   const lane = e.agentId ? state.subagents[e.agentId] : undefined;
   if (lane && resultOnlyPlaceholder) lane.toolCalls += 1;
-  if (e.input.kind !== 'command' || a.status === 'running') return;
+  // Only a call that first names the command derives what its result means. A better record of a
+  // call that was already a command (a hook's, then the provider's) has nothing new to derive, and
+  // deriving again would count its check twice.
+  if (e.input.kind !== 'command' || a.status === 'running' || previousInputKind === 'command')
+    return;
 
   if (a.result?.kind === 'command') {
     const completion = {
@@ -819,6 +876,7 @@ function upgradeCompletedActivity(
       state.counters.linesAdded += change.linesAdded - old.linesAdded;
       state.counters.linesRemoved += change.linesRemoved - old.linesRemoved;
       file.lastHunks = change.hunks?.slice(0, 20);
+      if (change.linesRemovedUnknown) markRemovedUnknown(state, file);
       file.lastChangedAt = e.ts;
       file.lastChangeSeq = e.seq;
       file.lastAgentId = e.agentId;
@@ -979,6 +1037,15 @@ function markSourceConflict(
   }
 }
 
+/**
+ * Sticky: once any change replaced a file without saying what it held, its removed count and the
+ * session's are lower bounds, whatever exact changes follow.
+ */
+function markRemovedUnknown(state: RunState, file: FileState): void {
+  file.linesRemovedUnknown = true;
+  state.counters.linesRemovedUnknown = true;
+}
+
 function changeVerb(kind: FileChange['change']): string {
   return kind === 'add'
     ? 'Created'
@@ -1075,6 +1142,7 @@ function applyFileChange(
   file.lastAgentId = e.agentId;
   if (change.hunks) file.lastHunks = change.hunks.slice(0, 20);
   if (change.userModifiedBefore) file.userModifiedBefore = true;
+  if (change.linesRemovedUnknown) markRemovedUnknown(state, file);
   if (turn && !file.turnIds.includes(turn.id)) file.turnIds.push(turn.id);
   if (turn && !turn.filesTouched.includes(change.path)) turn.filesTouched.push(change.path);
   state.counters.linesAdded += change.linesAdded;
@@ -1509,9 +1577,16 @@ function onGitSnapshot(state: RunState, e: StoredEventOf<'git.snapshot'>, log: C
   const prevHead = state.git.head;
   state.git.head = e.head ?? state.git.head;
   state.git.branch = e.branch ?? state.git.branch;
-  state.git.dirtyCount = e.dirty.length + (e.dirtyTruncated ? 1 : 0);
+  state.git.dirtyCount = e.dirty ? e.dirty.length + (e.dirtyTruncated ? 1 : 0) : undefined;
   state.git.snapshotAt = e.ts;
   if (!state.repoRoot) state.repoRoot = e.repoRoot;
+  // Anchors come only from snapshots that say which boundary they observed. One written before
+  // snapshots named their trigger anchors nothing, rather than being guessed into a boundary.
+  // The start anchor is the first start Salidium watched. A resume, clear, or compaction reads
+  // HEAD without naming a trigger (see the git snapshot enricher), so it never stands in for one.
+  const anchor = { root: e.repoRoot, head: e.head, branch: e.branch, at: e.ts };
+  if (e.trigger === 'session.started' && !state.git.atStart) state.git.atStart = anchor;
+  if (e.trigger === 'turn.ended') state.git.atTurnEnd = anchor;
   if (e.head && prevHead && e.head !== prevHead) {
     const known = state.git.commits.find(
       (c) => c.sha && (e.head?.startsWith(c.sha) || c.sha.startsWith(e.head ?? '')),
