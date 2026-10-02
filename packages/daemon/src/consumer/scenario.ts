@@ -11,8 +11,9 @@ import type { CanonicalEvent, ProviderId, StoredEvent } from '@salidium/protocol
  *
  * The canaries are planted in every place the contract must not carry: the prompt, a command line,
  * command output, the full final message, a subagent brief, and thinking. A test fails if any of
- * them appears in a consumer document. The secret is planted in a sentence that does cross, to
- * prove the boundary redacts.
+ * them appears in a consumer document. The secrets are planted in a sentence that does cross, to
+ * prove the boundary redacts: one a vendor token any rule finds by its prefix, one a password with
+ * no shape of its own, found only by the JSON key that names it.
  */
 export const CONSUMER_CANARIES = {
   prompt: 'PROMPTCANARY',
@@ -23,6 +24,7 @@ export const CONSUMER_CANARIES = {
 } as const;
 
 export const CONSUMER_SECRET = `ghp_${'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8'}`;
+export const CONSUMER_JSON_SECRET = 'Zq8rL0xStaging';
 
 export const SCENARIO_CLOCK = Date.parse('2026-09-20T16:20:00.000Z');
 
@@ -109,7 +111,9 @@ function verifiedSession(): CanonicalEvent[] {
       .map((event) => ({ ...event, agentId: 'reviewer' }) as StoredEvent),
     b.raw({ id: 'thinking:1', kind: 'agent.thinking', chars: 1200 } as never),
     ...b.command('c3', `pnpm test ${CONSUMER_CANARIES.command}`, VITEST_PASS, { exitCode: 0 }),
-    b.message(`All tests pass. The staging key ${CONSUMER_SECRET} was never used by the fix.`),
+    b.message(
+      `All tests pass. The staging key ${CONSUMER_SECRET} was never used by the fix, nor was {"password":"${CONSUMER_JSON_SECRET}"}.`,
+    ),
     ...b.edit('c4', `${LANE}/src/payments/refunds.ts`, 5, 1),
     ...b.edit('c4b', `${SCRATCH}/notes.md`, 3, 0),
     // Where Salidium found each changed file, as its file locator reports it for a live session.

@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+- Redact credentials written as JSON, YAML, HTTP headers, and environment variables. The key
+  rules needed the separator right after the key, so the closing quote of a JSON key hid
+  `{"password":"..."}`, `"api_key": "..."` and `{"Authorization":"Bearer ..."}` from them. Now
+  covered: quoted keys, including JSON escaped inside a JSON string as a raw provider record holds
+  it; quoted values with escaped quotes, replaced whole so a redacted JSON document still parses;
+  `Authorization` with a Bearer, Basic or Token scheme, `Proxy-Authorization`, `X-Api-Key`,
+  `X-Auth-Token`, `X-Access-Token`, `Private-Token` and `X-Goog-Api-Key` headers in curl commands
+  and logs; and `NAME=value`, `export NAME="value"` and compose `NAME: value` forms. A key that
+  names a credential with a quoted value, or an environment variable's name, is enough evidence
+  for a value of six characters, so `{"password":"hunter2"}` and `DB_PASSWORD=hunter2` are
+  redacted. Other values keep the earlier bar, and a repeated secret keeps one placeholder in
+  every form. Not covered: an unquoted lowercase key with a short value (`password: hunter2` in
+  YAML, `password=hunter2` in an ini file), values containing whitespace, values made only of
+  letters, `.`, `_` and `-` other than a Basic credential, URL query parameters, command-line flags such as `--password value`, and cookies.
+- Events stored before this release are not redacted again. Stored events are immutable, and
+  `salidium reingest --all` re-reads provider files but never rewrites an event it already holds,
+  so older rows keep their earlier redaction in the session view, search, the owner API, and what
+  the explainer is sent. Text that crosses the consumer contract and raw records opened as
+  evidence are redacted with the current rules when they are read, so they are covered. A
+  reingested record whose redaction now differs from its stored event is not fingerprinted, and
+  its raw evidence may keep asking to be re-ingested. `salidium forget <id>` removes a session
+  whose stored text holds a secret.
+
 ## 0.8.0 - 2026-10-02
 
 - Experimental: see where a session's work sits in its repository. A session's report gains
