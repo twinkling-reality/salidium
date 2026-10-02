@@ -1,10 +1,9 @@
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
-  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -68,7 +67,7 @@ describe('opt-in', () => {
   test('roots are compared exactly, never resolved from the request', async () => {
     const { repo, home } = setup();
     const commit = basicTree(repo);
-    allowRepository(home, repo.dir);
+    allowRepository(home, repo.dir, join(repo.dir, '.git'));
     const link = join(repo.parent, 'link');
     symlinkSync(repo.dir, link);
     const maps = new DaemonProjectMapService({ home });
@@ -80,7 +79,7 @@ describe('opt-in', () => {
   test('a revocation applies to the next request and its cache is unreachable', async () => {
     const { repo, home } = setup();
     const commit = basicTree(repo);
-    const { repository } = allowRepository(home, repo.dir);
+    const { repository } = allowRepository(home, repo.dir, join(repo.dir, '.git'));
     const maps = new DaemonProjectMapService({ home });
     expect((await maps.getMap(repo.dir, commit)).ok).toBe(true);
     const cache = new ProjectMapCache(home);
@@ -91,7 +90,12 @@ describe('opt-in', () => {
       refusal: { error: 'not-opted-in' },
     });
     // Allowed again, it starts from an empty cache directory rather than the old opt-in's.
-    const again = allowRepository(home, repo.dir, new Date(Date.now() + 1000)).repository;
+    const again = allowRepository(
+      home,
+      repo.dir,
+      join(repo.dir, '.git'),
+      new Date(Date.now() + 1000),
+    ).repository;
     expect(cache.directoryFor(again)).not.toBe(cache.directoryFor(repository));
     expect(cache.get(again, commit)).toBeUndefined();
   });
@@ -99,7 +103,7 @@ describe('opt-in', () => {
   test('an invalid opt-in file opts nothing in', async () => {
     const { repo, home } = setup();
     const commit = basicTree(repo);
-    allowRepository(home, repo.dir);
+    allowRepository(home, repo.dir, join(repo.dir, '.git'));
     writeFileSync(join(home, 'project-map-repositories.json'), '{"version":1,"repositories":[{');
     const warnings: string[] = [];
     const maps = new DaemonProjectMapService({
@@ -113,10 +117,10 @@ describe('opt-in', () => {
 
   test('allowing twice keeps one entry, and the file is owner-only', () => {
     const { repo, home } = setup();
-    expect(allowRepository(home, repo.dir).added).toBe(true);
-    expect(allowRepository(home, repo.dir).added).toBe(false);
+    expect(allowRepository(home, repo.dir, join(repo.dir, '.git')).added).toBe(true);
+    expect(allowRepository(home, repo.dir, join(repo.dir, '.git')).added).toBe(false);
     expect(listOptedInRepositories(home)).toHaveLength(1);
-    expect(() => allowRepository(home, 'relative/path')).toThrow();
+    expect(() => allowRepository(home, 'relative/path', '/x/.git')).toThrow();
   });
 });
 
@@ -124,7 +128,7 @@ describe('building', () => {
   test('caches per commit and reports an unknown commit', async () => {
     const { repo, home } = setup();
     const commit = basicTree(repo);
-    allowRepository(home, repo.dir);
+    allowRepository(home, repo.dir, join(repo.dir, '.git'));
     let builds = 0;
     const maps = new DaemonProjectMapService({
       home,
@@ -158,7 +162,7 @@ describe('building', () => {
       repo.write(`src/c${i}.ts`, `export const c = ${i};\n`);
       commits.push(repo.commit());
     }
-    allowRepository(home, repo.dir);
+    allowRepository(home, repo.dir, join(repo.dir, '.git'));
     const maps = new DaemonProjectMapService({ home, maxBuildsPerMinute: 2 });
     const results = await Promise.all(commits.map((c) => maps.getMap(repo.dir, c)));
     expect(results.filter((r) => r.ok)).toHaveLength(2);
@@ -168,11 +172,32 @@ describe('building', () => {
     expect((await maps.getMap(repo.dir, firstCommit)).ok).toBe(true);
   });
 
+  test('commit checks share the queue bound, and recheck the opt-in inside the queue', async () => {
+    const { repo, home } = setup();
+    const commits = [basicTree(repo)];
+    for (let i = 0; i < 3; i += 1) {
+      repo.write(`src/q${i}.ts`, `export const q = ${i};\n`);
+      commits.push(repo.commit());
+    }
+    allowRepository(home, repo.dir, join(repo.dir, '.git'));
+    const maps = new DaemonProjectMapService({ home });
+    const builds = commits.map((c) => maps.getMap(repo.dir, c));
+    const first = commits[0] ?? '';
+    expect(await maps.commitExists(repo.dir, first)).toMatchObject({
+      ok: false,
+      refusal: { error: 'busy' },
+    });
+    await Promise.all(builds);
+    const queued = maps.commitExists(repo.dir, first);
+    revokeRepository(home, repo.dir);
+    expect(await queued).toMatchObject({ ok: false, refusal: { error: 'not-opted-in' } });
+  });
+
   test('a tree over the file bound is refused, not truncated', async () => {
     const { repo, home } = setup();
     for (let i = 0; i < 12; i += 1) repo.write(`f${i}.txt`, `${i}`);
     const commit = repo.commit();
-    allowRepository(home, repo.dir);
+    allowRepository(home, repo.dir, join(repo.dir, '.git'));
     const maps = new DaemonProjectMapService({ home, bounds: { ...DEFAULT_BOUNDS, files: 10 } });
     expect(await maps.getMap(repo.dir, commit)).toMatchObject({
       ok: false,
@@ -187,7 +212,7 @@ describe('building', () => {
     repo.write('b.ts', "import './a.ts';\n");
     repo.write('c.ts', `// ${'y'.repeat(300)}\n`);
     const commit = repo.commit();
-    allowRepository(home, repo.dir);
+    allowRepository(home, repo.dir, join(repo.dir, '.git'));
     const maps = new DaemonProjectMapService({
       home,
       bounds: { ...DEFAULT_BOUNDS, blobBytes: 1000, totalBytes: 100 },
@@ -247,7 +272,7 @@ describe('crafted repositories', () => {
     // A missing blob is what would make git fetch from the promisor remote.
     const missing = repo.git(['rev-parse', `${commit}:src/b.ts`]);
     rmSync(repo.objectPath(missing));
-    allowRepository(home, repo.dir);
+    allowRepository(home, repo.dir, join(repo.dir, '.git'));
     const result = await new DaemonProjectMapService({ home }).getMap(repo.dir, commit);
     if (!result.ok) throw new Error(result.refusal.message);
     expect(readdirSync(markers)).toEqual([]);
@@ -270,7 +295,7 @@ describe('crafted repositories', () => {
     symlinkSync('../../outside.ts', join(repo.dir, 'src', 'link.ts'));
     symlinkSync(repo.parent, join(repo.dir, 'linked-dir'));
     const commit = repo.commit();
-    allowRepository(home, repo.dir);
+    allowRepository(home, repo.dir, join(repo.dir, '.git'));
     const result = await new DaemonProjectMapService({ home }).getMap(repo.dir, commit);
     if (!result.ok) throw new Error(result.refusal.message);
     const link = result.map.nodes.find((n) => n.kind === 'file' && n.path === 'src/link.ts');
@@ -282,17 +307,83 @@ describe('crafted repositories', () => {
     expect(result.map.coverage.languages[0]?.notParsed.symlink).toBe(1);
   });
 
-  test('a symlinked .git directory or objects store is resolved, not trusted by name', async () => {
+  test('an object store reached through a pointer the opt-in never saw is refused', async () => {
+    const secret = scratchRepository();
+    cleanups.push(() => secret.remove());
+    secret.write('src/topsecret.ts', 'export {};\n');
+    const secretCommit = secret.commit();
+    const secretGit = join(secret.dir, '.git');
+
+    // A symbolic link for the object directory.
+    const { repo: linked, home } = setup();
+    basicTree(linked);
+    rmSync(join(linked.dir, '.git', 'objects'), { recursive: true, force: true });
+    symlinkSync(join(secretGit, 'objects'), join(linked.dir, '.git', 'objects'));
+    allowRepository(home, linked.dir, join(linked.dir, '.git'));
+    const maps = new DaemonProjectMapService({ home });
+    expect(await maps.getMap(linked.dir, secretCommit)).toMatchObject({
+      refusal: { error: 'repository-unsupported' },
+    });
+
+    // A commondir inside a .git directory.
+    const { repo: common, home: commonHome } = setup();
+    basicTree(common);
+    writeFileSync(join(common.dir, '.git', 'commondir'), `${secretGit}\n`);
+    allowRepository(commonHome, common.dir, join(common.dir, '.git'));
+    expect(
+      await new DaemonProjectMapService({ home: commonHome }).getMap(common.dir, secretCommit),
+    ).toMatchObject({ refusal: { error: 'repository-unsupported' } });
+
+    // A .git file redirected after the repository was allowed.
+    const { repo: moved, home: movedHome } = setup();
+    basicTree(moved);
+    allowRepository(movedHome, moved.dir, join(moved.dir, '.git'));
+    rmSync(join(moved.dir, '.git'), { recursive: true, force: true });
+    writeFileSync(join(moved.dir, '.git'), `gitdir: ${secretGit}\n`);
+    const result = await new DaemonProjectMapService({ home: movedHome }).getMap(
+      moved.dir,
+      secretCommit,
+    );
+    expect(result).toMatchObject({ refusal: { error: 'repository-unsupported' } });
+    expect(JSON.stringify(result)).not.toContain('topsecret');
+  });
+
+  test('a pack directory holding anything but files is refused', async () => {
     const { repo, home } = setup();
     const commit = basicTree(repo);
-    const elsewhere = join(repo.parent, 'objects-elsewhere');
-    rmSync(elsewhere, { recursive: true, force: true });
-    const objects = join(repo.dir, '.git', 'objects');
-    // Move the store and leave a symlink: the reader follows it to the real directory once.
-    renameSync(objects, elsewhere);
-    symlinkSync(elsewhere, objects);
-    allowRepository(home, repo.dir);
-    expect((await new DaemonProjectMapService({ home }).getMap(repo.dir, commit)).ok).toBe(true);
+    mkdirSync(join(repo.dir, '.git', 'objects', 'pack'), { recursive: true });
+    execFileSync('mkfifo', [join(repo.dir, '.git', 'objects', 'pack', 'pack-x.pack')]);
+    allowRepository(home, repo.dir, join(repo.dir, '.git'));
+    const started = performance.now();
+    expect(await new DaemonProjectMapService({ home }).getMap(repo.dir, commit)).toMatchObject({
+      refusal: { error: 'repository-unsupported' },
+    });
+    expect(performance.now() - started).toBeLessThan(5000);
+  });
+
+  test('a tree entry with an impossibly long name is refused without holding it', async () => {
+    const { repo, home } = setup();
+    const blob = repo.git(['hash-object', '-w', '--stdin'], 'x\n');
+    const tree = repo.git(['mktree'], `100644 blob ${blob}\t${'n'.repeat(200_000)}\n`);
+    const commit = repo.git(['commit-tree', tree, '-m', 'long']);
+    allowRepository(home, repo.dir, join(repo.dir, '.git'));
+    expect(await new DaemonProjectMapService({ home }).getMap(repo.dir, commit)).toMatchObject({
+      refusal: { error: 'over-bound', bound: 'path-length' },
+    });
+  });
+
+  test('a commit time no timestamp can carry is refused, not a server error', async () => {
+    const { repo, home } = setup();
+    const commit = basicTree(repo);
+    const tree = repo.git(['rev-parse', `${commit}^{tree}`]);
+    const crafted = repo.git(
+      ['hash-object', '-t', 'commit', '-w', '--stdin', '--literally'],
+      `tree ${tree}\nauthor A <a@b> 999999999999 +0000\ncommitter A <a@b> 999999999999 +0000\n\nfuture\n`,
+    );
+    allowRepository(home, repo.dir, join(repo.dir, '.git'));
+    expect(await new DaemonProjectMapService({ home }).getMap(repo.dir, crafted)).toMatchObject({
+      refusal: { error: 'repository-unsupported' },
+    });
   });
 
   test('submodules are counted, not mapped', async () => {
@@ -301,7 +392,7 @@ describe('crafted repositories', () => {
     repo.git(['update-index', '--add', '--cacheinfo', `160000,${'1'.repeat(40)},vendor/lib`]);
     repo.git(['commit', '-q', '-m', 'submodule']);
     const commit = repo.git(['rev-parse', 'HEAD']);
-    allowRepository(home, repo.dir);
+    allowRepository(home, repo.dir, join(repo.dir, '.git'));
     const result = await new DaemonProjectMapService({ home }).getMap(repo.dir, commit);
     if (!result.ok) throw new Error(result.refusal.message);
     expect(result.map.coverage.submodules).toEqual({ count: 1, paths: ['vendor/lib'] });
@@ -316,7 +407,7 @@ describe('crafted repositories', () => {
       `100644 blob ${blob}\t..\n100644 blob ${blob}\ta\x01b.ts\n100644 blob ${blob}\tok.ts\n`,
     );
     const commit = repo.git(['commit-tree', tree, '-m', 'crafted']);
-    allowRepository(home, repo.dir);
+    allowRepository(home, repo.dir, join(repo.dir, '.git'));
     const result = await new DaemonProjectMapService({ home }).getMap(repo.dir, commit);
     if (!result.ok) throw new Error(result.refusal.message);
     expect(result.map.nodes.flatMap((n) => (n.kind === 'file' ? [n.path] : []))).toEqual(['ok.ts']);
@@ -329,7 +420,7 @@ describe('crafted repositories', () => {
   test('a missing commit or tree is refused', async () => {
     const { repo, home } = setup();
     const commit = basicTree(repo);
-    allowRepository(home, repo.dir);
+    allowRepository(home, repo.dir, join(repo.dir, '.git'));
     const tree = repo.git(['rev-parse', `${commit}^{tree}`]);
     rmSync(repo.objectPath(tree));
     expect(await new DaemonProjectMapService({ home }).getMap(repo.dir, commit)).toMatchObject({
@@ -352,7 +443,7 @@ describe('crafted repositories', () => {
       join(repo.dir, '.git', 'objects', 'info', 'alternates'),
       `${join(other.dir, '.git', 'objects')}\n`,
     );
-    allowRepository(home, repo.dir);
+    allowRepository(home, repo.dir, join(repo.dir, '.git'));
     expect(await new DaemonProjectMapService({ home }).getMap(repo.dir, commit)).toMatchObject({
       ok: false,
       refusal: { error: 'repository-unsupported' },
@@ -363,7 +454,7 @@ describe('crafted repositories', () => {
     const { repo, home } = setup({ objectFormat: 'sha256' });
     const commit = basicTree(repo);
     expect(commit).toHaveLength(64);
-    allowRepository(home, repo.dir);
+    allowRepository(home, repo.dir, join(repo.dir, '.git'));
     const maps = new DaemonProjectMapService({ home });
     const result = await maps.getMap(repo.dir, commit);
     if (!result.ok) throw new Error(result.refusal.message);
@@ -381,7 +472,7 @@ describe('crafted repositories', () => {
       join(repo.dir, '.git', 'config'),
       '[core]\n\trepositoryformatversion = 1\n[extensions]\n\tobjectFormat = sha512\n',
     );
-    allowRepository(home, repo.dir);
+    allowRepository(home, repo.dir, join(repo.dir, '.git'));
     expect(await new DaemonProjectMapService({ home }).getMap(repo.dir, commit)).toMatchObject({
       refusal: { error: 'repository-unsupported' },
     });

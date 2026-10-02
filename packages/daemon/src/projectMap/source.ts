@@ -13,14 +13,20 @@ export async function mapFromObjectStore(options: {
   commit: string;
   bounds: MapBounds;
   now?: () => number;
-}): Promise<ProjectMap | null> {
+  /** Whether the opt-in this build serves still stands; checked between reads. */
+  current?: () => boolean;
+}): Promise<ProjectMap | null | 'revoked'> {
   const { reader, bounds } = options;
+  const current = options.current ?? (() => true);
   const commit = await reader.commit(options.commit);
   if (!commit) return null;
   const git = await reader.version();
+  if (!current()) return 'revoked';
   const tree = await reader.listTree(commit.tree, bounds.files);
+  if (!current()) return 'revoked';
   const listed = tree.filter((e) => e.type === 'blob');
   const sizes = await reader.check([...new Set(listed.map((e) => e.oid))]);
+  if (!current()) return 'revoked';
   const blobs: BlobEntry[] = listed.map((e) => {
     const header = sizes.get(e.oid);
     return {

@@ -85,6 +85,17 @@ describe('salidium map', () => {
     expect(listed.out).not.toContain(worktree);
   });
 
+  it('prints where objects are read from, and never prints control characters', async () => {
+    const allowed = await run('allow', repo);
+    expect(allowed.out).toContain(`Maps read its committed objects from ${join(repo, '.git')}.`);
+    const crafted = join(root, 'esc\u001b[31mred\u009b');
+    mkdirSync(crafted, { recursive: true });
+    const refused = await run('allow', crafted);
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain('esc?[31mred?');
+    expect(refused.err.includes('\u001b') || refused.err.includes('\u009b')).toBe(false);
+  });
+
   it('refuses a directory that is not in a repository', async () => {
     const outside = join(root, 'plain');
     mkdirSync(outside, { recursive: true });

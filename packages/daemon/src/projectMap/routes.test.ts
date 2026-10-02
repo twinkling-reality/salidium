@@ -119,7 +119,7 @@ describe('/project-map/v0', () => {
     expect(refused.status).toBe(404);
     expect(errorOf(refused.body)).toBe('not-opted-in');
 
-    allowRepository(home, repo.dir);
+    allowRepository(home, repo.dir, join(repo.dir, '.git'));
     const listed = RepositoryListSchema.parse((await get('/project-map/v0/repositories')).body);
     expect(listed.repositories.map((r) => r.root)).toEqual([repo.dir]);
     const served = await get(mapPath(repo.dir, commit));

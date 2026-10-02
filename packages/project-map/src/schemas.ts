@@ -56,8 +56,21 @@ const Timestamp = z.iso
   .describe('UTC, millisecond precision, trailing Z.');
 const Count = z.number().int().nonnegative();
 const Text = (max: number) => z.string().max(max);
+/**
+ * No C0 or C1 control characters and no bidirectional overrides or isolates: a reader may print
+ * these strings to a terminal or a page, and each of those can change what is displayed.
+ */
 // biome-ignore lint/suspicious/noControlCharactersInRegex: excluding control characters is the point.
-const NO_CONTROL = /^[^\u0000-\u001f\u007f]*$/;
+const NO_CONTROL = /^[^\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]*$/;
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point.
+const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
+
+/** Whether a string holds a character the map's strings never carry. */
+export const hasUnprintable = (text: string): boolean => UNPRINTABLE.test(text);
+
+/** The string with each such character replaced by `?`, for printing or clipping. */
+export const printable = (text: string): string =>
+  text.replace(new RegExp(UNPRINTABLE.source, 'g'), '?');
 const Clean = (max: number) => z.string().max(max).regex(NO_CONTROL);
 
 export const ObjectIdSchema = z
@@ -241,6 +254,10 @@ export const BoundNameSchema = z.enum([
   'path-length',
   'unresolved-items',
   'listed-paths',
+  'build-time',
+  'scan-steps',
+  'exports-size',
+  'glob-complexity',
 ]);
 export type BoundName = z.infer<typeof BoundNameSchema>;
 

@@ -56,7 +56,7 @@ function counts(map: ProjectMap) {
 }
 
 async function mapOf(root: string, commit: string): Promise<ProjectMap> {
-  allowRepository(home, root);
+  allowRepository(home, root, join(root, '.git'));
   const result = await new DaemonProjectMapService({ home }).getMap(root, commit);
   if (!result.ok) throw new Error(result.refusal.message);
   return result.map;

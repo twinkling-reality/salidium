@@ -194,13 +194,25 @@ export interface Specifier {
   line: number;
 }
 
+/**
+ * Lookahead a file may spend finding `from` clauses, per token. Real sources use a few steps per
+ * import; a crafted file of unterminated clauses would otherwise cost each import thousands.
+ */
+const STEPS_PER_TOKEN = 32;
+
+/**
+ * @returns the specifiers, the dynamic imports that name no literal, and whether the lookahead
+ *   budget ran out, in which case the specifiers after that point were not read
+ */
 export function scanSpecifiers(source: string): {
   specifiers: Specifier[];
   dynamicWithoutLiteral: number;
+  incomplete: boolean;
 } {
   const tokens = tokenize(source);
   const specifiers: Specifier[] = [];
   let dynamicWithoutLiteral = 0;
+  let steps = STEPS_PER_TOKEN * tokens.length + 10_000;
   const at = (k: number): Token | undefined => tokens[k];
   const is = (k: number, type: Token['type'], value?: string): boolean =>
     at(k)?.type === type && (value === undefined || at(k)?.value === value);
@@ -210,6 +222,8 @@ export function scanSpecifiers(source: string): {
   const fromClause = (k: number, limit = 4000): number => {
     let braces = 0;
     for (let j = k; j < tokens.length && j < k + limit; j += 1) {
+      steps -= 1;
+      if (steps < 0) return -1;
       const t = tokens[j] as Token;
       if (t.type === 'punct' && t.value === '{') braces += 1;
       else if (t.type === 'punct' && t.value === '}') braces -= 1;
@@ -235,6 +249,7 @@ export function scanSpecifiers(source: string): {
     let typed = 0;
     let expectName = true;
     for (let j = k + 1; j < end; j += 1) {
+      steps -= 1;
       const t = tokens[j] as Token;
       if (t.type === 'punct' && t.value === '}')
         return names > 0 && names === typed && is(j + 1, 'id', 'from');
@@ -258,7 +273,7 @@ export function scanSpecifiers(source: string): {
     return false;
   };
 
-  for (let k = 0; k < tokens.length; k += 1) {
+  for (let k = 0; k < tokens.length && steps >= 0; k += 1) {
     const t = tokens[k] as Token;
     if (t.type !== 'id') continue;
     if (is(k - 1, 'punct', '.')) continue;
@@ -318,5 +333,5 @@ export function scanSpecifiers(source: string): {
       specifiers.push({ specifier: valueAt(k + 2), kind: 'require', line: t.line });
     }
   }
-  return { specifiers, dynamicWithoutLiteral };
+  return { specifiers, dynamicWithoutLiteral, incomplete: steps < 0 };
 }

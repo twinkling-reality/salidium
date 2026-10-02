@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { lstat, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { MapOverBound } from './build.ts';
 
@@ -32,7 +32,12 @@ import { MapOverBound } from './build.ts';
  *   per-object bound and within the total budget.
  */
 
-export const GIT_TIMEOUT_MS = 30_000;
+export const GIT_TIMEOUT_MS = 15_000;
+const MAX_PACK_ENTRIES = 4096;
+/** Longest tree record accepted: a path far beyond any file system's, plus the mode and id. */
+const MAX_TREE_RECORD_BYTES = 8192;
+/** The last second of year 9999, the latest time an ISO timestamp can carry. */
+const MAX_COMMIT_SECONDS = 253_402_300_799;
 const COMMIT_MAX_BYTES = 1024 * 1024;
 const OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
@@ -76,6 +81,8 @@ export async function locateObjectStore(mainRoot: string): Promise<ObjectStore> 
   const info = await lstat(dotGit).catch(() => undefined);
   if (info?.isDirectory()) gitDir = dotGit;
   else if (info?.isFile()) {
+    // A submodule checkout or a separated git directory. The directory it names is recorded when
+    // the repository is opted in and must not change afterwards; see the opt-in record.
     const text = (await readBoundedText(dotGit, 1024)) ?? '';
     const named = /^gitdir: (.+)$/.exec(text.split('\n')[0]?.replace(/\r$/, '').trim() ?? '')?.[1];
     if (!named)
@@ -85,23 +92,60 @@ export async function locateObjectStore(mainRoot: string): Promise<ObjectStore> 
     gitDir = root; // a bare repository
   else throw new GitReadError('unsupported', 'no git directory at the repository root');
   gitDir = await realpath(gitDir);
-  const ownGitDir = gitDir;
-  const common = join(gitDir, 'commondir');
-  if (await isFile(common)) {
-    const named = (await readBoundedText(common, 1024))?.split('\n')[0]?.trim();
-    if (!named) throw new GitReadError('unsupported', 'the commondir file is empty');
-    gitDir = await realpath(resolve(gitDir, named));
-  }
-  const objects = await realpath(join(gitDir, 'objects')).catch(() => undefined);
-  if (!objects || !(await stat(objects)).isDirectory())
-    throw new GitReadError('unsupported', 'the repository has no object directory');
+  await assertOwned(gitDir, 'the git directory');
+  // A main repository holds its own objects. `commondir` belongs to linked worktrees, which are
+  // keyed by their main repository and never read through their own git directory.
+  if (await lstat(join(gitDir, 'commondir')).catch(() => undefined))
+    throw new GitReadError(
+      'unsupported',
+      'the git directory points at another repository (commondir); allow the main repository instead',
+    );
+  const objects = join(gitDir, 'objects');
+  const store = await lstat(objects).catch(() => undefined);
+  if (!store?.isDirectory())
+    throw new GitReadError(
+      'unsupported',
+      store?.isSymbolicLink()
+        ? 'the object directory is a symbolic link; Salidium maps only repositories that hold their own objects'
+        : 'the repository has no object directory',
+    );
+  await assertOwned(objects, 'the object directory');
   const alternates = await lstat(join(objects, 'info', 'alternates')).catch(() => undefined);
   if (alternates)
     throw new GitReadError(
       'unsupported',
       'the repository borrows objects from another directory (objects/info/alternates); Salidium maps only repositories that hold their own objects',
     );
-  return { objects, format: await objectFormat(join(gitDir, 'config')), gitDir: ownGitDir };
+  await assertRegularPacks(join(objects, 'pack'));
+  return { objects, format: await objectFormat(join(gitDir, 'config')), gitDir };
+}
+
+/** Like Git's own ownership check: a directory another user owns could hold anything. */
+async function assertOwned(path: string, what: string): Promise<void> {
+  const uid = process.getuid?.();
+  if (uid === undefined) return;
+  const info = await stat(path);
+  if (info.uid !== uid) throw new GitReadError('unsupported', `${what} belongs to another user`);
+}
+
+/**
+ * The pack directory may hold only regular files: a FIFO would block git until its timeout, and a
+ * symbolic link could lead outside the store. Loose objects are not walked (there can be many);
+ * a blocking one costs one timeout.
+ */
+async function assertRegularPacks(pack: string): Promise<void> {
+  const info = await lstat(pack).catch(() => undefined);
+  if (!info) return;
+  if (!info.isDirectory())
+    throw new GitReadError('unsupported', 'the pack directory is not a directory');
+  const names = await readdir(pack);
+  if (names.length > MAX_PACK_ENTRIES)
+    throw new GitReadError('unsupported', 'the pack directory holds more files than any real one');
+  for (const name of names) {
+    const entry = await lstat(join(pack, name));
+    if (!entry.isFile())
+      throw new GitReadError('unsupported', 'the pack directory holds something other than files');
+  }
 }
 
 /**
@@ -209,7 +253,8 @@ export class GitObjectReader {
     const head = blank < 0 ? text : text.slice(0, blank);
     const tree = /^tree ([0-9a-f]{40}(?:[0-9a-f]{24})?)$/m.exec(head)?.[1];
     const time = /^committer .* (\d{1,12}) [+-]\d{4}$/m.exec(head)?.[1];
-    if (!tree || !time) throw new GitReadError('failed', 'the commit object could not be read');
+    if (!tree || !time || Number(time) > MAX_COMMIT_SECONDS)
+      throw new GitReadError('failed', 'the commit object could not be read');
     return { tree, commitTime: new Date(Number(time) * 1000).toISOString() };
   }
 
@@ -222,7 +267,7 @@ export class GitObjectReader {
     assertObjectId(tree);
     const entries: TreeEntry[] = [];
     let tail = Buffer.alloc(0);
-    let over = false;
+    let over: 'files' | 'path-length' | undefined;
     await this.run(['ls-tree', '-r', '-z', '--full-tree', tree], undefined, {
       // A record is about 110 bytes before its path, and paths are bounded by the filesystem.
       maxBytes: (maxEntries + 1) * 4400,
@@ -238,17 +283,25 @@ export class GitObjectReader {
           if (!mode || !oid || (type !== 'blob' && type !== 'commit' && type !== 'tree')) continue;
           entries.push({ path: record.slice(tab + 1), mode, type, oid });
           if (entries.length > maxEntries) {
-            over = true;
+            over = 'files';
             stop();
             return;
           }
+        }
+        if (buffer.length > MAX_TREE_RECORD_BYTES) {
+          over = 'path-length';
+          stop();
+          return;
         }
         tail = Buffer.from(buffer);
       },
     }).catch((error: unknown) => {
       if (!over) throw error;
     });
-    if (over) throw new MapOverBound('files', `the tree has more than ${maxEntries} entries`);
+    if (over === 'files')
+      throw new MapOverBound('files', `the tree has more than ${maxEntries} entries`);
+    if (over === 'path-length')
+      throw new MapOverBound('path-length', 'the tree holds an entry with an impossibly long name');
     return entries;
   }
 

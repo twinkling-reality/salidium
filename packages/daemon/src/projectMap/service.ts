@@ -18,7 +18,7 @@ import {
   locateObjectStore,
   type ObjectStore,
 } from './gitObjects.ts';
-import { OptInVerifier } from './optIn.ts';
+import { OptInVerifier, type StoredRepository } from './optIn.ts';
 import { mapFromObjectStore } from './source.ts';
 
 /** Builds one at a time; a request arriving while this many wait is told to retry. */
@@ -105,8 +105,13 @@ export class DaemonProjectMapService implements ProjectMapService {
     if (!ObjectIdSchema.safeParse(commit).success)
       return refusal('bad-request', 'commit must be a full 40- or 64-hex object id');
     if (!this.optIn.get(mainRoot)) return NOT_OPTED_IN();
+    if (this.queued >= MAX_QUEUED_BUILDS)
+      return refusal('busy', 'other repository reads are queued; retry shortly');
     return this.serialized(async () => {
-      const opened = await this.open(mainRoot, commit);
+      // Checked again inside the queue: the opt-in may have been revoked while this waited.
+      const repository = this.optIn.get(mainRoot);
+      if (!repository) return NOT_OPTED_IN();
+      const opened = await this.open(repository, commit);
       if (!opened.ok)
         return opened.refusal.error === 'commit-unknown' ? { ok: true, exists: false } : opened;
       try {
@@ -153,15 +158,21 @@ export class DaemonProjectMapService implements ProjectMapService {
   }
 
   private async open(
-    mainRoot: string,
+    repository: StoredRepository,
     commit: string,
   ): Promise<{ ok: true; reader: GitObjectReader } | { ok: false; refusal: MapRefusal }> {
+    const mainRoot = repository.root;
     let store: ObjectStore;
     try {
       store = await locateObjectStore(mainRoot);
     } catch (error) {
       return this.refuseError(error);
     }
+    if (store.gitDir !== repository.gitDir)
+      return refusal(
+        'repository-unsupported',
+        'the repository now resolves to a different git directory than when it was allowed; allow it again with `salidium map allow <root>`',
+      );
     // A SHA-1 store has no 64-hex objects and a SHA-256 store no 40-hex ones.
     if ((commit.length === 64) !== (store.format === 'sha256'))
       return refusal('commit-unknown', 'the repository has no commit with that id');
@@ -179,10 +190,11 @@ export class DaemonProjectMapService implements ProjectMapService {
     };
   }
 
-  private async build(repository: OptedInRepository, commit: string): Promise<MapResult> {
-    // The opt-in may have been revoked while this build waited its turn.
-    if (!this.optIn.get(repository.root)) return NOT_OPTED_IN();
-    const opened = await this.open(repository.root, commit);
+  private async build(repository: StoredRepository, commit: string): Promise<MapResult> {
+    // The opt-in may have been revoked while this build waited its turn, or while it reads.
+    const current = () => this.optIn.get(repository.root)?.allowedAt === repository.allowedAt;
+    if (!current()) return NOT_OPTED_IN();
+    const opened = await this.open(repository, commit);
     if (!opened.ok) return opened;
     const started = this.now();
     try {
@@ -192,11 +204,23 @@ export class DaemonProjectMapService implements ProjectMapService {
         commit,
         bounds: this.bounds,
         now: this.now,
+        current,
       });
+      if (map === 'revoked') return NOT_OPTED_IN();
       if (!map) return refusal('commit-unknown', 'the repository has no commit with that id');
-      const checked = ProjectMapSchema.parse(map);
-      const current = this.optIn.get(repository.root);
-      if (!current || current.allowedAt !== repository.allowedAt) return NOT_OPTED_IN();
+      const parsed = ProjectMapSchema.safeParse(map);
+      if (!parsed.success) {
+        // Only crafted content can get here: every producer path is bounded, so say so plainly.
+        this.log?.warn('project map failed its own schema', {
+          issue: parsed.error.issues[0]?.path,
+        });
+        return refusal(
+          'repository-unsupported',
+          'the repository holds content a map cannot represent',
+        );
+      }
+      const checked = parsed.data;
+      if (!current()) return NOT_OPTED_IN();
       this.cache.set(repository, checked, this.optIn.list());
       this.log?.info('project map built', {
         files: checked.coverage.files,

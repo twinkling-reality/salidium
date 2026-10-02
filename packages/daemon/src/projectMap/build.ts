@@ -7,10 +7,12 @@ import {
   FILE_EDGE_KINDS,
   type FileNode,
   fileNodeId,
+  hasUnprintable,
   type MapEdge,
   type MapNode,
   PROJECT_MAP_LIMITS,
   type ProjectMap,
+  printable,
 } from '@salidium/project-map';
 import { createResolver, type WorkspacePackage } from './resolve.ts';
 import { type SpecifierKind, scanSpecifiers } from './scan.ts';
@@ -78,6 +80,8 @@ export interface BuildInput {
   read: (objects: readonly { oid: string; bytes: number }[]) => Promise<Map<string, Buffer>>;
   bounds?: MapBounds;
   now?: () => number;
+  /** Wall-clock budget for the build after its reads; past it the map is refused. */
+  deadlineMs?: number;
 }
 
 const SCRIPT = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
@@ -86,8 +90,10 @@ const SYMLINK_MODE = '120000';
 const MAX_SPECIFIER = 512;
 const MAX_INCLUDES_PER_PROJECT = 64;
 const MAX_REFERENCES = 256;
-// biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it finds.
-const CONTROL = /[\u0000-\u001f\u007f]/;
+const MAX_GLOB_SEGMENTS = 16;
+/** Work between two yields to the event loop, and the default wall-clock budget of a build. */
+const SLICE_MS = 10;
+export const DEFAULT_BUILD_DEADLINE_MS = 30_000;
 
 const LANGUAGES: Record<string, string> = {
   ts: 'typescript',
@@ -173,8 +179,7 @@ const dirOf = (path: string): string => {
 };
 const canonical = (path: string): boolean =>
   path.length > 0 && path.split('/').every((part) => part !== '' && part !== '.' && part !== '..');
-const clip = (text: string, max: number): string =>
-  text.replace(new RegExp(CONTROL.source, 'g'), '?').slice(0, max);
+const clip = (text: string, max: number): string => printable(text).slice(0, max);
 
 /** Nearest ancestor directory (including dir itself) that is a key of owners. */
 function nearest<T>(dir: string, owners: ReadonlyMap<string, T>): T | undefined {
@@ -257,7 +262,7 @@ const cleanName = (value: unknown): string | null =>
   typeof value === 'string' &&
   value.length > 0 &&
   value.length <= PROJECT_MAP_LIMITS.nameLength &&
-  !CONTROL.test(value)
+  !hasUnprintable(value)
     ? value
     : null;
 
@@ -265,12 +270,24 @@ export async function buildProjectMap(input: BuildInput): Promise<ProjectMap> {
   const bounds = input.bounds ?? DEFAULT_BOUNDS;
   const now = input.now ?? Date.now;
   const boundsReached = new Set<BoundName>();
+  // Crafted input must not hold the daemon's thread: the build yields every few milliseconds and
+  // is refused once its wall-clock budget is spent.
+  const deadline = performance.now() + (input.deadlineMs ?? DEFAULT_BUILD_DEADLINE_MS);
+  let slice = performance.now();
+  const pace = async (): Promise<void> => {
+    const at = performance.now();
+    if (at - slice < SLICE_MS) return;
+    if (at > deadline)
+      throw new MapOverBound('build-time', 'building the map took longer than its time bound');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    slice = performance.now();
+  };
 
   // Which entries become nodes.
   const omitted = { 'path-too-long': 0, 'path-control-characters': 0, 'path-not-canonical': 0 };
   const entries: BlobEntry[] = [];
   for (const blob of input.blobs) {
-    if (CONTROL.test(blob.path)) omitted['path-control-characters'] += 1;
+    if (hasUnprintable(blob.path)) omitted['path-control-characters'] += 1;
     else if (!canonical(blob.path)) omitted['path-not-canonical'] += 1;
     else if (blob.path.length > PROJECT_MAP_LIMITS.pathLength) omitted['path-too-long'] += 1;
     else entries.push(blob);
@@ -346,6 +363,7 @@ export async function buildProjectMap(input: BuildInput): Promise<ProjectMap> {
   };
 
   for (const entry of entries) {
+    await pace();
     const test = TEST_RULES.find((r) => r.test(entry.path));
     const node: FileNode = {
       id: fileNodeId(entry.path),
@@ -369,6 +387,7 @@ export async function buildProjectMap(input: BuildInput): Promise<ProjectMap> {
   const csprojects: { id: string; dir: string; path: string; text: string }[] = [];
   const manifestErrors: string[] = [];
   for (const entry of manifests) {
+    await pace();
     const dir = dirOf(entry.path);
     const text = contentOf(entry);
     if (text === undefined) {
@@ -442,6 +461,7 @@ export async function buildProjectMap(input: BuildInput): Promise<ProjectMap> {
   });
 
   for (const entry of entries) {
+    await pace();
     const dir = dirOf(entry.path);
     if (entry.path.endsWith('.cs')) {
       const assembly = nearest(dir, asmdefOwners);
@@ -531,12 +551,29 @@ export async function buildProjectMap(input: BuildInput): Promise<ProjectMap> {
         edgeTo: 'none',
       });
     const defaults = !/<EnableDefaultCompileItems>\s*false\s*</i.test(project.text);
-    const patterns = includes
+    const patterns: string[][] = [];
+    for (const glob of includes
       .slice(0, MAX_INCLUDES_PER_PROJECT)
-      .map((glob) => posix.normalize(posix.join(project.dir, glob.replaceAll('\\', '/'))))
-      .concat(defaults ? [posix.join(project.dir, '**/*.cs')] : [])
-      .map((glob) => glob.split('/'));
+      .map((include) => posix.normalize(posix.join(project.dir, include.replaceAll('\\', '/'))))
+      .concat(defaults ? [posix.join(project.dir, '**/*.cs')] : [])) {
+      // `**/**` means what `**` means; collapsing it keeps the match linear in practice.
+      const segments = glob
+        .split('/')
+        .filter((part, i, all) => part !== '**' || all[i - 1] !== '**');
+      if (segments.length > MAX_GLOB_SEGMENTS) {
+        boundsReached.add('glob-complexity');
+        addUnresolved({
+          from: project.id,
+          line: null,
+          reference: clip(glob, MAX_SPECIFIER),
+          reason: 'compile-include-too-complex',
+          package: null,
+          edgeTo: 'none',
+        });
+      } else patterns.push(segments);
+    }
     for (const path of csFiles) {
+      await pace();
       const segments = path.split('/');
       if (patterns.some((pattern) => globMatches(pattern, segments)))
         addEdge(
@@ -599,6 +636,7 @@ export async function buildProjectMap(input: BuildInput): Promise<ProjectMap> {
   let dynamicWithoutLiteral = 0;
   const parsed = new Set<string>();
   for (const entry of scriptCandidates) {
+    await pace();
     if (!readable(entry) || overBudget.has(entry.path)) continue;
     const source = contentOf(entry);
     if (source === undefined) continue;
@@ -609,11 +647,22 @@ export async function buildProjectMap(input: BuildInput): Promise<ProjectMap> {
     );
     const scanned = scanSpecifiers(source);
     dynamicWithoutLiteral += scanned.dynamicWithoutLiteral;
+    if (scanned.incomplete) {
+      boundsReached.add('scan-steps');
+      addUnresolved({
+        from,
+        line: null,
+        reference: '',
+        reason: 'scan-budget',
+        package: null,
+        edgeTo: 'none',
+      });
+    }
     for (const found of scanned.specifiers) {
       specifierKinds[kindKey[found.kind]] += 1;
       const kind = edgeKindOf(found.kind);
       const evidence = { path: entry.path, line: found.line };
-      if (found.specifier.length > MAX_SPECIFIER || CONTROL.test(found.specifier)) {
+      if (found.specifier.length > MAX_SPECIFIER || hasUnprintable(found.specifier)) {
         addUnresolved({
           from,
           line: found.line,
@@ -661,6 +710,7 @@ export async function buildProjectMap(input: BuildInput): Promise<ProjectMap> {
         addNode({ id, kind: builtin ? 'builtin' : 'external-package', name });
         addEdge({ from, to: id, kind, provenance: 'observed', rule: resolved.class }, evidence);
       } else {
+        if (resolved.reason === 'exports-too-large') boundsReached.add('exports-size');
         const pkg = resolved.package ? workspace.get(resolved.package) : undefined;
         if (pkg)
           // A package of this tree whose entry is build output: the dependency is certain, the
@@ -768,7 +818,7 @@ export async function buildProjectMap(input: BuildInput): Promise<ProjectMap> {
         count: input.submodules.length,
         paths: input.submodules
           .filter(
-            (p) => p.length <= PROJECT_MAP_LIMITS.pathLength && !CONTROL.test(p) && canonical(p),
+            (p) => p.length <= PROJECT_MAP_LIMITS.pathLength && !hasUnprintable(p) && canonical(p),
           )
           .slice(0, PROJECT_MAP_LIMITS.listedPaths),
       },

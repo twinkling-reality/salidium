@@ -448,9 +448,15 @@ and bounded evidence; C# at assembly level only. The record behind it is
   `GIT_OBJECT_DIRECTORY` set to the repository's object store, so the repository's configuration,
   hooks, refs and promisor remotes are never read; with a trusted absolute executable, an empty
   `HOME`, no system or global configuration, transports disabled, full object ids only, sizes from
-  object headers before any content, and a timeout and output cap per process. Repositories that
-  borrow objects through alternates are refused. Bounds on entries, bytes per blob, total bytes,
-  nodes and edges either refuse the map or are reported in its coverage, never silently truncated.
+  object headers before any content, and a timeout and output cap per process. The store must be
+  the repository's own: alternates, `commondir`, a symbolic-link object directory, anything but
+  files in the pack directory, and a git directory or store another user owns are refused, and the
+  git directory a root resolves to is recorded when it is allowed and must not change afterwards.
+  The build yields to the event loop every few milliseconds and is refused past a wall-clock bound,
+  so crafted content cannot hold the daemon's thread. Bounds on entries, bytes per blob, total
+  bytes, nodes, edges, exports maps, globs and scanner lookahead either refuse the map or are
+  reported in its coverage, never silently truncated. A git child's memory is not limited by
+  Salidium; its time and output are.
 - **Cache.** Built maps are kept owner-only under `project-map/cache`, keyed by the opt-in record
   itself, bounded in entries and bytes, and deleted on revocation.
 

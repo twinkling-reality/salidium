@@ -11,7 +11,7 @@ import {
   readHeadCommit,
   revokeRepository,
 } from '@salidium/daemon';
-import type { ProjectMap } from '@salidium/project-map';
+import { type ProjectMap, printable } from '@salidium/project-map';
 
 /*
  * `salidium map`: the person's control over which repositories Salidium may map, and a way to look
@@ -55,18 +55,19 @@ export async function runMapCommand(
     if (target === undefined) return 2;
     const root = await mainRootOf(resolve(cwd, target));
     if (!root) {
-      io.err(`${target} is not inside a Git repository Salidium can read\n`);
+      io.err(`${shown(target)} is not inside a Git repository Salidium can read\n`);
       return 1;
     }
+    let gitDir: string;
     try {
-      await locateObjectStore(root);
+      gitDir = (await locateObjectStore(root)).gitDir;
     } catch (error) {
       io.err(`${messageOf(error)}\n`);
       return 1;
     }
     let result: ReturnType<typeof allowRepository>;
     try {
-      result = allowRepository(home, root);
+      result = allowRepository(home, root, gitDir);
     } catch (error) {
       io.err(`${messageOf(error)}\n`);
       return 1;
@@ -78,10 +79,11 @@ export async function runMapCommand(
     io.out(
       [
         result.added
-          ? `Salidium may now map ${root}.`
-          : `${root} was already allowed (since ${result.repository.allowedAt}).`,
+          ? `Salidium may now map ${shown(root)}.`
+          : `${shown(root)} was already allowed (since ${result.repository.allowedAt}).`,
+        `Maps read its committed objects from ${shown(gitDir)}.`,
         "Tools you've given a consumer credential can read this repository's committed structure.",
-        `Stop with: salidium map revoke ${quote(root)}`,
+        `Stop with: salidium map revoke ${quote(shown(root))}`,
         '',
       ].join('\n'),
     );
@@ -99,7 +101,9 @@ export async function runMapCommand(
       return 1;
     }
     if (options.json) {
-      io.out(`${JSON.stringify({ repositories }, null, 2)}\n`);
+      io.out(
+        `${JSON.stringify({ repositories: repositories.map(({ root, allowedAt }) => ({ root, allowedAt })) }, null, 2)}\n`,
+      );
       return 0;
     }
     if (repositories.length === 0) {
@@ -108,7 +112,7 @@ export async function runMapCommand(
     }
     io.out(
       `${'ALLOWED'.padEnd(24)}  REPOSITORY\n${repositories
-        .map((r) => `${r.allowedAt.padEnd(24)}  ${r.root}`)
+        .map((r) => `${r.allowedAt.padEnd(24)}  ${shown(r.root)}`)
         .join('\n')}\n`,
     );
     return 0;
@@ -131,14 +135,14 @@ export async function runMapCommand(
       : await mainRootOf(absolute);
     const record = repositories.find((r) => r.root === root);
     if (!root || !record || !revokeRepository(home, root)) {
-      io.err(`${target} is not allowed; see salidium map list\n`);
+      io.err(`${shown(target)} is not allowed; see salidium map list\n`);
       return 1;
     }
     new ProjectMapCache(home).forget(record);
     io.out(
       options.json
         ? `${JSON.stringify({ revoked: root })}\n`
-        : `Salidium no longer maps ${root}. Requests for it are refused now, and its cached maps are deleted.\n`,
+        : `Salidium no longer maps ${shown(root)}. Requests for it are refused now, and its cached maps are deleted.\n`,
     );
     return 0;
   }
@@ -151,13 +155,15 @@ export async function runMapCommand(
     }
     const root = await mainRootOf(resolve(cwd, target));
     if (!root) {
-      io.err(`${target} is not inside a Git repository Salidium can read\n`);
+      io.err(`${shown(target)} is not inside a Git repository Salidium can read\n`);
       return 1;
     }
     const maps = new DaemonProjectMapService({ home });
     // Checked first, so nothing under a repository that is not allowed is read, HEAD included.
     if (!maps.isOptedIn(root)) {
-      io.err(`${root} is not allowed. Allow it first with: salidium map allow ${quote(root)}\n`);
+      io.err(
+        `${shown(root)} is not allowed. Allow it first with: salidium map allow ${quote(shown(root))}\n`,
+      );
       return 1;
     }
     let commit = commitArgument;
@@ -226,6 +232,9 @@ export function summary(map: ProjectMap): string {
   ];
   return lines.join('\n');
 }
+
+/** A path as it may be printed: control characters and bidirectional overrides become `?`. */
+const shown = (path: string): string => printable(path);
 
 function oneArgument(args: readonly string[], usage: string, io: Output): string | undefined {
   if (args.length !== 1 || !args[0]) {

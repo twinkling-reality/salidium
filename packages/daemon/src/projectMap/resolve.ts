@@ -34,6 +34,11 @@ const TS_FOR_JS: Record<string, string[]> = {
   '.jsx': ['.tsx'],
 };
 const PROBE = ['.ts', '.tsx', '.mts', '.js', '.mjs', '.cjs', '.jsx', '.json'];
+/** Exports maps beyond these sizes come only from crafted manifests and are not read. */
+export const MAX_EXPORTS_KEYS = 1000;
+const MAX_EXPORTS_PATTERNS = 64;
+const MAX_EXPORTS_TARGET_BYTES = 64 * 1024;
+const MAX_CONDITION_DEPTH = 8;
 const IMPORT_CONDITIONS = new Set(['development', 'node', 'import', 'default']);
 const REQUIRE_CONDITIONS = new Set(['development', 'node', 'require', 'default']);
 
@@ -63,6 +68,7 @@ function pickTarget(
   trail: string[] = [],
 ): { target: string; conditions: string[] } | undefined {
   if (typeof value === 'string') return { target: value, conditions: trail };
+  if (trail.length >= MAX_CONDITION_DEPTH) return undefined;
   if (Array.isArray(value)) {
     for (const item of value) {
       const found = pickTarget(item, conditions, trail);
@@ -102,53 +108,110 @@ export function createResolver(
     return undefined;
   };
 
+  /** A package's exports, normalized once: exact subpaths, and star patterns in key order. */
+  interface PreparedExports {
+    exact: Map<string, unknown>;
+    stars: { prefix: string; suffix: string; value: unknown }[];
+    tooLarge: boolean;
+  }
+  const prepared = new Map<string, PreparedExports>();
+  const prepare = (pkg: WorkspacePackage): PreparedExports => {
+    const known = prepared.get(pkg.name);
+    if (known) return known;
+    const field = pkg.exports;
+    const map: Record<string, unknown> =
+      typeof field === 'string' ||
+      Array.isArray(field) ||
+      typeof field !== 'object' ||
+      field === null ||
+      !Object.keys(field).some((key) => key.startsWith('.'))
+        ? { '.': field }
+        : (field as Record<string, unknown>);
+    const keys = Object.keys(map);
+    const result: PreparedExports = {
+      exact: new Map(),
+      stars: [],
+      tooLarge: keys.length > MAX_EXPORTS_KEYS,
+    };
+    if (!result.tooLarge)
+      for (const key of keys) {
+        const star = key.indexOf('*');
+        if (star < 0) result.exact.set(key, map[key]);
+        else
+          result.stars.push({
+            prefix: key.slice(0, star),
+            suffix: key.slice(star + 1),
+            value: map[key],
+          });
+      }
+    if (result.stars.length > MAX_EXPORTS_PATTERNS) result.tooLarge = true;
+    prepared.set(pkg.name, result);
+    return result;
+  };
+
+  const viaExports = (
+    pkg: WorkspacePackage,
+    subpath: string,
+    conditions: ReadonlySet<string>,
+  ): Resolution => {
+    const exportsMap = prepare(pkg);
+    if (exportsMap.tooLarge)
+      return { class: 'unresolved', package: pkg.name, reason: 'exports-too-large' };
+    let entry = exportsMap.exact.get(subpath);
+    if (entry === undefined) {
+      for (const { prefix, suffix, value } of exportsMap.stars) {
+        if (
+          subpath.length >= prefix.length + suffix.length &&
+          subpath.startsWith(prefix) &&
+          subpath.endsWith(suffix)
+        ) {
+          const matched = subpath.slice(prefix.length, subpath.length - suffix.length);
+          const text = JSON.stringify(value) ?? 'null';
+          if (text.length > MAX_EXPORTS_TARGET_BYTES)
+            return { class: 'unresolved', package: pkg.name, reason: 'exports-too-large' };
+          entry = JSON.parse(text.replaceAll('*', matched)) as unknown;
+          break;
+        }
+      }
+    }
+    if (entry === undefined || entry === null)
+      return { class: 'unresolved', package: pkg.name, reason: 'not-exported' };
+    const found = pickTarget(entry, conditions);
+    if (!found) return { class: 'unresolved', package: pkg.name, reason: 'not-exported' };
+    const target = posix.normalize(posix.join(pkg.dir, found.target));
+    if (!files.has(target))
+      return { class: 'unresolved', package: pkg.name, reason: 'export-target-not-tracked' };
+    return {
+      class: 'file',
+      target,
+      rule: `exports:${found.conditions.join('>') || 'string'}`.slice(0, 120),
+      package: pkg.name,
+    };
+  };
+
+  /** Resolutions through a package, remembered: a file may name one subpath many times. */
+  const memo = new Map<string, Resolution>();
   const viaPackage = (
     pkg: WorkspacePackage,
     specifier: string,
     conditions: ReadonlySet<string>,
   ): Resolution => {
+    const key = `${conditions === REQUIRE_CONDITIONS ? 'r' : 'i'}\0${specifier}`;
+    const known = memo.get(key);
+    if (known) return known;
+    const resolved = resolvePackage(pkg, specifier, conditions);
+    memo.set(key, resolved);
+    return resolved;
+  };
+
+  const resolvePackage = (
+    pkg: WorkspacePackage,
+    specifier: string,
+    conditions: ReadonlySet<string>,
+  ): Resolution => {
     const subpath = `.${specifier.slice(pkg.name.length)}`;
-    const exportsField = pkg.exports;
-    if (exportsField !== undefined && exportsField !== null) {
-      const map: Record<string, unknown> =
-        typeof exportsField === 'string' ||
-        Array.isArray(exportsField) ||
-        typeof exportsField !== 'object' ||
-        !Object.keys(exportsField).some((key) => key.startsWith('.'))
-          ? { '.': exportsField }
-          : (exportsField as Record<string, unknown>);
-      let entry = Object.hasOwn(map, subpath) ? map[subpath] : undefined;
-      if (entry === undefined) {
-        for (const [key, value] of Object.entries(map)) {
-          const star = key.indexOf('*');
-          if (star < 0) continue;
-          const prefix = key.slice(0, star);
-          const suffix = key.slice(star + 1);
-          if (
-            subpath.length >= prefix.length + suffix.length &&
-            subpath.startsWith(prefix) &&
-            subpath.endsWith(suffix)
-          ) {
-            const matched = subpath.slice(prefix.length, subpath.length - suffix.length);
-            entry = JSON.parse(JSON.stringify(value).replaceAll('*', matched)) as unknown;
-            break;
-          }
-        }
-      }
-      if (entry === undefined || entry === null)
-        return { class: 'unresolved', package: pkg.name, reason: 'not-exported' };
-      const found = pickTarget(entry, conditions);
-      if (!found) return { class: 'unresolved', package: pkg.name, reason: 'not-exported' };
-      const target = posix.normalize(posix.join(pkg.dir, found.target));
-      if (!files.has(target))
-        return { class: 'unresolved', package: pkg.name, reason: 'export-target-not-tracked' };
-      return {
-        class: 'file',
-        target,
-        rule: `exports:${found.conditions.join('>') || 'string'}`,
-        package: pkg.name,
-      };
-    }
+    if (pkg.exports !== undefined && pkg.exports !== null)
+      return viaExports(pkg, subpath, conditions);
     if (subpath === '.') {
       const main = pkg.main ? fileAt(posix.normalize(posix.join(pkg.dir, pkg.main))) : undefined;
       const fallback = main ?? fileAt(posix.join(pkg.dir, 'index'));

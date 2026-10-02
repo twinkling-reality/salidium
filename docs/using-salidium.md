@@ -393,7 +393,9 @@ salidium map allow ~/code/my-repository
 salidium map show ~/code/my-repository
 ```
 
-A linked worktree, or any directory inside a repository, allows the repository it belongs to.
+A linked worktree, or any directory inside a repository, allows the repository it belongs to, and
+`allow` prints the git directory its objects are read from. If the repository's `.git` later points
+somewhere else, maps are refused until you allow it again.
 `salidium map show` prints a summary at `HEAD`, or at a full commit id given after the repository;
 `--json` prints the whole map. Tools you've given a consumer credential can read the committed
 structure of every repository you allow: file paths, sizes, blob ids, imports and manifests, not file
@@ -407,7 +409,8 @@ salidium map revoke ~/code/my-repository
 Revoking takes effect on the next request and deletes the repository's cached maps. A map says what
 it covered: a repository over its bounds (20,000 tracked entries) is refused, and a file too large to
 read, or past the build's byte budget, is listed and counted as not parsed rather than silently
-skipped. A repository that borrows objects from another directory through Git alternates is refused.
+skipped. A repository whose objects live outside its own git directory, through Git alternates, a
+`commondir` file or a symbolic link, is refused.
 The map's format is experimental and may change in any release.
 
 ## Commands

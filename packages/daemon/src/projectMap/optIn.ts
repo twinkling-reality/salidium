@@ -28,8 +28,20 @@ const StoredRepositorySchema = z
   .object({
     root: RepositoryRootSchema,
     allowedAt: z.iso.datetime({ offset: false, precision: 3 }),
+    // The git directory the root resolved to when the person allowed it. A map is built only while
+    // the root still resolves there, so a `.git` pointer changed afterwards cannot redirect reads
+    // to a repository the person never saw named.
+    gitDir: RepositoryRootSchema,
   })
   .strict();
+
+/** An opt-in as the daemon holds it: the public record plus the git directory it was granted for. */
+export type StoredRepository = z.infer<typeof StoredRepositorySchema>;
+
+const publicView = (stored: StoredRepository): OptedInRepository => ({
+  root: stored.root,
+  allowedAt: stored.allowedAt,
+});
 
 const OptInFileSchema = z
   .object({
@@ -67,6 +79,24 @@ function processAlive(pid: number): boolean {
   }
 }
 
+function lockState(
+  lock: string,
+  owner: string,
+): { ino: bigint; mtimeMs: number; pid: number | undefined } | undefined {
+  try {
+    const info = statSync(lock, { bigint: true });
+    let pid: number | undefined;
+    try {
+      pid = Number(readFileSync(owner, 'utf8'));
+    } catch {
+      /* mkdir finished and the owner write did not; stale once old enough. */
+    }
+    return { ino: info.ino, mtimeMs: Number(info.mtimeMs), pid };
+  } catch {
+    return undefined;
+  }
+}
+
 function pause(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -87,22 +117,19 @@ function withOptInLock<T>(home: string, work: () => T): T {
       break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      let pid: number | undefined;
-      try {
-        pid = Number(readFileSync(owner, 'utf8'));
-      } catch {
-        /* mkdir finished and the owner write did not; stale once old enough, below. */
-      }
-      let age = 0;
-      try {
-        age = Date.now() - statSync(lock).mtimeMs;
-      } catch {
-        age = 0;
-      }
+      const seen = lockState(lock, owner);
       const stale =
-        (pid !== undefined && Number.isInteger(pid) && pid > 0 && !processAlive(pid)) ||
-        (pid === undefined && age > 5_000);
-      if (stale) rmSync(lock, { recursive: true, force: true });
+        seen !== undefined &&
+        ((seen.pid !== undefined &&
+          Number.isInteger(seen.pid) &&
+          seen.pid > 0 &&
+          !processAlive(seen.pid)) ||
+          (seen.pid === undefined && Date.now() - seen.mtimeMs > 5_000));
+      // Removed only if it is still the very lock judged stale: another writer may have recovered
+      // it and taken a fresh one in between, and deleting that would let two writers in at once.
+      const current = stale ? lockState(lock, owner) : undefined;
+      if (stale && current && current.ino === seen.ino && current.pid === seen.pid)
+        rmSync(lock, { recursive: true, force: true });
       else if (attempt >= 60) throw new Error('map opt-ins are being changed elsewhere');
       else pause(50);
     }
@@ -114,29 +141,40 @@ function withOptInLock<T>(home: string, work: () => T): T {
   }
 }
 
-export function listOptedInRepositories(home: string): OptedInRepository[] {
+export function listOptedInRepositories(home: string): StoredRepository[] {
   return readOptInFile(home).repositories.map((r) => ({ ...r }));
 }
 
 /**
- * Opts a main root in. The caller has already resolved it; this checks only its shape. Returns the
- * entry and whether it was new; allowing an opted-in repository again changes nothing.
+ * Opts a main root in, for the git directory it resolves to now. The caller has already resolved
+ * both; this checks only their shape. Returns the entry and whether it changed; allowing an
+ * opted-in repository again changes nothing unless its git directory moved, which renews the grant.
  */
 export function allowRepository(
   home: string,
   mainRoot: string,
+  resolvedGitDir: string,
   now: Date = new Date(),
-): { repository: OptedInRepository; added: boolean } {
+): { repository: StoredRepository; added: boolean } {
   const root = RepositoryRootSchema.parse(mainRoot);
+  const gitDir = RepositoryRootSchema.parse(resolvedGitDir);
   return withOptInLock(home, () => {
     const file = readOptInFile(home);
     const existing = file.repositories.find((r) => r.root === root);
-    if (existing) return { repository: { ...existing }, added: false };
+    if (existing?.gitDir === gitDir) return { repository: { ...existing }, added: false };
+    if (existing) {
+      const renewed = { root, allowedAt: now.toISOString(), gitDir };
+      writePrivateJsonAtomic(projectMapRepositoriesPath(home), {
+        version: 1,
+        repositories: file.repositories.map((r) => (r.root === root ? renewed : r)),
+      } satisfies OptInFile);
+      return { repository: renewed, added: true };
+    }
     if (file.repositories.length >= MAX_OPTED_IN_REPOSITORIES)
       throw new Error(
         `at most ${MAX_OPTED_IN_REPOSITORIES} repositories may be opted in; revoke one first`,
       );
-    const repository = { root, allowedAt: now.toISOString() };
+    const repository = { root, allowedAt: now.toISOString(), gitDir };
     writePrivateJsonAtomic(projectMapRepositoriesPath(home), {
       version: 1,
       repositories: [...file.repositories, repository],
@@ -165,7 +203,7 @@ export function revokeRepository(home: string, mainRoot: string): boolean {
  */
 export class OptInVerifier {
   private signature: string | undefined;
-  private repositories: OptedInRepository[] = [];
+  private repositories: StoredRepository[] = [];
   private readonly home: string;
   private readonly onInvalid: ((reason: string) => void) | undefined;
 
@@ -197,7 +235,7 @@ export class OptInVerifier {
   }
 
   /** The current opt-in for a main root, compared as an exact string, or undefined. */
-  get(mainRoot: string): OptedInRepository | undefined {
+  get(mainRoot: string): StoredRepository | undefined {
     this.refresh();
     const found = this.repositories.find((r) => r.root === mainRoot);
     return found ? { ...found } : undefined;
@@ -205,6 +243,6 @@ export class OptInVerifier {
 
   list(): OptedInRepository[] {
     this.refresh();
-    return this.repositories.map((r) => ({ ...r }));
+    return this.repositories.map(publicView);
   }
 }

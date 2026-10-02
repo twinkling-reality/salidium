@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { ProjectMapSchema } from '@salidium/project-map';
 import { afterAll, describe, expect, test } from 'vitest';
 import { scratchRepository } from './__fixtures__/scratchRepository.ts';
-import { DEFAULT_BOUNDS, globMatches } from './build.ts';
+import { buildProjectMap, DEFAULT_BOUNDS, globMatches } from './build.ts';
 import { GitObjectReader, locateObjectStore } from './gitObjects.ts';
 import { createResolver, type WorkspacePackage } from './resolve.ts';
 import { scanSpecifiers } from './scan.ts';
@@ -284,5 +284,113 @@ describe('mapFromObjectStore', () => {
     const blob = (m: typeof before) =>
       m.nodes.find((n) => n.kind === 'file' && n.path === 'packages/a/src/helper.ts');
     expect(blob(before)).not.toEqual(blob(after));
+  });
+});
+
+describe('buildProjectMap on crafted input', () => {
+  const oid = (n: number) => n.toString(16).padStart(40, '0');
+  /** A build from in-memory files, without git. */
+  const build = (files: Record<string, string>, options: { deadlineMs?: number } = {}) => {
+    const entries = Object.entries(files).map(([path, text], index) => ({
+      path,
+      mode: '100644',
+      oid: oid(index + 1),
+      bytes: Buffer.byteLength(text),
+      text,
+    }));
+    return buildProjectMap({
+      root: '/work/repo',
+      commit: 'c'.repeat(40),
+      tree: 'd'.repeat(40),
+      commitTime: '2026-01-01T00:00:00.000Z',
+      git: 'git version test',
+      blobs: entries,
+      submodules: [],
+      read: async (objects) => {
+        const byOid = new Map(entries.map((e) => [e.oid, e.text]));
+        return new Map(
+          objects.flatMap((o) => {
+            const text = byOid.get(o.oid);
+            return text === undefined ? [] : [[o.oid, Buffer.from(text)] as const];
+          }),
+        );
+      },
+      ...options,
+    });
+  };
+
+  test('an oversized exports map is not read, and says so', async () => {
+    const exportsMap = Object.fromEntries(
+      Array.from({ length: 1001 }, (_, i) => [`./k${i}`, `./k${i}.js`]),
+    );
+    const started = performance.now();
+    const map = await build({
+      'p/package.json': JSON.stringify({ name: 'p', exports: exportsMap }),
+      'main.ts': "import 'p/q';\n".repeat(20_000),
+    });
+    expect(performance.now() - started).toBeLessThan(5000);
+    expect(map.coverage.boundsReached).toContain('exports-size');
+    expect(map.coverage.unresolved.byReason[0]).toEqual({
+      reason: 'exports-too-large',
+      count: 20_000,
+    });
+  });
+
+  test('a large exports map named many times resolves once per subpath', async () => {
+    const exportsMap = Object.fromEntries(
+      Array.from({ length: 900 }, (_, i) => [`./k${i}`, `./src/k${i}.ts`]),
+    );
+    const started = performance.now();
+    const map = await build({
+      'p/package.json': JSON.stringify({ name: 'p', exports: exportsMap }),
+      'p/src/k899.ts': 'export {};\n',
+      'main.ts': "import 'p/k899';\n".repeat(50_000),
+    });
+    expect(performance.now() - started).toBeLessThan(5000);
+    expect(
+      map.edges.find((e) => e.from === 'file:main.ts' && e.to === 'file:p/src/k899.ts'),
+    ).toMatchObject({ count: 50_000, rule: 'exports:string' });
+  });
+
+  test('a glob too complex to match is listed, not matched', async () => {
+    const include = `${'**/a/'.repeat(20)}*.cs`;
+    const map = await build({
+      'x.csproj': `<Project><PropertyGroup><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup><ItemGroup><Compile Include="${include}" /></ItemGroup></Project>`,
+      [`${'a/'.repeat(100)}F.cs`]: 'class F {}\n',
+    });
+    expect(map.coverage.boundsReached).toContain('glob-complexity');
+    expect(map.coverage.unresolved.items[0]).toMatchObject({
+      reason: 'compile-include-too-complex',
+    });
+  });
+
+  test('a source built to exhaust the scanner is cut off and reported', async () => {
+    const started = performance.now();
+    const map = await build({ 'bomb.ts': 'import{'.repeat(140_000) });
+    expect(performance.now() - started).toBeLessThan(5000);
+    expect(map.coverage.complete).toBe(false);
+    expect(map.coverage.boundsReached).toContain('scan-steps');
+    expect(map.coverage.unresolved.items).toContainEqual(
+      expect.objectContaining({ from: 'file:bomb.ts', reason: 'scan-budget' }),
+    );
+  });
+
+  test('yields to the event loop and stops at its time bound', async () => {
+    let ticks = 0;
+    const timer = setInterval(() => (ticks += 1), 1);
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 4000; i += 1) files[`src/f${i}.ts`] = "import './g.ts';\n".repeat(50);
+    try {
+      await expect(build(files, { deadlineMs: 50 })).rejects.toMatchObject({ bound: 'build-time' });
+    } finally {
+      clearInterval(timer);
+    }
+    expect(ticks).toBeGreaterThan(0);
+  });
+
+  test('paths with C1 controls or bidirectional overrides are omitted', async () => {
+    const map = await build({ 'a\u009bb.ts': '', 'a‮b.ts': '', 'ok.ts': '' });
+    expect(map.nodes.flatMap((n) => (n.kind === 'file' ? [n.path] : []))).toEqual(['ok.ts']);
+    expect(map.coverage.omittedFiles).toEqual([{ reason: 'path-control-characters', count: 2 }]);
   });
 });
