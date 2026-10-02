@@ -33,6 +33,15 @@ Hooks give low-latency notification. Provider session files are the durable sour
 history import, restart recovery, and richer records. The reducer reconciles both channels rather
 than treating arrival order as truth.
 
+Some providers keep their durable record in a database instead of line files. OpenCode 2.x writes
+its sessions to its own SQLite store, so a store tailer polls that file in place of the transcript
+tailer. It opens the database read only, through an authorizer that allowlists the tables and
+columns the adapter reads and refuses everything else, including the provider's credential and
+account tables, pragmas, ATTACH, and writes. Its positions live in the same source-cursor table as
+file offsets, and an accepted batch is durable before its cursor advances, exactly as for files.
+OpenCode has no hooks in Salidium: Salidium never connects to an OpenCode server, installs a plugin,
+or changes OpenCode's configuration.
+
 ## Package boundaries
 
 - `packages/protocol` owns runtime-validated events, provenance, semantic changes, and wire shapes.
@@ -244,6 +253,11 @@ checks its identity, and applies output redaction before returning it.
 
 If the source file was deleted, rotated, or rewritten, Salidium returns an explicit unavailable or
 changed-source reason. It does not display whatever unrelated record now occupies the old line.
+For a database-backed provider the reference names the store, the session and the row instead of a
+file line, and the identity is the SHA-256 of the row as ingested. The re-read goes through the same
+restricted connection, and a row the provider rewrote or deleted (OpenCode's revert deletes rows)
+answers changed or unavailable. When the provider is not enabled, nothing is read, even for events
+already stored.
 Older stored records may lack a fingerprint until they are reingested. The schema upgrade queues
 every cursor and event-referenced provider file durably for that repair; missing files remain
 visible and retryable.
@@ -336,7 +350,10 @@ provider still needs file matching, parsing, deterministic identifiers, provenan
 where supported, synthetic fixtures, and reconciliation tests.
 
 That registry is an internal and embedding seam, not a claim that the installed CLI supports
-third-party plug-ins. The CLI currently ships and configures only Claude Code and Codex. A safe
+third-party plug-ins. The CLI ships Claude Code, Codex and, as an experimental provider that is off
+until it is added to `providers.enabled`, OpenCode (`salidium/opencode`). A descriptor may carry a
+store source when its provider's record is a database; the source owns the restricted connection,
+and the daemon owns scheduling, cursors, persistence and redaction. A safe
 external provider system first needs a separately published stable adapter SDK, one descriptor that
 also declares setup, display, and capabilities, runtime contract tests, explicit user-declared
 absolute manifests, and process isolation with narrowly granted roots and hook capabilities.
@@ -443,6 +460,11 @@ do not.
 
 - Claude Code and Codex own their session formats; adapter updates may be needed when those formats
   change.
+- OpenCode support is verified only against OpenCode 2.0.18 and labelled experimental. Its store
+  does not keep permission prompts or replies, so a granted permission is unknown and only a
+  declined call is observed. Its `write` tool records no diff: a new file's lines are counted, but
+  an overwrite's removed lines are unknown and are carried as unknown rather than guessed. OpenCode
+  2.x has no to-do tool, so OpenCode sessions show plans only as the agent's text.
 - Native Windows history import is supported, but the live hook relay currently requires POSIX
   `sh` and `curl`.
 - Raw evidence depends on local provider files. The upgrade can recover fingerprints only while the
