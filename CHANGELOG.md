@@ -19,6 +19,14 @@
   (alternates, a crafted `commondir`, symlinked object stores) is refused.
 - The experimental documents `salidium.project-map` v0 and `salidium.execution-links` v0 carry no
   compatibility promise yet. Consumer contract 1.1 is unchanged.
+- **Where it sits** stays cheap while it is open: it checks only the text it shows, serves the same
+  document again while nothing in the session or the allowed repositories changed, refetches at
+  most once every 15 seconds while a session is changing, and rate limits commit lookups, which it
+  remembers per allowed repository.
+- Two writers can no longer edit `consumer-credentials.json` at once. A lock left by a process that
+  died is taken over in one exclusive step instead of being removed by path, and an owner file
+  that cannot be read yet is treated as unknown rather than dead. Older releases still respect the
+  lock.
 - Tests that wait for a canceled Ollama request now wait on what they observe, not fixed delays.
 
 ## 0.7.0 - 2026-10-02
