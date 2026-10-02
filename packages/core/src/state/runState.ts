@@ -67,6 +67,12 @@ export interface RunState {
   /** Activities by callId; `activityOrder` preserves ingestion order. */
   activities: Record<string, Activity>;
   activityOrder: string[];
+  /**
+   * Calls folded into the call that ran them, by child call id. Only a parent already recorded as
+   * a command absorbs its children: that is a Codex code cell stored by a Salidium that predates
+   * reading its processes as commands of their own.
+   */
+  absorbedCalls: Record<string, string>;
   files: Record<string, FileState>;
   /**
    * The repository Salidium found holding each changed path, by absolute path, from `file.located`.

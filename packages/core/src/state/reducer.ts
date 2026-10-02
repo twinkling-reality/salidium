@@ -26,6 +26,7 @@ export function applyEvent(state: RunState, event: StoredEvent): SemanticChange[
   state.revision += 1;
   state.lastEventAt = maxTs(state.lastEventAt, event.ts);
   if (event.redactions) state.counters.redactions += event.redactions;
+  if (absorbed(state, event)) return log.changes;
 
   switch (event.kind) {
     case 'session.started':
@@ -543,6 +544,38 @@ function failureFidelity(e: StoredEventOf<'tool.failed'>): number {
   return information * 10 + sourceFidelity(e);
 }
 
+/**
+ * True for a tool event that belongs to a call folded into its parent, which then only remembers
+ * the event for drill-through.
+ *
+ * A child is folded when it names a parent that is already a command and it has no activity of its
+ * own yet. In practice that is one case: a Codex code cell that an older Salidium stored as a
+ * command, re-read now that each process inside it is reported separately. Showing both would
+ * count the command twice, and the cell already carries the exit code the process's record gave
+ * it. A parent that is a step, as every code cell now is, keeps its children as activities, and a
+ * child that already has an activity (a hook reported it first) keeps it: retracting checks,
+ * findings and history already derived from it is not something replay can do honestly.
+ */
+function absorbed(state: RunState, e: StoredEvent): boolean {
+  if (e.kind !== 'tool.called' && e.kind !== 'tool.completed' && e.kind !== 'tool.failed')
+    return false;
+  let parentId = state.absorbedCalls[e.callId];
+  if (
+    !parentId &&
+    e.kind === 'tool.called' &&
+    e.parentCallId &&
+    !state.activities[e.callId] &&
+    state.activities[e.parentCallId]?.kind === 'command'
+  ) {
+    parentId = e.parentCallId;
+    state.absorbedCalls[e.callId] = parentId;
+  }
+  if (!parentId) return false;
+  const parent = state.activities[parentId];
+  if (parent) rememberEventId(parent, e.id);
+  return true;
+}
+
 function rememberEventId(a: Activity, id: string): void {
   if (!a.eventIds.includes(id)) a.eventIds.push(id);
   // Channel-specific ids make equivalent observations coexist. A lexical order is stable across
@@ -631,7 +664,11 @@ function upgradeLateToolCall(
   if (previousInputKind === 'command' && e.input.kind !== 'command') state.counters.commands -= 1;
   const lane = e.agentId ? state.subagents[e.agentId] : undefined;
   if (lane && resultOnlyPlaceholder) lane.toolCalls += 1;
-  if (e.input.kind !== 'command' || a.status === 'running') return;
+  // Only a call that first names the command derives what its result means. A better record of a
+  // call that was already a command (a hook's, then the provider's) has nothing new to derive, and
+  // deriving again would count its check twice.
+  if (e.input.kind !== 'command' || a.status === 'running' || previousInputKind === 'command')
+    return;
 
   if (a.result?.kind === 'command') {
     const completion = {

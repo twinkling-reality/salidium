@@ -547,3 +547,61 @@ describe('reducer: revision anchors and file locations', () => {
     expect(resumed.fileLocations).toEqual(whole.fileLocations);
   });
 });
+
+describe('reducer: a better record of a command that already finished', () => {
+  it('derives its check once, however many records of the call arrive', () => {
+    const b = new EventBuilder('codex:t');
+    const input = { kind: 'command' as const, command: 'pnpm vitest run' };
+    const result = (exit: { code?: number; observation: 'explicit' | 'unknown' }) => ({
+      kind: 'command' as const,
+      exit,
+      outputExcerpt: VITEST_PASS,
+      outputChars: VITEST_PASS.length,
+      truncated: false,
+    });
+    const { state } = run([
+      b.sessionStarted(),
+      b.turnStarted('Run the tests'),
+      // A hook reports the call and its result first, without an exit code.
+      ...[
+        b.raw({
+          id: 'tool:x:call',
+          kind: 'tool.called',
+          callId: 'x',
+          toolName: 'Bash',
+          input,
+          title: 'Run',
+        }),
+        b.raw({
+          id: 'tool:x:result:hook',
+          kind: 'tool.completed',
+          callId: 'x',
+          toolName: 'Bash',
+          result: result({ observation: 'unknown' }),
+          isError: false,
+        }),
+      ].map((e) => ({ ...e, source: { provider: 'codex', channel: 'hook' } }) as StoredEvent),
+      // Then the provider's own records of the same call, under their own ids.
+      b.raw({
+        id: 'tool:x:call:item',
+        kind: 'tool.called',
+        callId: 'x',
+        toolName: 'exec_command',
+        input,
+        title: 'Run: pnpm vitest run',
+      }),
+      b.raw({
+        id: 'tool:x:result',
+        kind: 'tool.completed',
+        callId: 'x',
+        toolName: 'exec_command',
+        result: result({ code: 0, observation: 'explicit' }),
+        isError: false,
+      }),
+    ]);
+    expect(state.verifications.map((v) => [v.callId, v.outcome, v.exit?.observation])).toEqual([
+      ['x', 'pass', 'explicit'],
+    ]);
+    expect(state.counters.commands).toBe(1);
+  });
+});

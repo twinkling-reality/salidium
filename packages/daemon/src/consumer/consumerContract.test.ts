@@ -631,6 +631,76 @@ describe('consumer change feed', () => {
 });
 
 describe('consumer contract edges', () => {
+  it('describes a running code cell in Salidium’s words, never its script', async () => {
+    const { applyEvent, createInitialState, createRedactor, projectSession, summarizeSession } =
+      await import('@salidium/core');
+    const { codexAdapter } = await import('@salidium/adapter-codex');
+    const { consumerText, toSessionReport } = await import('./report.ts');
+    const thread = '01a00001-0000-7000-8000-00000000c0de';
+    const script = `const r = await tools.exec_command({"cmd":"npm test ${CONSUMER_CANARIES.command}"});\ntext("${CONSUMER_CANARIES.output}");\n`;
+    const records = (cliVersion: string | undefined) => [
+      {
+        timestamp: '2026-09-20T16:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: thread,
+          cwd: '/repo',
+          originator: 'codex_work_desktop',
+          cli_version: cliVersion,
+        },
+      },
+      {
+        timestamp: '2026-09-20T16:00:01.000Z',
+        type: 'event_msg',
+        payload: { type: 'task_started', turn_id: 'turn-1' },
+      },
+      {
+        timestamp: '2026-09-20T16:00:02.000Z',
+        type: 'response_item',
+        payload: { type: 'custom_tool_call', call_id: 'call_cell', name: 'exec', input: script },
+      },
+    ];
+    // A current build's cell is a step; an unversioned one's is still the command. Neither crosses.
+    for (const [cliVersion, headline] of [
+      ['0.158.0-alpha.2.1', 'Working'],
+      [undefined, 'Running a command'],
+    ] as const) {
+      const parser = codexAdapter.createRecordParser({
+        sessionId: `codex:${thread}`,
+        providerSessionId: thread,
+        path: '/tmp/rollout.jsonl',
+        observedAt: '2026-09-20T16:00:00.000Z',
+      });
+      const state = createInitialState({
+        sessionId: `codex:${thread}`,
+        provider: 'codex',
+        providerSessionId: thread,
+        cwd: '/repo',
+      });
+      let seq = 0;
+      records(cliVersion).forEach((record, line) => {
+        for (const event of parser.parseRecord(JSON.stringify(record), line))
+          applyEvent(state, { ...event, seq: seq++ } as never);
+      });
+      const at = Date.parse('2026-09-20T16:01:00.000Z');
+      const report = exactly(
+        SessionReportSchema,
+        toSessionReport(
+          state,
+          projectSession(state, at),
+          summarizeSession(state, at),
+          at,
+          consumerText(createRedactor()),
+        ),
+      );
+      expect(report.verdict).toMatchObject({ tone: 'working', headline });
+      const serialized = JSON.stringify(report);
+      for (const canary of Object.values(CONSUMER_CANARIES))
+        expect(serialized).not.toContain(canary);
+      expect(serialized).not.toContain('tools.exec_command');
+    }
+  });
+
   it('labels a question read from the agent’s message as reported, and the verdict follows', async () => {
     const { applyEvent, createInitialState, projectSession } = await import('@salidium/core');
     const { EventBuilder } = await import('@salidium/core/testing');

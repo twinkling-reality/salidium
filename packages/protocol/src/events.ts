@@ -321,6 +321,12 @@ export const ToolCalledEventSchema = Base.extend({
   input: ToolInputSchema,
   /** Human-readable one-liner derived deterministically from input (e.g. "Edit src/auth.ts"). */
   title: z.string(),
+  /**
+   * The call this one ran inside, when the provider records both: a process a Codex code-mode
+   * cell started names the cell. A reader that holds the parent as the activity for this work
+   * folds the child into it rather than showing the work twice.
+   */
+  parentCallId: z.string().optional(),
 });
 
 export const ToolCompletedEventSchema = Base.extend({

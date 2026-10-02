@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- Show each command a Codex code-mode cell runs once. Live sessions with hooks showed it twice:
+  as the cell and as the hook's nested command. From Codex 0.149, which records every process as
+  a `CommandExecution` item, each process is its own command with its own exit code and output,
+  and the cell is a step. So `npm test` and `npm run lint` in one cell now pass or fail separately
+  instead of reading unknown together. Rollouts from earlier or unversioned builds are read as
+  before. Sessions stored before this release keep their cells as commands. `salidium reingest
+  --all` adds each process's exit code without adding a second row, except where a hook had
+  already recorded the process: those older sessions keep the duplicate they had.
+- Consumer contract 1.1, additive: a report's `revision` says which commit the session started
+  from and stood at after its latest turn, each changed file says which Git working tree holds
+  it, including a linked worktree outside the session's directory, and discovery lists the
+  providers the daemon observes. Salidium finds a file's repository from Git's own pointer files
+  while the change is live, without running git or reading file contents, under the same setting
+  as git snapshots.
+- Git snapshots now record which boundary triggered them, and a turn end that closely follows a
+  commit is no longer skipped.
+- Every store replays its sessions once after upgrading, because session state gained revision
+  anchors, file locations, and the code-cell rule (reducer 1.14.0).
+
 ## 0.6.1 - 2026-10-02
 
 - Record file changes from current Codex builds. Since Codex 0.144, applied patches are written as
