@@ -20,9 +20,11 @@
   secret it finds first can still share a number with a placeholder stored in a later field.
   Not covered: an unquoted lowercase key with a short value (`password: hunter2` in YAML,
   `password=hunter2` in an ini file); a quoted value containing whitespace beyond the leading run
-  the earlier rules read; values made only of letters, `.`, `_` and `-` other than a Basic
-  credential; keys after a colon, as in an `.npmrc` `//host/:_authToken=`; YAML block scalars;
-  URL query parameters; command-line flags such as `--password value`; and cookies.
+  the earlier rules read; the part of an unquoted environment value after a `,` or an unclosed
+  `[`, which reads as the end of the pair; values made only of letters, `.`, `_` and `-` other
+  than a Basic credential; keys after a colon, as in an `.npmrc` `//host/:_authToken=`; YAML
+  block scalars; URL query parameters; command-line flags such as `--password value`; and
+  cookies.
 - Events stored before this release are not redacted again. Stored events are immutable, and
   `salidium reingest --all` re-reads provider files but never rewrites an event it already holds,
   so older rows keep their earlier redaction in the session view, search, the owner API, and what

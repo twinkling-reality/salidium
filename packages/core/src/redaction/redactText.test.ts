@@ -317,6 +317,9 @@ describe('credentials in structured text', () => {
     // So is JSON punctuation at its start.
     expect(redact('{"password":":Zq8rL0xStagingAB12"}')).toBe('{"password":"[SECRET#1]"}');
     expect(redact('token: "}Zq8rL0xStagingAB12"')).toBe('token: "[SECRET#1]"');
+    // ...but the gap between two strings of a compact JSON array is not a value.
+    for (const text of ['["password: ",1234567,false,"x"]', '{"a":["token=",98765,43210,"x"]}'])
+      expect(redact(text)).toBe(text);
     // ...but in a raw record, a double quote followed by JSON punctuation ends the string around it.
     const raw = JSON.stringify({ cmd: "login --token='Zq8rL0x", next: 'abc' });
     expect(JSON.parse(redact(raw))).toEqual({ cmd: "login --token='[SECRET#1]", next: 'abc' });

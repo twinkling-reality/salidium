@@ -419,7 +419,12 @@ function keyedValue(
   const quoted = quote === '"' || quote === "'" || quote === '`';
   if (!quoted && depth > 0) return undefined;
   const start = quoted ? i + depth + 1 : i;
-  const end = quoted ? quotedValueEnd(text, start, quote, depth) : -1;
+  let end = quoted ? quotedValueEnd(text, start, quote, depth) : -1;
+  // A "value" that opens with `,` `]` or `}` may be the gap between two JSON strings, read from the
+  // closing quote of one (`["password: ",1234567,"x"]`). It is a value only if its own closing quote
+  // ends a JSON string too.
+  if (end >= 0 && /[,\]}]/.test(text[start] ?? '') && !closesJsonString(text, end + depth + 1))
+    end = -1;
   let raw = end >= 0 ? text.slice(start, end) : undefined;
   let weak = false;
   const name = key[3] ?? '';
