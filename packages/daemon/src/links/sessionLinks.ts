@@ -1,4 +1,5 @@
-import { join } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { isAbsolute, relative } from 'node:path';
 import type { Redactor, RunState, RevisionAnchor as RunStateAnchor } from '@salidium/core';
 import { createRedactor } from '@salidium/core';
 import {
@@ -17,7 +18,6 @@ import {
   type SessionAnchors,
   type SessionLinksHandlerFactory,
 } from '@salidium/project-map';
-import { RepositoryLocator } from '../enrichers/fileLocation.ts';
 import type { Logger } from '../logging/logger.ts';
 import { isUserSession, type SessionRegistry } from '../sessions/sessionRegistry.ts';
 
@@ -25,8 +25,6 @@ const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 export interface SessionLinksDeps {
   registry: Pick<SessionRegistry, 'readSession'>;
-  /** Finds the main repository of the session's own root. Defaults to the shared locator rules. */
-  locator?: Pick<RepositoryLocator, 'locate'>;
   now?: () => number;
   log: Logger;
 }
@@ -45,9 +43,7 @@ export interface SessionLinksDeps {
  * request, serialized and rate limited by the service itself.
  */
 export function createSessionLinks(deps: SessionLinksDeps) {
-  const locator = deps.locator ?? new RepositoryLocator();
   const now = deps.now ?? Date.now;
-  const redactor = createRedactor();
 
   async function document(
     maps: ProjectMapService,
@@ -56,8 +52,21 @@ export function createSessionLinks(deps: SessionLinksDeps) {
     const read = deps.registry.readSession(sessionId);
     if (!read || !isUserSession(read.summary)) return undefined;
     const { state } = read;
-    const files = changedFiles(state);
-    const anchors = await sessionAnchors(state, locator);
+    // One redactor per document, so numbering never depends on what earlier requests saw.
+    const redactor = createRedactor();
+    const unchanged = (value: string) => redactor.redact(value).text === value;
+    const all = changedFiles(state);
+    // An identifier is carried whole or not at all: a changed path or root the redactor would
+    // alter names something else, so the file is counted as withheld rather than half-shown.
+    const files = all.filter(
+      (file) =>
+        unchanged(file.path) &&
+        (!file.location ||
+          (unchanged(file.location.root) &&
+            unchanged(file.location.path) &&
+            (file.location.mainRoot === undefined || unchanged(file.location.mainRoot)))),
+    );
+    const anchors = withheldBranches(sessionAnchors(state), unchanged);
     const repositories = new Map<string, RepositoryResolution>();
     for (const root of repositoriesOf(files).slice(0, EXECUTION_LINKS_LIMITS.repositories))
       repositories.set(root, await resolveRepository(maps, anchors, root));
@@ -66,8 +75,10 @@ export function createSessionLinks(deps: SessionLinksDeps) {
       generatedAt: new Date(now()).toISOString(),
       anchors,
       files,
+      withheld: all.length - files.length,
       repositories,
     });
+    // Map-derived names and rules from the opted-in tree pass the redactor too, as any text does.
     return ExecutionLinksSchema.parse(redactStrings(doc, redactor));
   }
 
@@ -100,6 +111,17 @@ export function changedFiles(state: RunState): ChangedFile[] {
     }));
 }
 
+/** A branch name the redactor would change is not carried; the anchor's HEAD still is. */
+function withheldBranches(anchors: SessionAnchors, unchanged: (value: string) => boolean) {
+  const keep = (a: RevisionAnchor | null) =>
+    a && a.branch !== null && !unchanged(a.branch) ? { ...a, branch: null } : a;
+  return {
+    ...anchors,
+    atStart: keep(anchors.atStart),
+    atLatestTurnEnd: keep(anchors.atLatestTurnEnd),
+  };
+}
+
 function anchor(value: RunStateAnchor | undefined): RevisionAnchor | null {
   if (!value) return null;
   const branch =
@@ -118,28 +140,44 @@ function anchor(value: RunStateAnchor | undefined): RevisionAnchor | null {
  * The session's revision anchors and the main repository they were read in.
  *
  * Snapshots name the working tree they read (`repoRoot`), which may be a linked worktree. Its main
- * repository comes first from what Salidium observed when files changed there, and otherwise from
- * the same read-only pointer rules today. When neither answers, the root stands for itself, which
- * at worst makes a repository read `no-revision` rather than borrow a revision that is not its own.
+ * repository is taken only from what Salidium observed while the session ran, the location of a
+ * file changed in that tree; otherwise the root stands for itself. Nothing is read from disk now,
+ * because the disk now says nothing about the disk then, and at worst a repository then reads
+ * `no-revision` rather than borrow a revision that is not its own.
+ *
+ * Run state keeps one root, from the first snapshot, while a turn-end snapshot reads wherever the
+ * session's directory is at that moment. A session whose directory has left its root may have a
+ * turn-end HEAD from another repository, so that anchor is not used for it.
  */
-export async function sessionAnchors(
+export function sessionAnchors(
   state: RunState,
-  locator: Pick<RepositoryLocator, 'locate'>,
-): Promise<SessionAnchors> {
-  const atStart = anchor(state.git.atStart);
-  const atLatestTurnEnd = anchor(state.git.atTurnEnd);
+  stillInRoot: (cwd: string, root: string) => boolean = within,
+): SessionAnchors {
   const root = state.repoRoot;
+  const atStart = anchor(state.git.atStart);
+  const atLatestTurnEnd = root && stillInRoot(state.cwd, root) ? anchor(state.git.atTurnEnd) : null;
   if (!root || (!atStart && !atLatestTurnEnd))
     return { repository: null, atStart, atLatestTurnEnd };
   const observed = Object.values(state.fileLocations).find((location) => location?.root === root);
-  if (observed) return { repository: repositoryOf(observed), atStart, atLatestTurnEnd };
-  // A child of the root, so the walk starts at the root itself; the name is never opened.
-  const located = await locator.locate(join(root, '.salidium-locate'));
-  return {
-    repository: located ? repositoryOf(located) : root,
-    atStart,
-    atLatestTurnEnd,
+  return { repository: observed ? repositoryOf(observed) : root, atStart, atLatestTurnEnd };
+}
+
+/**
+ * Whether a session directory lies in a working tree. Git reports its top level through symbolic
+ * links (`/tmp` is `/private/tmp` on macOS) while a provider reports the directory it was given,
+ * so the directory's real path is tried too. Resolving it reads no file.
+ */
+function within(cwd: string, root: string): boolean {
+  const inside = (dir: string) => {
+    const rel = relative(root, dir);
+    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
   };
+  if (inside(cwd)) return true;
+  try {
+    return inside(realpathSync(cwd));
+  } catch {
+    return false;
+  }
 }
 
 /**

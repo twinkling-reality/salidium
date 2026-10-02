@@ -194,6 +194,8 @@ export function linkExecution(input: {
   anchors: SessionAnchors;
   /** Newest change first. */
   files: readonly ChangedFile[];
+  /** Changed files the caller did not pass, counted as omitted: for example ones redaction alters. */
+  withheld?: number;
   repositories: ReadonlyMap<string, RepositoryResolution>;
 }): ExecutionLinks {
   const indexes = new Map<string, MapIndex>();
@@ -367,8 +369,8 @@ export function linkExecution(input: {
     anchors: input.anchors,
     repositories,
     files,
-    filesTotal: input.files.length,
-    filesOmitted: input.files.length - carried.length,
+    filesTotal: input.files.length + (input.withheld ?? 0),
+    filesOmitted: input.files.length - carried.length + (input.withheld ?? 0),
     modules: allModules.slice(0, EXECUTION_LINKS_LIMITS.modules),
     modulesTruncated: allModules.length > EXECUTION_LINKS_LIMITS.modules,
   };

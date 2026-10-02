@@ -37,6 +37,8 @@ const SECRET = `ghp_${'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8'}`;
 const LIVE = 'claude-code:live-session';
 const LANE_ROOT = 'claude-code:lane-root-session';
 const IMPORTED = 'claude-code:imported-session';
+const LANE_UNSEEN = 'claude-code:lane-unseen-session';
+const MOVED = 'claude-code:moved-session';
 const INTERNAL = 'claude-code:internal-session';
 
 const edgeId = (from: string, kind: string, to: string) =>
@@ -187,20 +189,57 @@ function liveSession(): CanonicalEvent[] {
   ]);
 }
 
-/** Live, started in a linked worktree; no file changed at the session root itself. */
-function laneRootSession(): CanonicalEvent[] {
-  const b = new EventBuilder(LANE_ROOT, '2026-10-02T10:00:00.000Z');
+/**
+ * Live, started in a linked worktree. With `inLane`, a file changed in the worktree itself, so
+ * Salidium observed which repository the worktree belongs to; without it, it never did.
+ */
+function laneRootSession(id: string, inLane: boolean): CanonicalEvent[] {
+  const b = new EventBuilder(id, '2026-10-02T10:00:00.000Z');
   return provider([
     b.sessionStarted(LANE, 'model'),
     snapshot(b, 'git:1', LANE, START, 'session.started'),
     b.turnStarted('Touch pay'),
+    ...b.edit('c1', `${REPO}/src/pay.ts`, 1, 1),
+    ...(inLane ? b.edit('c2', `${LANE}/src/retry.ts`, 1, 1) : []),
+    b.raw({
+      id: 'located:1',
+      kind: 'file.located',
+      files: [
+        { path: `${REPO}/src/pay.ts`, repository: { root: REPO, path: 'src/pay.ts' } },
+        ...(inLane
+          ? [
+              {
+                path: `${LANE}/src/retry.ts`,
+                repository: { root: LANE, path: 'src/retry.ts', mainRoot: REPO },
+              },
+            ]
+          : []),
+      ],
+    } as never),
+    b.turnEnded('Done.'),
+  ]);
+}
+
+/**
+ * Live, started in REPO, then its directory moved to another repository before the turn ended, so
+ * the turn-end snapshot read that other repository's HEAD.
+ */
+function movedSession(): CanonicalEvent[] {
+  const b = new EventBuilder(MOVED, '2026-10-02T10:00:00.000Z');
+  return provider([
+    b.sessionStarted(REPO, 'model'),
+    snapshot(b, 'git:1', REPO, START, 'session.started'),
+    b.turnStarted('Wander'),
     ...b.edit('c1', `${REPO}/src/pay.ts`, 1, 1),
     b.raw({
       id: 'located:1',
       kind: 'file.located',
       files: [{ path: `${REPO}/src/pay.ts`, repository: { root: REPO, path: 'src/pay.ts' } }],
     } as never),
+    b.raw({ id: 'moved', kind: 'session.updated', cwd: OTHER } as never),
     b.turnEnded('Done.'),
+    // In the fake service END exists in REPO too, as it would in a clone: the guard must still hold.
+    snapshot(b, 'git:2', OTHER, END, 'turn.ended'),
   ]);
 }
 
@@ -222,12 +261,6 @@ let server: Server;
 let base: string;
 let maps: ReturnType<typeof service>;
 const log = { info: () => {}, warn: () => {}, debug: () => {} };
-const locator = {
-  locate: async (path: string) =>
-    path.startsWith(`${LANE}/`)
-      ? { root: LANE, path: path.slice(LANE.length + 1), mainRoot: REPO }
-      : null,
-};
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), 'salidium-links-'));
@@ -235,7 +268,9 @@ beforeAll(async () => {
   registry = new SessionRegistry(store);
   for (const [id, events] of [
     [LIVE, liveSession()],
-    [LANE_ROOT, laneRootSession()],
+    [LANE_ROOT, laneRootSession(LANE_ROOT, true)],
+    [LANE_UNSEEN, laneRootSession(LANE_UNSEEN, false)],
+    [MOVED, movedSession()],
     [IMPORTED, importedSession()],
   ] as const) {
     registry.ingest(id, events, { cwd: REPO });
@@ -255,7 +290,6 @@ beforeAll(async () => {
   maps = service([REPO]);
   const links = createSessionLinks({
     registry,
-    locator,
     log,
     now: () => Date.parse('2026-10-02T12:00:00.000Z'),
   });
@@ -332,21 +366,37 @@ describe('execution links from ingested sessions', () => {
     expect(new Set(maps.touched)).toEqual(new Set([REPO]));
   });
 
-  test('passes every string through the redactor again', async () => {
+  test('withholds a path the redactor would change, and counts it', async () => {
     const doc = await links(LIVE);
     expect(JSON.stringify(doc)).not.toContain(SECRET);
-    const scratch = doc.files.find((f) => f.path.startsWith('/tmp/scratch/'));
-    expect(scratch?.status).toBe('outside-repository');
+    expect(JSON.stringify(doc)).not.toContain('/tmp/scratch/');
+    expect(doc.filesTotal).toBe(5);
+    expect(doc.filesOmitted).toBe(1);
+    expect(doc.files).toHaveLength(4);
   });
 
-  test('a session started in a linked worktree anchors its main repository', async () => {
+  test('a session started in a linked worktree anchors its main repository, as observed', async () => {
     const doc = await links(LANE_ROOT);
     expect(doc.anchors.repository).toBe(REPO);
     // Only a start HEAD was observed, and it exists.
     expect(doc.repositories).toMatchObject([
       { root: REPO, status: 'mapped', commit: { id: START, chosen: 'session-start' } },
     ]);
-    expect(doc.files[0]?.status).toBe('linked');
+    expect(doc.files.map((f) => f.status)).toEqual(['linked', 'linked']);
+  });
+
+  test('without an observed location in the worktree, its anchors are not lent to the repository', async () => {
+    const doc = await links(LANE_UNSEEN);
+    expect(doc.anchors.repository).toBe(LANE);
+    expect(doc.repositories).toMatchObject([{ root: REPO, status: 'no-revision', commit: null }]);
+  });
+
+  test('a turn-end HEAD read after the directory left the repository is not used', async () => {
+    const doc = await links(MOVED);
+    expect(doc.anchors.atLatestTurnEnd).toBeNull();
+    expect(doc.repositories).toMatchObject([
+      { root: REPO, status: 'mapped', commit: { id: START, chosen: 'session-start' } },
+    ]);
   });
 
   test('a history import has no anchors and no locations, and claims neither', async () => {

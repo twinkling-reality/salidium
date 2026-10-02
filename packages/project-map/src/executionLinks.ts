@@ -267,7 +267,7 @@ export const ExecutionLinksSchema = z.object({
     'Changed files the session recorded. `files` holds them newest first, up to its bound.',
   ),
   filesOmitted: Count.describe(
-    'Changed paths this version cannot carry: not absolute, longer than the bound, or holding control characters. Counted, never dropped silently.',
+    'Changed paths this version cannot carry: not absolute, longer than the bound, holding control characters, or holding text the redactor would change, which would make the path name something else. Counted, never dropped silently.',
   ),
   modules: z
     .array(ModuleLinkSchema)

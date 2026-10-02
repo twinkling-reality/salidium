@@ -21,7 +21,7 @@ export function shellWord(path: string): string {
 
 const CHOSEN: Record<NonNullable<RepositoryLink['commit']>['chosen'], string> = {
   'latest-turn-end': 'as of the latest turn end',
-  'session-start': 'as of session start, because the turn-end commit is gone',
+  'session-start': 'as of session start; no usable turn-end commit was seen',
 };
 
 /** Statuses of files that did not link, in plain words. */
@@ -152,7 +152,7 @@ export function WhereItSits({
             ? `${links.filesTotal - links.files.length - links.filesOmitted} older changed files not placed. `
             : ''}
           {links.filesOmitted > 0
-            ? `${links.filesOmitted} changed ${links.filesOmitted === 1 ? 'path' : 'paths'} with characters this view cannot carry.`
+            ? `${links.filesOmitted} changed ${links.filesOmitted === 1 ? 'path' : 'paths'} not shown: this view carries a path whole or not at all.`
             : ''}
         </p>
       )}
