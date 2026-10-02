@@ -143,8 +143,9 @@ function ceiling(maxBytes: number): number {
 }
 
 /**
- * Rows of one session after `afterSeq`, in sequence order, stopping at `limit` rows or once the
- * rows read hold `byteBudget` bytes (always at least one row, so progress is never blocked).
+ * Rows of one session after `afterSeq`, in sequence order. Stops at `limit` rows, before a row
+ * that would take the rows read past `byteBudget` bytes, or once `deadline` (epoch ms) has passed,
+ * always after at least one row so progress is never blocked.
  */
 export function readMessagesAfter(
   store: OpenCodeStoreConnection,
@@ -153,9 +154,11 @@ export function readMessagesAfter(
   limit: number,
   maxBytes: number,
   byteBudget = Number.POSITIVE_INFINITY,
-): { rows: MessageRow[]; bytes: number } {
+  deadline = Number.POSITIVE_INFINITY,
+): { rows: MessageRow[]; bytes: number; complete: boolean } {
   const rows: MessageRow[] = [];
   let bytes = 0;
+  let complete = true;
   for (const raw of store.iterate(
     `SELECT ${MESSAGE_COLUMNS} FROM session_message WHERE session_id = ? AND seq > ? ORDER BY seq LIMIT ?`,
     ceiling(maxBytes),
@@ -165,11 +168,15 @@ export function readMessagesAfter(
   )) {
     const row = messageRow(raw);
     if (!row) continue;
+    const size = row.data === undefined ? 0 : row.size;
+    if (rows.length > 0 && (bytes + size > byteBudget || Date.now() > deadline)) {
+      complete = false;
+      break;
+    }
     rows.push(row);
-    if (row.data !== undefined) bytes += row.size;
-    if (bytes >= byteBudget) break;
+    bytes += size;
   }
-  return { rows, bytes };
+  return { rows, bytes, complete };
 }
 
 export function readMessage(

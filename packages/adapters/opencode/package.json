@@ -24,9 +24,7 @@
   },
   "dependencies": {
     "@salidium/protocol": "workspace:*",
-    "@salidium/adapter-kit": "workspace:*"
-  },
-  "devDependencies": {
+    "@salidium/adapter-kit": "workspace:*",
     "@salidium/core": "workspace:*"
   }
 }

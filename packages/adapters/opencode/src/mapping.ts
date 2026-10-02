@@ -12,6 +12,7 @@ import {
   canonicalToolName,
   contentText,
   failureCause,
+  isMigratedPart,
   mapToolInput,
   mapToolResult,
   planItems,
@@ -549,7 +550,8 @@ function mapToolPart(
   stepCompleted: string,
 ): CanonicalEvent[] {
   const rawName = (asString(part.name) ?? 'unknown').slice(0, 200);
-  const toolName = canonicalToolName(rawName);
+  const migrated = isMigratedPart(part);
+  const toolName = canonicalToolName(rawName, migrated);
   const state = asObject(part.state);
   const status = asString(state?.status);
   const partTime = asObject(part.time);
@@ -566,7 +568,7 @@ function mapToolPart(
       ? Math.round(endMs - startMs)
       : undefined;
   const text = contentText(state?.content);
-  const { input, title } = mapToolInput(rawName, state?.input, text);
+  const { input, title } = mapToolInput(rawName, state?.input, text, migrated);
   const events: CanonicalEvent[] = [
     {
       ...base,
@@ -580,7 +582,7 @@ function mapToolPart(
       title,
     },
   ];
-  if (toolName === 'todowrite') {
+  if (toolName === 'todowrite' && migrated) {
     const items = planItems(state?.input);
     if (items)
       events.push({
@@ -600,6 +602,7 @@ function mapToolPart(
       state?.metadata,
       text,
       ctx.session.directory,
+      migrated,
     );
     events.push({
       ...base,

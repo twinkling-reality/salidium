@@ -220,7 +220,8 @@ export interface ToolPart {
   type: 'tool';
   id: string;
   name: string;
-  executed: boolean;
+  /** Every 2.x part has it; a part migrated from 1.x does not. */
+  executed?: boolean;
   state: Record<string, unknown>;
   time: { created: number; ran?: number; completed?: number };
 }
@@ -403,8 +404,9 @@ export const tools = {
       { sessionID: childSessionId, status: 'completed', truncated: false },
     );
   },
+  /** A 1.x `todowrite` part as OpenCode's migration carries it over: no `executed` field. */
   todowrite(callId: string, at: number): ToolPart {
-    return completed(
+    const { executed: _executed, ...migrated } = completed(
       'todowrite',
       callId,
       at,
@@ -417,6 +419,7 @@ export const tools = {
       '2 todos',
       {},
     );
+    return migrated;
   },
   failed(
     callId: string,

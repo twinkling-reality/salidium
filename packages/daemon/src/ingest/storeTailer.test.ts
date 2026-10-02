@@ -257,43 +257,50 @@ describe('OpenCode through the daemon', () => {
     expect(JSON.stringify(shown.raw)).not.toContain('SYNTHETIC_SECRET');
   });
 
-  it('suppresses an MCP read of a sensitive file in the stored event and the raw view', async () => {
-    const step = store.message(
-      nativeId,
-      'assistant',
-      stepData(T0 + 70, [
-        {
-          type: 'tool',
-          id: 'call_mcp',
-          name: 'filesystem_read_file',
-          executed: false,
-          state: {
-            status: 'completed',
-            input: { file_path: `${PROJECT}/.env` },
-            content: [{ type: 'text', text: 'SYNTHETIC_MCP_SECRET=not-real' }],
-            metadata: {},
+  it.each([
+    ['filesystem_read_file', 70],
+    ['file_system_read_file', 80],
+    ['my_fs_read_text_file', 90],
+  ])(
+    'suppresses an MCP read (%s) of a sensitive file in the stored event and the raw view',
+    async (name, at) => {
+      const step = store.message(
+        nativeId,
+        'assistant',
+        stepData(T0 + at, [
+          {
+            type: 'tool',
+            id: 'call_mcp',
+            name,
+            executed: false,
+            state: {
+              status: 'completed',
+              input: { file_path: `${PROJECT}/.env` },
+              content: [{ type: 'text', text: 'SYNTHETIC_MCP_SECRET=not-real' }],
+              metadata: {},
+            },
+            time: { created: T0 + at + 1, completed: T0 + at + 2 },
           },
-          time: { created: T0 + 71, completed: T0 + 72 },
-        },
-      ]),
-    );
-    const callId = `${step.id}/call_mcp`;
-    const all = await waitFor(async () => {
-      const list = await events();
-      return list.some((e) => e.kind === 'tool.completed' && e.callId === callId)
-        ? list
-        : undefined;
-    });
-    const completed = all.find((e) => e.kind === 'tool.completed' && e.callId === callId);
-    expect(JSON.stringify(completed)).not.toContain('SYNTHETIC_MCP_SECRET');
-    for (const event of all.filter((e) => 'callId' in e && e.callId === callId)) {
-      const raw = await api<{ raw: unknown; reason?: string }>(
-        `/api/sessions/${encodeURIComponent(sessionId)}/raw/${encodeURIComponent(event.id)}`,
+        ]),
       );
-      expect(raw.raw).toBeNull();
-      expect(raw.reason).toMatch(/^suppressed/);
-    }
-  });
+      const callId = `${step.id}/call_mcp`;
+      const all = await waitFor(async () => {
+        const list = await events();
+        return list.some((e) => e.kind === 'tool.completed' && e.callId === callId)
+          ? list
+          : undefined;
+      });
+      const completed = all.find((e) => e.kind === 'tool.completed' && e.callId === callId);
+      expect(JSON.stringify(completed)).not.toContain('SYNTHETIC_MCP_SECRET');
+      for (const event of all.filter((e) => 'callId' in e && e.callId === callId)) {
+        const raw = await api<{ raw: unknown; reason?: string }>(
+          `/api/sessions/${encodeURIComponent(sessionId)}/raw/${encodeURIComponent(event.id)}`,
+        );
+        expect(raw.raw).toBeNull();
+        expect(raw.reason).toMatch(/^suppressed/);
+      }
+    },
+  );
 
   it('answers a consumer v1 lookup by provider salidium/opencode and the OpenCode session id', async () => {
     const { token } = createConsumerCredential(salidiumHome, 'local-tool-test');

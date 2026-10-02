@@ -3,7 +3,12 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { StoreCursor, StoreSource } from '@salidium/adapter-kit';
-import { applyEvent, createInitialState, projectSession } from '@salidium/core';
+import {
+  applyEvent,
+  createInitialState,
+  isSensitiveMcpFileRead,
+  projectSession,
+} from '@salidium/core';
 import {
   type CanonicalEvent,
   type CanonicalEventOf,
@@ -22,7 +27,7 @@ import {
   tools,
   userData,
 } from './testing/syntheticStore.ts';
-import { patchPaths } from './toolMapping.ts';
+import { mapToolInput, patchPaths } from './toolMapping.ts';
 
 let dir: string;
 let path: string;
@@ -982,5 +987,65 @@ describe('OpenCode raw records', () => {
     expect(
       createOpenCodeStoreSource().locate({ userHome: dir, env: { XDG_DATA_HOME: xdg } }),
     ).toBeUndefined();
+  });
+
+  it.each([
+    ['filesystem_read_file', 'filesystem', 'read_file'],
+    ['file_system_read_file', 'file_system', 'read_file'],
+    ['my_fs_read_text_file', 'my_fs', 'read_text_file'],
+    ['my_fs_read_multiple_files', 'my_fs', 'read_multiple_files'],
+  ])('splits MCP tool %s where the file read is, so it can be suppressed', (name, server, tool) => {
+    const { input } = mapToolInput(name, { path: `${PROJECT}/.env` }, '');
+    expect(input).toMatchObject({ kind: 'mcp', server, tool });
+    expect(input.kind === 'mcp' && isSensitiveMcpFileRead(input)).toBe(true);
+  });
+
+  it('splits an MCP name at its first underscore when nothing sensitive is read', () => {
+    expect(
+      mapToolInput('file_system_read_file', { path: `${PROJECT}/a.ts` }, '').input,
+    ).toMatchObject({
+      kind: 'mcp',
+      server: 'file',
+      tool: 'system_read_file',
+    });
+  });
+
+  it('treats 1.x names as built-ins only on migrated parts', () => {
+    const patchText = '*** Begin Patch\n*** Update File: a.ts\n*** End Patch';
+    expect(mapToolInput('apply_patch', { patchText }, '').input).toMatchObject({
+      kind: 'mcp',
+      server: 'apply',
+      tool: 'patch',
+    });
+    expect(mapToolInput('apply_patch', { patchText }, '', true).input).toEqual({
+      kind: 'fileEdit',
+      path: 'a.ts',
+    });
+    expect(mapToolInput('bash', { command: 'ls' }, '').input.kind).toBe('other');
+    expect(mapToolInput('bash', { command: 'ls' }, '', true).input.kind).toBe('command');
+    expect(mapToolInput('todowrite', { todos: [] }, '').input.kind).toBe('other');
+    expect(mapToolInput('todowrite', { todos: [] }, '', true).input.kind).toBe('plan');
+  });
+
+  it('stops before a row that would exceed the byte budget', () => {
+    const id = store.session({ directory: PROJECT });
+    for (let i = 0; i < 5; i++) store.message(id, 'user', userData('y'.repeat(900), T0 + i));
+    const result = createOpenCodeStoreSource().poll({
+      path,
+      activeSinceMs: 0,
+      cursors: new Map(),
+      observedAt: '2026-10-02T13:00:00.000Z',
+      maxRecordBytes: 8 * 1024 * 1024,
+      rowBudget: 100,
+      byteBudget: 2500,
+    });
+    // Each row is about 950 bytes: two fit, a third would pass 2,500.
+    expect(
+      of(
+        result.batches.flatMap((b) => b.events),
+        'turn.started',
+      ),
+    ).toHaveLength(2);
+    expect(result.more).toBe(true);
   });
 });

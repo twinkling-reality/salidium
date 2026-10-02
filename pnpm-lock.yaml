@@ -79,13 +79,12 @@ importers:
       '@salidium/adapter-kit':
         specifier: workspace:*
         version: link:../../adapter-kit
-      '@salidium/protocol':
-        specifier: workspace:*
-        version: link:../../protocol
-    devDependencies:
       '@salidium/core':
         specifier: workspace:*
         version: link:../../core
+      '@salidium/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
 
   packages/cli:
     devDependencies:

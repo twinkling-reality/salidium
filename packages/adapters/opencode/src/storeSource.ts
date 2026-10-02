@@ -402,6 +402,7 @@ export function createOpenCodeStoreSource(): StoreSource {
             budget,
             request.maxRecordBytes,
             bytesLeft,
+            startedAt + timeBudgetMs,
           );
           const rows = read.rows;
           let blocked: typeof rows = [];
@@ -452,7 +453,10 @@ export function createOpenCodeStoreSource(): StoreSource {
             budget += 1;
             if (row.data !== undefined) bytesLeft += row.size;
           }
-          const exhausted = blocked.length === 0 && (budget <= 0 || bytesLeft <= 0);
+          // A read cut short by bytes or time asks to be called again; one that reached the end of
+          // the session's rows, or waits on a running step, does not.
+          const cut = read.rows.length > 0 && !read.complete;
+          const exhausted = blocked.length === 0 && (budget <= 0 || bytesLeft <= 0 || cut);
           if (exhausted) more = true;
           else seen.set(key, { sequence, position, count });
 

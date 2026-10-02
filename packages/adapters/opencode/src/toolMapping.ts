@@ -7,6 +7,7 @@ import {
   hunksFromUnifiedDiff,
   pathArgumentMetadata,
 } from '@salidium/adapter-kit';
+import { isSensitiveMcpFileRead } from '@salidium/core';
 import type {
   ExitStatus,
   FileChange,
@@ -17,6 +18,8 @@ import type {
   ToolInput,
   ToolResult,
 } from '@salidium/protocol';
+
+type McpToolInput = Extract<ToolInput, { kind: 'mcp' }>;
 
 /*
  * OpenCode 2.x tool parts to canonical tool inputs and results.
@@ -43,12 +46,45 @@ function firstLine(text: string): string {
   return line.length > 120 ? `${line.slice(0, 120)}…` : line;
 }
 
-/** v1 names are renamed by OpenCode's own migration; accept both. */
-export function canonicalToolName(name: string): string {
+/**
+ * The canonical name of a tool part. OpenCode's migration from 1.x keeps the old names (bash,
+ * task, apply_patch) on migrated parts, and only those parts lack the `executed` field every 2.x
+ * part carries. So the old names are built-ins only on a migrated part; on a 2.x part a name like
+ * `apply_patch` is an MCP server's tool (`apply` + `patch`), not the built-in.
+ */
+export function canonicalToolName(name: string, migrated = false): string {
+  if (!migrated) return name;
   if (name === 'bash') return 'shell';
   if (name === 'task') return 'subagent';
   if (name === 'apply_patch') return 'patch';
   return name;
+}
+
+/** Whether a tool part was written by OpenCode 1.x and carried over by the 2.x migration. */
+export function isMigratedPart(part: Record<string, unknown>): boolean {
+  return !Object.hasOwn(part, 'executed');
+}
+
+/**
+ * Splits an MCP tool name. OpenCode names it `<server>_<tool>` and keeps underscores in both, so
+ * the boundary is ambiguous (`file_system_read_file`). Every split point is tried, and one at
+ * which the call is a sensitive file read wins, so suppression never depends on the guess;
+ * otherwise the first underscore splits.
+ */
+function mcpInput(name: string, input: Record<string, unknown>): McpToolInput | undefined {
+  const paths = pathArgumentMetadata(input);
+  const candidates: McpToolInput[] = [];
+  for (let i = name.indexOf('_'); i > 0 && i < name.length - 1; i = name.indexOf('_', i + 1)) {
+    candidates.push({
+      kind: 'mcp',
+      server: name.slice(0, i),
+      tool: name.slice(i + 1),
+      pathArgs: paths.paths.length ? paths.paths : undefined,
+      pathArgsTruncated: paths.truncated || undefined,
+      argsExcerpt: excerpt(JSON.stringify(input), 300, 0).text,
+    });
+  }
+  return candidates.find(isSensitiveMcpFileRead) ?? candidates[0];
 }
 
 /** Files named by a `*** Begin Patch` text, in order. */
@@ -81,9 +117,13 @@ export function mapToolInput(
   rawName: string,
   rawInput: unknown,
   resultText: string,
+  migrated = false,
 ): { input: ToolInput; title: string } {
-  const name = canonicalToolName(rawName);
+  const name = canonicalToolName(rawName, migrated);
   const input = asObject(rawInput) ?? {};
+  // 2.x has no to-do tool; only a migrated 1.x part named `todowrite` is one.
+  if (name === 'todowrite' && !migrated)
+    return { input: { kind: 'other', summary: name }, title: name };
   switch (name) {
     case 'shell': {
       const command = excerpt(asString(input.command) ?? '', 8000, 2000).text;
@@ -163,26 +203,10 @@ export function mapToolInput(
       return { input: { kind: 'other', summary: `Skill ${skill}` }, title: `Use skill ${skill}` };
     }
     default: {
-      // OpenCode names an MCP server's tool `<server>_<tool>`. Mapped as MCP, a file read through
-      // one is recognised and suppressed exactly as a native read is. A server whose own name has
-      // an underscore splits at its first one, so its tool name keeps the rest.
-      const split = name.indexOf('_');
-      if (split > 0 && split < name.length - 1) {
-        const server = name.slice(0, split);
-        const tool = name.slice(split + 1);
-        const paths = pathArgumentMetadata(input);
-        return {
-          input: {
-            kind: 'mcp',
-            server,
-            tool,
-            pathArgs: paths.paths.length ? paths.paths : undefined,
-            pathArgsTruncated: paths.truncated || undefined,
-            argsExcerpt: excerpt(JSON.stringify(input), 300, 0).text,
-          },
-          title: `${server}: ${tool}`,
-        };
-      }
+      // Anything else with an underscore is an MCP server's tool. Mapped as MCP, a file read
+      // through one is recognised and suppressed exactly as a native read is.
+      const mcp = mcpInput(name, input);
+      if (mcp) return { input: mcp, title: `${mcp.server}: ${mcp.tool}` };
       return { input: { kind: 'other', summary: name.slice(0, 120) }, title: name.slice(0, 120) };
     }
   }
@@ -311,8 +335,9 @@ export function mapToolResult(
   rawMetadata: unknown,
   text: string,
   directory: string,
+  migrated = false,
 ): { result: ToolResult; isError: boolean } {
-  const name = canonicalToolName(rawName);
+  const name = canonicalToolName(rawName, migrated);
   const input = asObject(rawInput) ?? {};
   const metadata = asObject(rawMetadata) ?? {};
   switch (name) {
