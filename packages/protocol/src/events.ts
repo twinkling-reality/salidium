@@ -412,8 +412,12 @@ export const GitSnapshotEventSchema = Base.extend({
   repoRoot: z.string(),
   head: z.string().optional(),
   branch: z.string().optional(),
-  /** Porcelain v2 status codes for dirty paths (bounded list). */
-  dirty: z.array(z.object({ path: z.string(), status: z.string() })),
+  /**
+   * Porcelain v2 status codes for dirty paths (bounded list). Absent from snapshots taken after
+   * Salidium stopped running `git status`, which can run a repository's own commands: absent
+   * means not read, never clean.
+   */
+  dirty: z.array(z.object({ path: z.string(), status: z.string() })).optional(),
   dirtyTruncated: z.boolean().optional(),
 });
 

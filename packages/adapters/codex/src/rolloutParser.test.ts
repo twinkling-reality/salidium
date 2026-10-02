@@ -1085,6 +1085,16 @@ describe('CodexRolloutParser: the command inside a code cell (D8)', () => {
     });
   });
 
+  it('reads a repeated session_meta as the same start, so a resume cannot anchor a new one', () => {
+    // About a third of real rollouts carry a second session_meta. Both map to one event id, so the
+    // store keeps the first and a later copy never reaches the git snapshot enricher as a start.
+    const meta = lines.find((l) => l.includes('"session_meta"')) ?? '';
+    const events = parseAll([meta, ...lines.slice(1), meta], sessionId, THREAD);
+    const starts = events.filter((e) => e.kind === 'session.started');
+    expect(starts).toHaveLength(2);
+    expect(new Set(starts.map((e) => e.id)).size).toBe(1);
+  });
+
   /** Events grouped by the rollout record that produced them, in record order. */
   function groupByRecord(events: CanonicalEvent[]): CanonicalEvent[][] {
     const groups = new Map<number, CanonicalEvent[]>();

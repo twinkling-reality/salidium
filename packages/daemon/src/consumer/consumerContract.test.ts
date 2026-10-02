@@ -218,15 +218,17 @@ describe('consumer discovery', () => {
     });
     const reasons: string[] = [];
     const listed = experimentalContracts(
-      [
+      () => [
         entry('salidium.project-map'),
         entry('salidium.another'),
         entry('salidium.project-map'),
         { ...entry('salidium.remote'), baseUrl: 'http://example.com:47822/x/v0' },
         { ...entry('salidium.negative'), major: -1 },
+        { ...entry('salidium.elsewhere'), baseUrl: 'http://127.0.0.1:9/map/v0' },
         'not an entry',
         ...Array.from({ length: 9 }, (_, i) => entry(`salidium.z${i}`)),
       ],
+      47822,
       (reason) => reasons.push(reason),
     );
     expect(listed.map((e) => e.name)).toEqual([
@@ -239,7 +241,26 @@ describe('consumer discovery', () => {
       'salidium.z4',
       'salidium.z5',
     ]);
-    expect(reasons).toHaveLength(5);
+    expect(reasons).toHaveLength(6);
+    // A supplier that fails or returns something else lists nothing and does not stop the daemon.
+    const failures: string[] = [];
+    expect(
+      experimentalContracts(
+        () => {
+          throw new Error('broken supplier');
+        },
+        47822,
+        (reason) => failures.push(reason),
+      ),
+    ).toEqual([]);
+    expect(
+      experimentalContracts(
+        () => ({ not: 'a list' }),
+        47822,
+        (r) => failures.push(r),
+      ),
+    ).toEqual([]);
+    expect(failures).toHaveLength(2);
   });
 
   it('serves the same experimental list in the file and at the endpoint, asked once', async () => {

@@ -5,7 +5,7 @@ import { cloneState, replayEvents } from '../history/replay.ts';
 import { projectSession } from '../projections/projectSession.ts';
 import { summarizeSession } from '../projections/summarizeSession.ts';
 import { EventBuilder } from '../testing/eventBuilders.ts';
-import { createInitialState } from './createInitialState.ts';
+import { createInitialState, reviveState } from './createInitialState.ts';
 import { applyEvent } from './reducer.ts';
 import type { RunState } from './runState.ts';
 
@@ -666,7 +666,7 @@ describe('reducer: provider paths are data', () => {
         ],
       }),
     ]);
-    expect(Object.getPrototypeOf(state.fileLocations)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(state.fileLocations)).toBeNull();
     expect(Object.hasOwn(state.fileLocations, '__proto__')).toBe(true);
     expect(Object.getOwnPropertyDescriptor(state.fileLocations, '__proto__')?.value).toEqual({
       root: '/repo',
@@ -679,5 +679,42 @@ describe('reducer: provider paths are data', () => {
       root: '/repo',
       path: '__proto__',
     });
+  });
+});
+
+describe('reducer: provider ids are keys like any other', () => {
+  const hostile = ['constructor', '__proto__', 'toString'];
+
+  function session(b: EventBuilder): StoredEvent[] {
+    return [
+      b.sessionStarted(),
+      b.turnStarted('Run tests'),
+      ...hostile.flatMap((id) =>
+        b.command(id, `pnpm vitest run ${id}`, VITEST_FAIL, { exitCode: 1 }),
+      ),
+      ...hostile.flatMap((id) => b.edit(`edit-${id}`, id, 2, 1)),
+    ];
+  }
+
+  it('records calls and files named after Object.prototype members', () => {
+    const { state } = run(session(new EventBuilder()));
+    expect(state.counters.toolCalls).toBe(6);
+    expect(state.verifications.map((v) => v.callId).sort()).toEqual([...hostile].sort());
+    expect(Object.keys(state.files).sort()).toEqual([...hostile].sort());
+    expect(Object.getPrototypeOf(state.files)).toBeNull();
+    expect(Object.getPrototypeOf({})).toBe(Object.prototype);
+  });
+
+  it('keeps them working after a checkpoint is read back', () => {
+    const b = new EventBuilder();
+    const events = session(b);
+    const half = Math.floor(events.length / 2);
+    const first = run(events.slice(0, half)).state;
+    const restored = reviveState(JSON.parse(JSON.stringify(first)) as RunState);
+    expect(Object.getPrototypeOf(restored.activities)).toBeNull();
+    const resumed = run(events.slice(half), restored).state;
+    const whole = run(events).state;
+    expect(resumed.counters).toEqual(whole.counters);
+    expect(Object.keys(resumed.activities).sort()).toEqual(Object.keys(whole.activities).sort());
   });
 });

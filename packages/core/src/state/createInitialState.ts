@@ -4,6 +4,30 @@ import type { RunState } from './runState.ts';
 /** Bump when the reducer's derivation changes in a way that invalidates checkpoints. */
 export const REDUCER_VERSION = '1.14.0';
 
+/**
+ * Records keyed by provider data (call ids, paths, agent ids, lanes) as null-prototype objects.
+ *
+ * A provider names its calls and files, so a key can be `constructor`, `toString` or `__proto__`.
+ * On an ordinary object those read inherited members or assign the prototype; on one without a
+ * prototype they are keys like any other. JSON and structured cloning both produce ordinary
+ * objects, so every state read back from a checkpoint, a clone or the wire passes through here.
+ */
+export function reviveState(state: RunState): RunState {
+  state.activities = keyed(state.activities);
+  state.absorbedCalls = keyed(state.absorbedCalls);
+  state.files = keyed(state.files);
+  state.fileLocations = keyed(state.fileLocations);
+  state.subagents = keyed(state.subagents);
+  state.usage.lastByLane = keyed(state.usage.lastByLane);
+  return state;
+}
+
+function keyed<T>(record: Record<string, T> | undefined): Record<string, T> {
+  const out = Object.create(null) as Record<string, T>;
+  if (record) for (const [key, value] of Object.entries(record)) out[key] = value;
+  return out;
+}
+
 export function createInitialState(args: {
   sessionId: string;
   provider: ProviderId;
@@ -20,17 +44,17 @@ export function createInitialState(args: {
     cwd: args.cwd ?? '',
     status: 'unknown',
     turns: [],
-    activities: {},
+    activities: keyed({}),
     activityOrder: [],
-    absorbedCalls: {},
-    files: {},
-    fileLocations: {},
+    absorbedCalls: keyed({}),
+    files: keyed({}),
+    fileLocations: keyed({}),
     verifications: [],
     plan: { items: [] },
     claims: [],
     review: [],
     issues: [],
-    subagents: {},
+    subagents: keyed({}),
     git: { commits: [], headMoves: [], pushes: [], operations: [] },
     counters: {
       turns: 0,
@@ -50,7 +74,7 @@ export function createInitialState(args: {
       outputTokens: 0,
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
-      lastByLane: {},
+      lastByLane: keyed({}),
     },
     running: [],
   };

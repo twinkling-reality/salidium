@@ -67,14 +67,31 @@ export function consumerDiscovery(options: {
  * whole discovery document invalid for every consumer.
  */
 export function experimentalContracts(
-  entries: readonly unknown[],
+  supply: () => unknown,
+  port: number,
   onInvalid: (reason: string) => void = () => {},
 ): ExperimentalContractEntry[] {
+  let entries: unknown;
+  try {
+    entries = supply();
+  } catch (error) {
+    onInvalid(`experimental contracts could not be listed: ${String(error)}`);
+    return [];
+  }
+  if (!Array.isArray(entries)) {
+    onInvalid('experimental contracts must be supplied as a list; none are listed');
+    return [];
+  }
   const byName = new Map<string, ExperimentalContractEntry>();
   for (const entry of entries) {
     const parsed = ExperimentalContractEntrySchema.safeParse(entry);
     if (!parsed.success) {
       onInvalid('experimental contract entry is not valid; it is not listed');
+      continue;
+    }
+    // Only this daemon's own port: discovery must never point a consumer somewhere else.
+    if (new URL(parsed.data.baseUrl).port !== String(port)) {
+      onInvalid(`experimental contract ${parsed.data.name} is not on this daemon's port`);
       continue;
     }
     if (byName.has(parsed.data.name)) {
@@ -83,7 +100,10 @@ export function experimentalContracts(
     }
     byName.set(parsed.data.name, parsed.data);
   }
-  const sorted = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name, 'en'));
+  // Code point order, which is the same everywhere, unlike a locale's.
+  const sorted = [...byName.values()].sort((a, b) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+  );
   if (sorted.length > 8)
     onInvalid('more than eight experimental contracts; the rest are not listed');
   return sorted.slice(0, 8);

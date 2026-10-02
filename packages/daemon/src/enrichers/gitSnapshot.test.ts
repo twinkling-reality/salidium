@@ -2,13 +2,13 @@ import type { CanonicalEvent, StoredEvent } from '@salidium/protocol';
 import { describe, expect, it } from 'vitest';
 import type { Logger } from '../logging/logger.ts';
 import type { SessionRegistry } from '../sessions/sessionRegistry.ts';
-import { type GitObservation, GitSnapshotEnricher } from './gitSnapshot.ts';
+import { type GitObservation, GitSnapshotEnricher, readGitObservation } from './gitSnapshot.ts';
 
 const NOW = Date.parse('2026-10-02T12:00:00.000Z');
 const SESSION = 'codex:thread';
 const quiet = { debug() {}, info() {}, warn() {}, error() {} } as unknown as Logger;
 
-function harness() {
+function harness(minIntervalMs = 0) {
   const subscribers: Array<(sessionId: string, events: StoredEvent[]) => void> = [];
   const ingested: CanonicalEvent[] = [];
   const registry = {
@@ -23,7 +23,7 @@ function harness() {
   const reads: Array<(observation: GitObservation) => void> = [];
   const enricher = new GitSnapshotEnricher(registry, quiet, {
     now: () => NOW,
-    minIntervalMs: 0,
+    minIntervalMs,
     read: () => new Promise((resolve) => reads.push(resolve)),
   });
   enricher.start();
@@ -157,5 +157,26 @@ describe('git snapshots under load', () => {
     const [snapshot] = ingested;
     expect(snapshot).toMatchObject({ kind: 'git.snapshot', head: 'a'.repeat(40) });
     expect(snapshot && 'trigger' in snapshot ? snapshot.trigger : undefined).toBeUndefined();
+  });
+});
+
+describe('git snapshot reads', () => {
+  it('keeps a session’s reads apart even when the next boundary comes after a read finished', async () => {
+    const { emit, release, pendingReads, enricher } = harness(300);
+    emit({ kind: 'turn.ended', outcome: 'completed' });
+    await release('a'.repeat(40));
+    await enricher.settled();
+    emit(commit);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(pendingReads()).toBe(0);
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    expect(pendingReads()).toBe(1);
+    await release('b'.repeat(40));
+    await enricher.settled();
+  });
+
+  it('runs nothing for a working directory that is relative or remote', async () => {
+    for (const cwd of ['repo', '//server/share/repo', '\\\\server\\share\\repo'])
+      expect(await readGitObservation(cwd)).toBeUndefined();
   });
 });

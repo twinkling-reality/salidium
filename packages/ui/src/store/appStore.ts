@@ -1,4 +1,4 @@
-import { applyEvent, type RunState } from '@salidium/core';
+import { applyEvent, type RunState, reviveState } from '@salidium/core';
 import type {
   CollectionStatus,
   DaemonInfo,
@@ -819,7 +819,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       live: {
         ...s.live,
         [id]: {
-          state,
+          // Events are folded into this state here, so its id-keyed records need the same
+          // protection the daemon's have.
+          state: reviveState(state),
           revision: 1,
           changes: [...changes].sort(byTime),
           connection: 'connecting',

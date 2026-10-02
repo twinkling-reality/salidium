@@ -404,7 +404,7 @@ function within(path: string, dir: string): boolean {
 }
 
 /** `\\server\share`, `//server/share`, and `\\?\` or `\\.\` device paths. */
-function isRemoteOrDevicePath(path: string): boolean {
+export function isRemoteOrDevicePath(path: string): boolean {
   return /^[\\/]{2}/.test(path);
 }
 

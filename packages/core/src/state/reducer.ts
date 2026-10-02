@@ -1577,7 +1577,7 @@ function onGitSnapshot(state: RunState, e: StoredEventOf<'git.snapshot'>, log: C
   const prevHead = state.git.head;
   state.git.head = e.head ?? state.git.head;
   state.git.branch = e.branch ?? state.git.branch;
-  state.git.dirtyCount = e.dirty.length + (e.dirtyTruncated ? 1 : 0);
+  state.git.dirtyCount = e.dirty ? e.dirty.length + (e.dirtyTruncated ? 1 : 0) : undefined;
   state.git.snapshotAt = e.ts;
   if (!state.repoRoot) state.repoRoot = e.repoRoot;
   // Anchors come only from snapshots that say which boundary they observed. One written before

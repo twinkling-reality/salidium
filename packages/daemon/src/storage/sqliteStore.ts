@@ -3,7 +3,7 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { isDeepStrictEqual } from 'node:util';
 import { gunzipSync, gzipSync } from 'node:zlib';
-import type { RunState } from '@salidium/core';
+import { type RunState, reviveState } from '@salidium/core';
 import type {
   CanonicalEvent,
   SemanticChange,
@@ -502,7 +502,7 @@ function encodeCheckpoint(state: RunState): Buffer {
 }
 
 function decodeCheckpoint(encoded: EncodedJson): RunState {
-  return JSON.parse(decodeCheckpointValue(encoded)) as RunState;
+  return reviveState(JSON.parse(decodeCheckpointValue(encoded)) as RunState);
 }
 
 /**

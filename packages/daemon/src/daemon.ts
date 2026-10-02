@@ -592,7 +592,8 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
   let experimental: ExperimentalContractEntry[] | undefined;
   const discovery = () => {
     experimental ??= experimentalContracts(
-      overrides.experimentalContracts?.({ port }) ?? [],
+      () => overrides.experimentalContracts?.({ port }) ?? [],
+      port,
       (reason) => log.warn(reason),
     );
     return consumerDiscovery({

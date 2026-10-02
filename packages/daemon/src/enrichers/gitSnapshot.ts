@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { isAbsolute } from 'node:path';
 import { promisify } from 'node:util';
 import { resolveTrustedExecutable, trustedPathEntries } from '@salidium/adapter-kit';
 import {
@@ -9,6 +10,7 @@ import {
 } from '@salidium/protocol';
 import type { Logger } from '../logging/logger.ts';
 import type { SessionRegistry } from '../sessions/sessionRegistry.ts';
+import { isRemoteOrDevicePath } from './fileLocation.ts';
 
 const run = promisify(execFile);
 
@@ -64,6 +66,8 @@ export class GitSnapshotEnricher {
   private readonly now: () => number;
   private readonly minIntervalMs: number;
   private readonly inFlight = new Set<string>();
+  /** When each session's latest read started, so the gap holds across bursts too. Bounded. */
+  private readonly lastReadAt = new Map<string, number>();
   private readonly waiting = new Map<string, Map<Boundary, StoredEvent>>();
   private reading = 0;
   private readonly readers: Array<() => void> = [];
@@ -121,7 +125,10 @@ export class GitSnapshotEnricher {
     let next: [StoredEvent, Boundary] | undefined = [first, firstKind];
     try {
       while (next) {
-        const startedAt = Date.now();
+        const since = Date.now() - (this.lastReadAt.get(sessionId) ?? Number.NEGATIVE_INFINITY);
+        if (since < this.minIntervalMs)
+          await new Promise((resolve) => setTimeout(resolve, this.minIntervalMs - since));
+        this.rememberRead(sessionId, Date.now());
         const [trigger, kind] = next;
         await this.throttled(() => this.snapshot(sessionId, trigger, kind));
         next = undefined;
@@ -134,11 +141,18 @@ export class GitSnapshotEnricher {
           break;
         }
         if (queue && queue.size === 0) this.waiting.delete(sessionId);
-        const wait = this.minIntervalMs - (Date.now() - startedAt);
-        if (next && wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
       }
     } finally {
       this.inFlight.delete(sessionId);
+    }
+  }
+
+  private rememberRead(sessionId: string, at: number): void {
+    this.lastReadAt.delete(sessionId);
+    this.lastReadAt.set(sessionId, at);
+    if (this.lastReadAt.size > 1024) {
+      const oldest = this.lastReadAt.keys().next().value;
+      if (oldest !== undefined) this.lastReadAt.delete(oldest);
     }
   }
 
@@ -184,33 +198,25 @@ export class GitSnapshotEnricher {
   }
 }
 
-/** HEAD, branch and dirty paths of the repository containing `cwd`, read with git itself. */
+/**
+ * The working tree, HEAD and branch of the repository containing `cwd`, read with git itself.
+ *
+ * Only `rev-parse`, which reads refs and configuration and runs nothing they name. `git status`
+ * used to run here too, and status runs a repository's own `core.fsmonitor` command and its clean
+ * filters, so a repository an agent works in could have run code as Salidium. Its output was used
+ * only for the snapshot's own drill-through, so the dirty list is no longer read at all.
+ */
 export async function readGitObservation(cwd: string): Promise<GitObservation | undefined> {
+  if (!isAbsolute(cwd) || isRemoteOrDevicePath(cwd)) return undefined;
   const top = await git(cwd, ['rev-parse', '--show-toplevel']);
   if (!top) return undefined;
   const repoRoot = top.trim();
-  const head = (await git(cwd, ['rev-parse', 'HEAD']))?.trim();
+  const head = (await git(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD']))?.trim();
   const branch = (await git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']))?.trim();
-  const status = (await git(cwd, ['status', '--porcelain=v2', '--untracked-files=normal'])) ?? '';
-  const dirty: Array<{ path: string; status: string }> = [];
-  for (const line of status.split('\n')) {
-    if (!line) continue;
-    const parts = line.split(' ');
-    if (line.startsWith('1 ') || line.startsWith('2 '))
-      dirty.push({
-        status: parts[1] ?? '',
-        path: parts.slice(8).join(' ').split('\t')[0] ?? '',
-      });
-    else if (line.startsWith('u ')) dirty.push({ status: 'U', path: parts.slice(10).join(' ') });
-    else if (line.startsWith('? ')) dirty.push({ status: '?', path: line.slice(2) });
-    if (dirty.length >= 200) break;
-  }
   return {
     repoRoot,
     head: head || undefined,
     branch: branch && branch !== 'HEAD' ? branch : undefined,
-    dirty,
-    dirtyTruncated: dirty.length >= 200 || undefined,
   };
 }
 
@@ -219,7 +225,8 @@ async function git(cwd: string, args: string[]): Promise<string | undefined> {
     const trust = { environment: process.env, untrustedRoots: [process.cwd(), cwd] };
     const command = resolveTrustedExecutable('git', trust);
     if (!command) return undefined;
-    const { stdout } = await run(command, ['-C', cwd, ...args], {
+    // fsmonitor is off as defence in depth: nothing run here should consult it.
+    const { stdout } = await run(command, ['-c', 'core.fsmonitor=false', '-C', cwd, ...args], {
       timeout: 5000,
       maxBuffer: 4 * 1024 * 1024,
       env: {
