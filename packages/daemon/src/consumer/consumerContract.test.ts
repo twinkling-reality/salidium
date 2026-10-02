@@ -526,12 +526,14 @@ describe('consumer documents', () => {
     // in a linked worktree of the session's repository, which session.repositoryRoot cannot say.
     expect(report.revision).toEqual({
       atStart: {
+        root: CHECKOUT,
         head: '3f9a2c1d8e7b6a5f4c3d2e1f0a9b8c7d6e5f4a3b',
         branch: 'fix/double-charge',
         at: expect.any(String),
         provenance: 'observed',
       },
       atLatestTurnEnd: {
+        root: CHECKOUT,
         head: '8b1e4d7a2c9f6b3e0d5a8c1f4b7e2d9a6c3f0b5e',
         branch: 'fix/ghp_[GITHUB_TOKEN#1]',
         at: expect.any(String),
@@ -754,6 +756,46 @@ describe('consumer change feed', () => {
 });
 
 describe('consumer contract edges', () => {
+  it('names the repository each revision anchor read, when the session moved into a clone', async () => {
+    const { applyEvent, createInitialState, createRedactor, projectSession, summarizeSession } =
+      await import('@salidium/core');
+    const { EventBuilder } = await import('@salidium/core/testing');
+    const { consumerText, toSessionReport } = await import('./report.ts');
+    const b = new EventBuilder('claude-code:moved', '2026-09-20T16:00:00.000Z');
+    const state = createInitialState({
+      sessionId: 'claude-code:moved',
+      provider: 'claude-code',
+      providerSessionId: 'moved',
+      cwd: '/work/a',
+    });
+    const head = 'c'.repeat(40);
+    const snapshot = (id: string, repoRoot: string, trigger: 'session.started' | 'turn.ended') =>
+      b.raw({ id, kind: 'git.snapshot', repoRoot, head, branch: 'main', trigger } as never);
+    for (const event of [
+      b.sessionStarted('/work/a'),
+      snapshot('git:a', '/work/a', 'session.started'),
+      b.turnStarted('Work in the clone'),
+      b.raw({ id: 'moved', kind: 'session.updated', cwd: '/work/b' } as never),
+      b.turnEnded('Done.'),
+      snapshot('git:b', '/work/b', 'turn.ended'),
+    ])
+      applyEvent(state, event);
+    const at = Date.parse('2026-09-20T16:01:00.000Z');
+    const report = exactly(
+      SessionReportSchema,
+      toSessionReport(
+        state,
+        projectSession(state, at),
+        summarizeSession(state, at),
+        at,
+        consumerText(createRedactor()),
+      ),
+    );
+    expect(report.session.repositoryRoot).toBe('/work/a');
+    expect(report.revision.atStart).toMatchObject({ root: '/work/a', head });
+    expect(report.revision.atLatestTurnEnd).toMatchObject({ root: '/work/b', head });
+  });
+
   it('says a removed line count is a floor when a provider did not record what it replaced', async () => {
     const { applyEvent, createInitialState, createRedactor, projectSession, summarizeSession } =
       await import('@salidium/core');

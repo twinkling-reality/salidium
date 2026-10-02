@@ -2,7 +2,7 @@ import type { ProviderId } from '@salidium/protocol';
 import type { RunState } from './runState.ts';
 
 /** Bump when the reducer's derivation changes in a way that invalidates checkpoints. */
-export const REDUCER_VERSION = '1.14.0';
+export const REDUCER_VERSION = '1.15.0';
 
 /**
  * Records keyed by provider data (call ids, paths, agent ids, lanes) as null-prototype objects.

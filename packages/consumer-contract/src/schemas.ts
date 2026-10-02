@@ -312,6 +312,11 @@ export type Explanation = z.infer<typeof ExplanationSchema>;
  * directory when the boundary happened. Added in 1.1.
  */
 export const RevisionAnchorSchema = z.object({
+  root: Text(4096)
+    .nullable()
+    .describe(
+      'The repository this anchor read, as Git reported its top level. A session can move between repositories, so this can differ from session.repositoryRoot and between the two anchors. Null when it could not cross whole.',
+    ),
   head: z
     .string()
     .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/)
@@ -370,7 +375,7 @@ export const SessionReportSchema = z.object({
       ),
     })
     .describe(
-      'Which revision of session.repositoryRoot the work started from and stands at. Each anchor is null when Salidium did not watch that boundary live: history imports, sessions that began before Salidium was running, or git observation turned off. Added in 1.1.',
+      'Which revision the work started from and stands at, each in the repository its root names. Each anchor is null when Salidium did not watch that boundary live: history imports, sessions that began before Salidium was running, or git observation turned off. Added in 1.1.',
     ),
   changes: z.object({
     glance: Text(300),

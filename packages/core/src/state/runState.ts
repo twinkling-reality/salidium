@@ -300,6 +300,11 @@ export interface FileLocation {
 
 /** HEAD and branch at one session boundary, from the snapshot that boundary triggered. */
 export interface RevisionAnchor {
+  /**
+   * The repository the snapshot read, as git reported its top level. A session can move into
+   * another repository, so each anchor names its own rather than relying on `repoRoot`.
+   */
+  root: string;
   head?: string;
   branch?: string;
   at: string;

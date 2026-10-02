@@ -50,12 +50,14 @@
   "waiting": null,
   "revision": {
     "atStart": {
+      "root": "/Users/dev/acme/checkout",
       "head": "3f9a2c1d8e7b6a5f4c3d2e1f0a9b8c7d6e5f4a3b",
       "branch": "fix/double-charge",
       "at": "2026-09-20T15:40:05.000Z",
       "provenance": "observed"
     },
     "atLatestTurnEnd": {
+      "root": "/Users/dev/acme/checkout",
       "head": "8b1e4d7a2c9f6b3e0d5a8c1f4b7e2d9a6c3f0b5e",
       "branch": "fix/ghp_[GITHUB_TOKEN#1]",
       "at": "2026-09-20T15:41:25.000Z",

@@ -1584,7 +1584,7 @@ function onGitSnapshot(state: RunState, e: StoredEventOf<'git.snapshot'>, log: C
   // snapshots named their trigger anchors nothing, rather than being guessed into a boundary.
   // The start anchor is the first start Salidium watched. A resume, clear, or compaction reads
   // HEAD without naming a trigger (see the git snapshot enricher), so it never stands in for one.
-  const anchor = { head: e.head, branch: e.branch, at: e.ts };
+  const anchor = { root: e.repoRoot, head: e.head, branch: e.branch, at: e.ts };
   if (e.trigger === 'session.started' && !state.git.atStart) state.git.atStart = anchor;
   if (e.trigger === 'turn.ended') state.git.atTurnEnd = anchor;
   if (e.head && prevHead && e.head !== prevHead) {

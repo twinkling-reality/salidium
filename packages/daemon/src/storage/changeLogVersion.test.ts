@@ -64,7 +64,7 @@ describe('the stored change log carries the reducer that wrote it', () => {
   });
 
   it('stamps every entry with the running reducer version', () => {
-    expect(REDUCER_VERSION).toBe('1.14.0');
+    expect(REDUCER_VERSION).toBe('1.15.0');
     expect(store.changeLogIsStale(SESSION, REDUCER_VERSION)).toBe(false);
     expect(store.changesRange(SESSION, -1, Number.MAX_SAFE_INTEGER).length).toBeGreaterThan(0);
   });

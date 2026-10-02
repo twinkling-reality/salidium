@@ -200,6 +200,7 @@ const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 function anchor(value: RunStateAnchor | undefined, text: ConsumerText): RevisionAnchor | null {
   if (!value) return null;
   return {
+    root: identifier(value.root, 4096, text),
     head: value.head && FULL_SHA.test(value.head) ? value.head : null,
     branch: identifier(value.branch, 256, text),
     at: value.at,

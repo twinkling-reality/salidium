@@ -520,6 +520,32 @@ describe('reducer: revision anchors and file locations', () => {
     expect(state.git.head).toBe(D);
   });
 
+  it('gives each anchor the repository it read, when the session moves into another one', () => {
+    const b = new EventBuilder();
+    const clone = (root: string, id: string, trigger: 'session.started' | 'turn.ended') =>
+      b.raw({
+        id,
+        kind: 'git.snapshot',
+        repoRoot: root,
+        head: A,
+        branch: 'main',
+        dirty: [],
+        trigger,
+      });
+    const { state } = run([
+      b.sessionStarted('/work/a'),
+      clone('/work/a', 'git:a', 'session.started'),
+      b.turnStarted('Try it in the clone'),
+      b.raw({ id: 'moved', kind: 'session.updated', cwd: '/work/b' }),
+      b.turnEnded('Done in the clone.'),
+      clone('/work/b', 'git:b', 'turn.ended'),
+    ]);
+    // The same commit id in two repositories is two different facts; the root says which.
+    expect(state.git.atStart).toMatchObject({ root: '/work/a', head: A });
+    expect(state.git.atTurnEnd).toMatchObject({ root: '/work/b', head: A });
+    expect(state.repoRoot).toBe('/work/a');
+  });
+
   it('does not guess a boundary for a snapshot written before snapshots named their trigger', () => {
     const b = new EventBuilder();
     const { state } = run([b.sessionStarted(), snapshot(b, 'git:old', A), b.turnEnded('Done.')]);
