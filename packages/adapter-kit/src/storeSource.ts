@@ -36,6 +36,8 @@ export interface StorePollRequest {
   maxRecordBytes: number;
   /** Upper bound on rows read in one call, so a backfill yields to the event loop between calls. */
   rowBudget: number;
+  /** Upper bound on row bytes read in one call; the source's default applies when absent. */
+  byteBudget?: number;
 }
 
 export interface StorePollBatch {
@@ -49,8 +51,14 @@ export interface StorePollResult {
   more: boolean;
 }
 
+/**
+ * A re-read record. A database row can hold several events' worth of content (OpenCode keeps a
+ * whole model step, every tool call and its output, in one row), so a source returns only the part
+ * the event stands for, and names the paths and commands in it. The caller applies to those the
+ * same suppression it applies to events, and refuses the raw view when any is sensitive.
+ */
 export type StoreRawRecord =
-  | { raw: string; reason?: undefined }
+  | { raw: string; paths: string[]; commands: string[]; reason?: undefined }
   | { raw: undefined; reason: string };
 
 /**

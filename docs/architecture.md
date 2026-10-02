@@ -256,8 +256,13 @@ changed-source reason. It does not display whatever unrelated record now occupie
 For a database-backed provider the reference names the store, the session and the row instead of a
 file line, and the identity is the SHA-256 of the row as ingested. The re-read goes through the same
 restricted connection, and a row the provider rewrote or deleted (OpenCode's revert deletes rows)
-answers changed or unavailable. When the provider is not enabled, nothing is read, even for events
-already stored.
+answers changed or unavailable. One OpenCode row holds a whole model step, every tool call and its
+output, so the raw view returns only the part the event stands for (or, for usage, the step without
+its content), names the paths and commands in it, and is suppressed when any of them is sensitive,
+as an event would be. When the provider is not enabled, nothing is read, even for events already
+stored. A read-only reader of a database in write-ahead-log mode needs SQLite's `-wal` and `-shm`
+index files; when OpenCode is not running SQLite creates them empty beside the store, and the
+database itself is never written.
 Older stored records may lack a fingerprint until they are reingested. The schema upgrade queues
 every cursor and event-referenced provider file durably for that repair; missing files remain
 visible and retryable.

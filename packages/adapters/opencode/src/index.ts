@@ -10,6 +10,11 @@ export {
 } from './mapping.ts';
 export { openCodeAdapter, openCodeProvider } from './openCodeAdapter.ts';
 export type { MessageRow, SessionRow } from './records.ts';
-export { authorize, OpenCodeStoreConnection, withOpenCodeStore } from './storeAccess.ts';
+export {
+  authorize,
+  OpenCodeStoreConnection,
+  restrictedReadsSupported,
+  withOpenCodeStore,
+} from './storeAccess.ts';
 export { createOpenCodeStoreSource, cursorKey, openCodeStorePath } from './storeSource.ts';
 export { canonicalToolName, mapToolInput, mapToolResult, patchPaths } from './toolMapping.ts';

@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveTrustedExecutable } from '@salidium/adapter-kit';
-import { openCodeStorePath } from '@salidium/adapter-opencode';
+import { openCodeStorePath, restrictedReadsSupported } from '@salidium/adapter-opencode';
 import type { ProviderId } from '@salidium/protocol';
 import type { HookInspection, HookProviderId, InstallResult } from './hookInstaller.ts';
 import { inspectHooks, installClaudeCodeHooks, installCodexHooks } from './hookInstaller.ts';
@@ -232,6 +232,8 @@ export interface StoreIntegration {
   experimental: boolean;
   storePath(context: IntegrationContext): string;
   detect(context: IntegrationContext): boolean;
+  /** Whether this runtime can read the store under its restrictions at all. */
+  supported(): boolean;
 }
 
 const openCode: StoreIntegration = {
@@ -244,6 +246,7 @@ const openCode: StoreIntegration = {
   detect(context) {
     return existsSync(this.storePath(context));
   },
+  supported: restrictedReadsSupported,
 };
 
 export const storeIntegrations: readonly StoreIntegration[] = [openCode];
@@ -266,6 +269,8 @@ export function storeIntegrationLines(
     const found = integration.detect(context);
     const on = enabled.includes(integration.id);
     const label = integration.experimental ? ' (experimental)' : '';
+    if (!integration.supported())
+      return `${integration.name}${label} cannot be read by this Node.js, which cannot restrict SQLite reads; ${on ? 'enabled but nothing is read' : 'off'}`;
     if (on)
       return `${integration.name}${label} observed read only; store ${found ? 'found' : 'not found yet'}`;
     if (!found) return `${integration.name}${label} not detected; off`;

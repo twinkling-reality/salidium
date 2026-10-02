@@ -66,9 +66,16 @@ export function recordHash(text: string): string {
   return `sha256:${createHash('sha256').update(text).digest('hex')}`;
 }
 
-/** Record id a message event cites: `<session id>/<message id>`, re-readable by the source. */
-export function messageRecordId(row: Pick<MessageRow, 'sessionId' | 'id'>): string {
-  return `${row.sessionId}/${row.id}`;
+/**
+ * Record id a message event cites: `<session id>/<message id>`, plus `#<part index>` for an event
+ * that stands for one part of an assistant step, or `#step` for the step's own fields (usage). The
+ * fingerprint covers the whole row; the raw view returns only the part.
+ */
+export function messageRecordId(
+  row: Pick<MessageRow, 'sessionId' | 'id'>,
+  part?: number | 'step',
+): string {
+  return `${row.sessionId}/${row.id}${part === undefined ? '' : `#${part}`}`;
 }
 
 /**
@@ -85,7 +92,7 @@ export function stableSessionRecord(session: SessionRow): string {
   });
 }
 
-function messageSource(ctx: SessionContext, row: MessageRow): EventSource {
+function messageSource(ctx: SessionContext, row: MessageRow, part?: number | 'step'): EventSource {
   return {
     provider: OPENCODE_PROVIDER_ID,
     channel: 'transcript',
@@ -93,7 +100,7 @@ function messageSource(ctx: SessionContext, row: MessageRow): EventSource {
     ref: {
       path: ctx.storePath,
       line: row.seq,
-      recordId: messageRecordId(row),
+      recordId: messageRecordId(row, part),
       ...(row.data === undefined ? {} : { recordHash: recordHash(row.data) }),
     },
   };
@@ -256,6 +263,7 @@ export function mapMessage(
   ctx: SessionContext,
   row: MessageRow,
   turn: TurnState,
+  parsed: Record<string, unknown> | undefined = parseRowData(row),
 ): CanonicalEvent[] {
   if (row.data === undefined)
     return [
@@ -266,7 +274,7 @@ export function mapMessage(
         'OpenCode message exceeded the size limit and was skipped',
       ),
     ];
-  const data = parseRowData(row);
+  const data = parsed;
   if (!data)
     return [warning(ctx, row, 'malformed-record', 'OpenCode message is not a JSON object')];
   const created = canonicalTime(num(asObject(data.time)?.created) ?? row.timeCreated);
@@ -430,6 +438,7 @@ function mapAssistant(
         if (!text) return;
         events.push({
           ...base,
+          source: messageSource(ctx, row, index),
           id: id('thinking', index),
           ts: canonicalTime(num(partTime?.created)) ?? created,
           turnId,
@@ -444,6 +453,7 @@ function mapAssistant(
         const ex = excerpt(text, 6000, 2000);
         events.push({
           ...base,
+          source: messageSource(ctx, row, index),
           id: id('message', index),
           ts: completed,
           turnId,
@@ -456,7 +466,18 @@ function mapAssistant(
         return;
       }
       case 'tool':
-        events.push(...mapToolPart(ctx, row, part, index, turnId, base, created, completed));
+        events.push(
+          ...mapToolPart(
+            ctx,
+            row,
+            part,
+            index,
+            turnId,
+            { ...base, source: messageSource(ctx, row, index) },
+            created,
+            completed,
+          ),
+        );
         return;
       default:
         return;
@@ -468,6 +489,7 @@ function mapAssistant(
     const cache = asObject(tokens.cache);
     events.push({
       ...base,
+      source: messageSource(ctx, row, 'step'),
       id: id('usage'),
       ts: completed,
       turnId,

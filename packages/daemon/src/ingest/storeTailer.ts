@@ -23,6 +23,7 @@ interface Tracked {
 
 const DEFAULT_POLL_MS = 1000;
 const DEFAULT_ROW_BUDGET = 2000;
+const MAX_RETRY_MS = 60_000;
 
 /**
  * Polls providers whose durable record is a local database. The source reads; this class decides
@@ -42,6 +43,10 @@ export class StoreTailer {
   private readonly pollIntervalMs: number;
   private readonly rowBudget: number;
   private readonly tracked = new Map<ProviderId, Tracked>();
+  private readonly failures = new Map<
+    ProviderId,
+    { attempts: number; retryAt: number; message: string }
+  >();
   private timer: NodeJS.Timeout | undefined;
   private inFlight: Promise<void> | undefined;
   private startedWith: { userHome: string; historyDays: number } | undefined;
@@ -140,14 +145,27 @@ export class StoreTailer {
     if (!started || this.stopped || this.paused) return;
     for (const provider of this.providers) {
       if (this.stopped || this.paused) return;
+      const failure = this.failures.get(provider.id);
+      if (failure && Date.now() < failure.retryAt) continue;
       try {
         await this.pollProvider(provider, started, initial);
+        if (failure) {
+          this.failures.delete(provider.id);
+          this.log.info('provider store readable again', { provider: provider.id });
+        }
       } catch (error) {
-        // A store being migrated or locked by its writer is retried on the next tick.
-        this.log.warn('provider store could not be read', {
-          provider: provider.id,
-          err: String(error),
-        });
+        // A store being migrated, locked by its writer, or in a shape this version cannot read is
+        // retried with backoff, and the same error is logged once rather than on every tick.
+        const message = String(error);
+        const attempts = (failure?.attempts ?? 0) + 1;
+        const delay = Math.min(MAX_RETRY_MS, this.pollIntervalMs * 2 ** Math.min(attempts, 10));
+        this.failures.set(provider.id, { attempts, retryAt: Date.now() + delay, message });
+        if (failure?.message !== message)
+          this.log.warn('provider store could not be read', {
+            provider: provider.id,
+            err: message,
+            retryInMs: delay,
+          });
       }
     }
   }
@@ -255,9 +273,11 @@ export class StoreTailer {
    * than the history window is still read.
    */
   private forget(tracked: Tracked, job: ReingestJob): void {
-    if (storePathOf(job.path) !== tracked.path) return;
+    // The whole store first: its own path may contain `#`, which would confuse the key parser.
+    const wholeStore = job.path === tracked.path;
+    if (!wholeStore && storePathOf(job.path) !== tracked.path) return;
     for (const [key, cursor] of tracked.cursors) {
-      if (job.path === tracked.path || key === job.path || cursor.sessionId === job.sessionId)
+      if (wholeStore || key === job.path || cursor.sessionId === job.sessionId)
         tracked.cursors.set(key, { ...cursor, position: -1, count: 0 });
     }
   }

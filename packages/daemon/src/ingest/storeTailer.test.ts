@@ -198,7 +198,7 @@ describe('OpenCode through the daemon', () => {
     expect(raw.raw?.content[0]?.name).toBe('edit');
 
     const answer = all.find(
-      (e) => e.kind === 'agent.message' && e.source.ref?.recordId?.endsWith(answerId),
+      (e) => e.kind === 'agent.message' && e.source.ref?.recordId?.includes(answerId),
     );
     store.update(
       nativeId,
@@ -209,6 +209,52 @@ describe('OpenCode through the daemon', () => {
       `/api/sessions/${encodeURIComponent(sessionId)}/raw/${encodeURIComponent(answer?.id ?? '')}`,
     );
     expect(changed).toMatchObject({ raw: null, reason: 'provider record changed since ingestion' });
+  });
+
+  it('suppresses a raw view whose part names a sensitive file, even when its event does not', async () => {
+    const step = store.message(
+      nativeId,
+      'assistant',
+      stepData(T0 + 60, [
+        { type: 'text', text: 'Patching two files.' },
+        {
+          type: 'tool',
+          id: 'call_pp',
+          name: 'patch',
+          executed: false,
+          state: {
+            status: 'completed',
+            input: {
+              patchText:
+                '*** Begin Patch\n*** Update File: src/a.ts\n@@\n+x\n*** Update File: .env\n@@\n+SYNTHETIC_SECRET=not-real\n*** End Patch',
+            },
+            content: [{ type: 'text', text: 'Success.' }],
+            metadata: {},
+          },
+          time: { created: T0 + 61, completed: T0 + 62 },
+        },
+      ]),
+    );
+    const all = await waitFor(async () => {
+      const list = await events();
+      return list.some((e) => e.kind === 'tool.called' && e.callId === `${step.id}/call_pp`)
+        ? list
+        : undefined;
+    });
+    const called = all.find((e) => e.kind === 'tool.called' && e.callId === `${step.id}/call_pp`);
+    const raw = await api<{ raw: unknown; reason?: string }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/raw/${encodeURIComponent(called?.id ?? '')}`,
+    );
+    expect(raw).toMatchObject({
+      raw: null,
+      reason: 'suppressed: sensitive file contents or credential dump',
+    });
+    const text = all.find((e) => e.kind === 'agent.message' && e.source.ref?.line === step.seq);
+    const shown = await api<{ raw: unknown }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/raw/${encodeURIComponent(text?.id ?? '')}`,
+    );
+    expect(JSON.stringify(shown.raw)).toContain('Patching two files.');
+    expect(JSON.stringify(shown.raw)).not.toContain('SYNTHETIC_SECRET');
   });
 
   it('answers a consumer v1 lookup by provider salidium/opencode and the OpenCode session id', async () => {

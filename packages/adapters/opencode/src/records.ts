@@ -33,7 +33,7 @@ export interface MessageRow {
   seq: number;
   timeCreated: number;
   timeUpdated: number;
-  /** Size of `data` in bytes as SQLite counts it. */
+  /** Size of `data` in bytes. */
   size: number;
   /** The row's JSON text, absent when it exceeded the size ceiling and was not read. */
   data?: string;
@@ -111,25 +111,46 @@ export function readSequences(store: OpenCodeStoreConnection): Map<string, numbe
   return out;
 }
 
-const MESSAGE_COLUMNS = (maxBytes: number) =>
-  `id, session_id, type, seq, time_created, time_updated, length(data) AS size, CASE WHEN length(data) <= ${Math.max(0, Math.floor(maxBytes))} THEN data END AS data`;
+/**
+ * Message columns. `size` is the row's JSON in bytes (`length` of a TEXT value counts characters,
+ * so the value is cast to a BLOB first), and `data` is returned only when it fits the ceiling,
+ * which is the statement's first bound parameter.
+ */
+const MESSAGE_COLUMNS =
+  'id, session_id, type, seq, time_created, time_updated, length(CAST(data AS BLOB)) AS size, CASE WHEN length(CAST(data AS BLOB)) <= ? THEN data END AS data';
 
-/** Rows of one session after `afterSeq`, in sequence order. */
+function ceiling(maxBytes: number): number {
+  return Number.isFinite(maxBytes) && maxBytes > 0 ? Math.floor(maxBytes) : 0;
+}
+
+/**
+ * Rows of one session after `afterSeq`, in sequence order, stopping at `limit` rows or once the
+ * rows read hold `byteBudget` bytes (always at least one row, so progress is never blocked).
+ */
 export function readMessagesAfter(
   store: OpenCodeStoreConnection,
   sessionId: string,
   afterSeq: number,
   limit: number,
   maxBytes: number,
-): MessageRow[] {
-  return store
-    .all(
-      `SELECT ${MESSAGE_COLUMNS(maxBytes)} FROM session_message WHERE session_id = ? AND seq > ? ORDER BY seq LIMIT ?`,
-      sessionId,
-      afterSeq,
-      Math.max(1, Math.floor(limit)),
-    )
-    .flatMap((row) => messageRow(row) ?? []);
+  byteBudget = Number.POSITIVE_INFINITY,
+): { rows: MessageRow[]; bytes: number } {
+  const rows: MessageRow[] = [];
+  let bytes = 0;
+  for (const raw of store.iterate(
+    `SELECT ${MESSAGE_COLUMNS} FROM session_message WHERE session_id = ? AND seq > ? ORDER BY seq LIMIT ?`,
+    ceiling(maxBytes),
+    sessionId,
+    afterSeq,
+    Math.max(1, Math.floor(limit)),
+  )) {
+    const row = messageRow(raw);
+    if (!row) continue;
+    rows.push(row);
+    if (row.data !== undefined) bytes += row.size;
+    if (bytes >= byteBudget) break;
+  }
+  return { rows, bytes };
 }
 
 export function readMessage(
@@ -138,7 +159,8 @@ export function readMessage(
   maxBytes: number,
 ): MessageRow | undefined {
   const row = store.get(
-    `SELECT ${MESSAGE_COLUMNS(maxBytes)} FROM session_message WHERE id = ?`,
+    `SELECT ${MESSAGE_COLUMNS} FROM session_message WHERE id = ?`,
+    ceiling(maxBytes),
     id,
   );
   return row ? messageRow(row) : undefined;
@@ -181,7 +203,8 @@ export function readLatestBefore(
   maxBytes: number,
 ): MessageRow | undefined {
   const row = store.get(
-    `SELECT ${MESSAGE_COLUMNS(maxBytes)} FROM session_message WHERE session_id = ? AND type = ? AND seq < ? ORDER BY seq DESC LIMIT 1`,
+    `SELECT ${MESSAGE_COLUMNS} FROM session_message WHERE session_id = ? AND type = ? AND seq < ? ORDER BY seq DESC LIMIT 1`,
+    ceiling(maxBytes),
     sessionId,
     type,
     beforeSeq,

@@ -8,6 +8,7 @@ import type {
   StoreRawRecord,
   StoreSource,
 } from '@salidium/adapter-kit';
+import { asObject, asString } from '@salidium/adapter-kit';
 import {
   type CanonicalEvent,
   type EventSource,
@@ -39,6 +40,10 @@ import {
   type SessionRow,
 } from './records.ts';
 import { withOpenCodeStore } from './storeAccess.ts';
+import { patchPaths } from './toolMapping.ts';
+
+/** Bytes of row data one poll reads before it hands back and lets the daemon yield. */
+const DEFAULT_BYTE_BUDGET = 64 * 1024 * 1024;
 
 /** Ceiling for one row read during a raw re-read; matches the daemon's ingest ceiling. */
 const RAW_MAX_BYTES = 8 * 1024 * 1024;
@@ -124,6 +129,73 @@ function revertWarning(
   };
 }
 
+/** The fields of an assistant step other than its content: model, timing, finish, usage. */
+function stepFields(data: Record<string, unknown>): Record<string, unknown> {
+  const { content: _content, ...rest } = data;
+  return rest;
+}
+
+/** Paths and commands a tool part names, for the caller's suppression check. */
+function partSubjects(part: unknown): { paths: string[]; commands: string[] } {
+  const p = asObject(part);
+  if (p?.type !== 'tool') return { paths: [], commands: [] };
+  const state = asObject(p.state);
+  const input = asObject(state?.input) ?? {};
+  const paths = [asString(input.path), asString(input.filePath)].filter(
+    (v): v is string => typeof v === 'string' && v !== '',
+  );
+  paths.push(...patchPaths(asString(input.patchText) ?? asString(input.patch) ?? ''));
+  const files = asObject(state?.metadata)?.files;
+  if (Array.isArray(files))
+    for (const f of files) {
+      const file = asString(asObject(f)?.file);
+      if (file) paths.push(file);
+    }
+  const command = asString(input.command);
+  return { paths, commands: command ? [command] : [] };
+}
+
+/**
+ * What the raw view of a row shows. An assistant step holds every part of the step, so an event
+ * gets only its own part (or, for usage, the step's fields without content); a person's shell
+ * row is shown without its output. Every other row is a single record and is shown whole.
+ */
+function rawView(
+  type: string,
+  data: Record<string, unknown>,
+  part: string | undefined,
+): { record: unknown; paths: string[]; commands: string[] } | undefined {
+  if (type === 'assistant') {
+    const content = Array.isArray(data.content) ? data.content : [];
+    if (part === undefined || part === 'step') {
+      const snapshot = asObject(data.snapshot);
+      const files = Array.isArray(snapshot?.files)
+        ? snapshot.files.filter((f): f is string => typeof f === 'string')
+        : [];
+      const subjects = part === undefined ? content.map(partSubjects) : [];
+      return {
+        record: { type, ...stepFields(data) },
+        paths: [...files, ...subjects.flatMap((s) => s.paths)],
+        commands: subjects.flatMap((s) => s.commands),
+      };
+    }
+    const index = Number(part);
+    if (!Number.isInteger(index) || index < 0 || index >= content.length) return undefined;
+    const subjects = partSubjects(content[index]);
+    return {
+      record: { type, ...stepFields(data), content: [content[index]] },
+      ...subjects,
+    };
+  }
+  if (part !== undefined) return undefined;
+  if (type === 'shell') {
+    const { output: _output, ...rest } = data;
+    const command = asString(data.command);
+    return { record: { type, ...rest }, paths: [], commands: command ? [command] : [] };
+  }
+  return { record: { type, ...data }, paths: [], commands: [] };
+}
+
 /**
  * The OpenCode store source. It holds one piece of memory between polls: the last durable
  * sequence seen per session, so an unchanged session costs no message read. After a restart the
@@ -159,10 +231,11 @@ export function createOpenCodeStoreSource(): StoreSource {
         );
         const batches: StorePollBatch[] = [];
         let budget = Math.max(1, request.rowBudget);
+        let bytesLeft = request.byteBudget ?? DEFAULT_BYTE_BUDGET;
         let more = false;
 
         for (const session of ordered) {
-          if (budget <= 0) {
+          if (budget <= 0 || bytesLeft <= 0) {
             more = true;
             break;
           }
@@ -204,14 +277,17 @@ export function createOpenCodeStoreSource(): StoreSource {
             }
           }
 
-          const rows = readMessagesAfter(
+          const read = readMessagesAfter(
             store,
             session.id,
             position,
             budget,
             request.maxRecordBytes,
+            bytesLeft,
           );
+          const rows = read.rows;
           budget -= rows.length;
+          bytesLeft -= read.bytes;
           if (rows.length > 0) {
             const turn: TurnState = {
               turnId: readLatestBefore(store, session.id, 'user', position + 1, 0)?.id,
@@ -226,19 +302,20 @@ export function createOpenCodeStoreSource(): StoreSource {
               ),
             };
             for (const row of rows) {
+              const data = parseRowData(row);
               if (isCopiedForkRow(session, row)) {
                 // Inherited history: the source session reports it once, under its own identity.
                 position = row.seq;
                 count += 1;
                 continue;
               }
-              if (!isFinalRow(row, parseRowData(row))) break;
-              events.push(...mapMessage(ctx, row, turn));
+              if (!isFinalRow(row, data)) break;
+              events.push(...mapMessage(ctx, row, turn, data));
               position = row.seq;
               count += 1;
             }
           }
-          const exhausted = budget <= 0;
+          const exhausted = budget <= 0 || bytesLeft <= 0;
           if (exhausted) more = true;
           else seen.set(key, { sequence, position, count });
 
@@ -276,10 +353,12 @@ export function createOpenCodeStoreSource(): StoreSource {
             const stable = stableSessionRecord(session);
             if (recordHash(stable) !== ref.recordHash)
               return { raw: undefined, reason: 'provider record changed since ingestion' };
-            return { raw: stable };
+            return { raw: stable, paths: [], commands: [] };
           }
           const sessionId = recordId.slice(0, slash);
-          const messageId = recordId.slice(slash + 1);
+          const hash = recordId.indexOf('#', slash);
+          const messageId = recordId.slice(slash + 1, hash < 0 ? undefined : hash);
+          const part = hash < 0 ? undefined : recordId.slice(hash + 1);
           const row = readMessage(store, messageId, RAW_MAX_BYTES);
           if (!row || row.sessionId !== sessionId)
             return {
@@ -293,7 +372,11 @@ export function createOpenCodeStoreSource(): StoreSource {
             };
           if (recordHash(row.data) !== ref.recordHash)
             return { raw: undefined, reason: 'provider record changed since ingestion' };
-          return { raw: row.data };
+          const data = parseRowData(row);
+          if (!data) return { raw: undefined, reason: 'provider record is not a JSON object' };
+          const view = rawView(row.type, data, part);
+          if (!view) return { raw: undefined, reason: 'record part not found' };
+          return { raw: JSON.stringify(view.record), paths: view.paths, commands: view.commands };
         });
       } catch {
         return { raw: undefined, reason: 'the OpenCode store could not be opened read only' };

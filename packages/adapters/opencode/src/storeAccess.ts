@@ -76,6 +76,16 @@ export function authorize(
   }
 }
 
+/**
+ * Whether this Node.js can enforce the restriction. Without `setAuthorizer` the store is never
+ * opened (opening throws), and setup surfaces say so instead of claiming the provider is read.
+ */
+export function restrictedReadsSupported(): boolean {
+  return (
+    typeof (DatabaseSync.prototype as { setAuthorizer?: unknown }).setAuthorizer === 'function'
+  );
+}
+
 /** A read-only, authorizer-restricted connection to one OpenCode store. */
 export class OpenCodeStoreConnection {
   readonly #db: DatabaseSync;
@@ -89,10 +99,13 @@ export class OpenCodeStoreConnection {
    * file cannot be opened; the caller treats that as "store unavailable".
    */
   static open(path: string): OpenCodeStoreConnection {
+    if (!restrictedReadsSupported())
+      throw new Error('this Node.js cannot restrict SQLite reads (DatabaseSync.setAuthorizer)');
     const db = new DatabaseSync(path, {
       readOnly: true,
-      // A writer may hold the lock for a moment while it commits.
-      timeout: 2000,
+      // A writer may hold the lock for a moment while it commits. This connection is synchronous,
+      // so a long wait would stall the daemon; a store locked for longer is read on a later poll.
+      timeout: 250,
       allowExtension: false,
       enableForeignKeyConstraints: false,
     });
@@ -110,6 +123,10 @@ export class OpenCodeStoreConnection {
   /** Runs one SELECT. Every statement passes the authorizer when it is prepared. */
   all(sql: string, ...params: SQLInputValue[]): Record<string, unknown>[] {
     return this.#db.prepare(sql).all(...params) as Record<string, unknown>[];
+  }
+
+  iterate(sql: string, ...params: SQLInputValue[]): Iterable<Record<string, unknown>> {
+    return this.#db.prepare(sql).iterate(...params) as Iterable<Record<string, unknown>>;
   }
 
   get(sql: string, ...params: SQLInputValue[]): Record<string, unknown> | undefined {

@@ -537,8 +537,9 @@ describe('OpenCode store source', () => {
     const { id, ids } = workSession();
     const h = harness();
     h.poll();
-    const removedFrom = h.events.find((e) => e.source.ref?.recordId === `${id}/${ids.tests}`)
-      ?.source.ref?.line;
+    const removedFrom = h.events.find((e) =>
+      e.source.ref?.recordId?.startsWith(`${id}/${ids.tests}`),
+    )?.source.ref?.line;
     expect(removedFrom).toBeDefined();
     store.revert(id, removedFrom as number);
     const after = h.poll();
@@ -563,6 +564,8 @@ describe('OpenCode store source', () => {
   it('warns about rows it will not parse instead of guessing', () => {
     const id = store.session({ directory: PROJECT });
     store.message(id, 'user', { time: { created: T0 }, text: 'x'.repeat(5000) });
+    // 400 characters but 1600 bytes: the ceiling is in bytes.
+    store.message(id, 'user', { time: { created: T0 + 1 }, text: '\u{1F600}'.repeat(400) });
     const source = createOpenCodeStoreSource();
     const result = source.poll({
       path,
@@ -574,6 +577,7 @@ describe('OpenCode store source', () => {
     });
     const events = result.batches.flatMap((b) => b.events);
     expect(of(events, 'ingest.warning')).toEqual([
+      expect.objectContaining({ code: 'truncated-record', tsSource: 'ingest' }),
       expect.objectContaining({ code: 'truncated-record', tsSource: 'ingest' }),
     ]);
   });
@@ -611,10 +615,13 @@ describe('OpenCode raw records', () => {
       (e) => e.kind === 'tool.completed' && e.callId === `${ids.edit}/call_e1`,
     );
     const ref = edit?.source.ref;
-    expect(ref?.recordId).toBe(`${id}/${ids.edit}`);
+    expect(ref?.recordId).toBe(`${id}/${ids.edit}#0`);
     const read = source.readRawRecord(path, ref ?? {});
     expect(read.raw).toBeDefined();
-    expect(JSON.parse(read.raw ?? '{}').content[0].name).toBe('edit');
+    expect(JSON.parse(read.raw ?? '{}').content.map((c: { name: string }) => c.name)).toEqual([
+      'edit',
+    ]);
+    expect(read).toMatchObject({ paths: [`${PROJECT}/math.js`, 'math.js'], commands: [] });
 
     const session = of(events, 'session.started')[0];
     const stable = source.readRawRecord(path, session?.source.ref ?? {});
@@ -626,7 +633,8 @@ describe('OpenCode raw records', () => {
     const events = harness().poll();
     const source = createOpenCodeStoreSource();
     const ref =
-      events.find((e) => e.source.ref?.recordId === `${id}/${ids.answer}`)?.source.ref ?? {};
+      events.find((e) => e.source.ref?.recordId?.startsWith(`${id}/${ids.answer}`))?.source.ref ??
+      {};
 
     expect(source.readRawRecord(join(dir, 'other.db'), ref)).toEqual({
       raw: undefined,
@@ -654,5 +662,56 @@ describe('OpenCode raw records', () => {
     expect(
       source.readRawRecord(path, { path, recordId: `${id}/${row.id}`, recordHash: ref.recordHash }),
     ).toMatchObject({ raw: undefined });
+  });
+
+  it('shows only the part an event stands for, and names its paths and commands', () => {
+    const id = store.session({ directory: PROJECT });
+    store.message(id, 'user', userData('look at the env', T0 + 1));
+    const step = store.message(
+      id,
+      'assistant',
+      stepData(T0 + 2, [
+        { type: 'text', text: 'Reading the settings.' },
+        tools.read('call_env', T0 + 3, `${PROJECT}/.env`, '1: SYNTHETIC_SECRET=not-real'),
+        tools.shell('call_dump', T0 + 4, 'printenv', 0, 'SYNTHETIC_TOKEN=not-real'),
+      ]),
+    );
+    const person = store.message(id, 'shell', {
+      time: { created: T0 + 9, completed: T0 + 10 },
+      shellID: 'sh_synthetic',
+      command: 'cat .env',
+      status: 'exited',
+      exit: 0,
+      output: { output: 'SYNTHETIC_SECRET=not-real', cursor: 0, size: 25, truncated: false },
+    });
+    const events = harness().poll();
+    const source = createOpenCodeStoreSource();
+    const cite = (match: (e: CanonicalEvent) => boolean) =>
+      source.readRawRecord(path, events.find(match)?.source.ref ?? {});
+
+    const message = cite((e) => e.kind === 'agent.message');
+    expect(message.raw).toBeDefined();
+    expect(message.raw).not.toContain('SYNTHETIC');
+    expect(message).toMatchObject({ paths: [], commands: [] });
+
+    const usage = cite((e) => e.kind === 'agent.usage');
+    expect(usage.raw).not.toContain('SYNTHETIC');
+    expect(JSON.parse(usage.raw ?? '{}').content).toBeUndefined();
+
+    const read = cite((e) => e.kind === 'tool.completed' && e.callId === `${step.id}/call_env`);
+    expect(read).toMatchObject({ paths: [`${PROJECT}/.env`], commands: [] });
+    const dump = cite((e) => e.kind === 'tool.called' && e.callId === `${step.id}/call_dump`);
+    expect(dump).toMatchObject({ paths: [], commands: ['printenv'] });
+
+    const shell = cite((e) => e.source.ref?.recordId === `${id}/${person.id}`);
+    expect(shell.raw).not.toContain('SYNTHETIC');
+    expect(shell).toMatchObject({ commands: ['cat .env'] });
+
+    expect(
+      source.readRawRecord(path, {
+        ...(events.find((e) => e.kind === 'agent.message')?.source.ref ?? {}),
+        recordId: `${id}/${step.id}#9`,
+      }),
+    ).toEqual({ raw: undefined, reason: 'record part not found' });
   });
 });
