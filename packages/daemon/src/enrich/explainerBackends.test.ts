@@ -40,7 +40,7 @@ describe('explainer backend selection', () => {
 
   it('keeps the original opt-out and rejects unknown configuration', () => {
     expect(configuredExplainerMode({ SALIDIUM_EXPLAIN: '0' })).toBe('off');
-    expect(configuredExplainerMode({ SALIDIUM_EXPLAINER: 'ollama' })).toBe('invalid');
+    expect(configuredExplainerMode({ SALIDIUM_EXPLAINER: 'gemini' })).toBe('invalid');
   });
 
   it('uses stored helper and model choices unless the launch environment overrides them', () => {

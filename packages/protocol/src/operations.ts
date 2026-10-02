@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ProviderIdSchema } from './provenance.ts';
 import { CanonicalTimestampSchema } from './timestamps.ts';
+import { ExplainerBackendSchema } from './wire.ts';
 
 /** Stable automation boundary for the local operations subsystem. */
 export const OPERATIONS_CONTRACT_VERSION = 1 as const;
@@ -26,7 +27,7 @@ export const OperationalConfigSettingsSchema = z
     explainer: z
       .object({
         cadence: z.enum(['off', 'session', 'turn']),
-        backend: z.enum(['auto', 'claude', 'codex']),
+        backend: ExplainerBackendSchema,
         model: z.string().trim().min(1).max(120).nullable(),
       })
       .strict(),
@@ -75,7 +76,7 @@ export const StoredOperationalConfigSchema = z
         explainer: z
           .object({
             cadence: z.enum(['off', 'session', 'turn']).optional(),
-            backend: z.enum(['auto', 'claude', 'codex']).optional(),
+            backend: ExplainerBackendSchema.optional(),
             model: z.string().trim().min(1).max(120).nullable().optional(),
           })
           .strict()
@@ -147,7 +148,7 @@ export const EffectiveOperationalConfigSchema = z
         explainer: z
           .object({
             cadence: effective(z.enum(['off', 'session', 'turn'])),
-            backend: effective(z.enum(['auto', 'claude', 'codex'])),
+            backend: effective(ExplainerBackendSchema),
             model: effective(z.string().trim().min(1).max(120).nullable()),
           })
           .strict(),

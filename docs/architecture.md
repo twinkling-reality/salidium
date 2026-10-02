@@ -249,6 +249,19 @@ evidence position. Failures are recorded as failures, and explanation can be dis
 The provider CLI may contact its own service and consume the user's plan or API allowance. Salidium
 does not hide that network boundary or describe generated text as observed fact.
 
+The `ollama` backend is the route on which nothing crosses that boundary. The daemon itself sends
+the same evidence packet to a local Ollama's `/api/chat` over loopback HTTP; there is no agent CLI
+in between. The address is the literal `127.0.0.1` or `::1`, from the default or from `OLLAMA_HOST`
+only when that names a loopback address (`localhost` is mapped to `127.0.0.1`, never resolved).
+Redirects are refused, the response body is bounded by the CLI routes' output ceiling, and the call
+shares their concurrency limit, timeout, and cancellation. A model is required and is chosen from
+the installed list in `/api/tags`; Salidium never pulls one. The request asks for the JSON Schema
+as Ollama's `format` first; on the 501 "structured output is unavailable" answer that MLX builds
+give, it retries once with the schema stated in a system message and remembers that per model. The
+runtime validation is unchanged, and the explanation's generator label names the model.
+`ollama` is chosen only explicitly: `auto` never selects it, and selecting it never falls back to
+a CLI when it cannot run.
+
 Personalization is a separate presentation layer. One bounded reader-authored note is kept in an
 owner-only local file. An explicit Personalize action saves the note and sends it with the
 already-generated technical Why/How diagram to the selected explanation agent. The returned

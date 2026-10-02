@@ -74,6 +74,7 @@ import {
 import { auditClaims, renderAudit } from './auditClaims.ts';
 import { runConsumerCommand } from './consumerCommand.ts';
 import { explanationMode, parseExplanationMode } from './explanationMode.ts';
+import { explanationWriter } from './explanationWriter.ts';
 import type { IntegrationContext, IntegrationValidation } from './integrations.ts';
 import { integrationById, providerIntegrations } from './integrations.ts';
 import {
@@ -165,7 +166,7 @@ Environment:
   SALIDIUM_PORT          Loopback port (default ${DEFAULT_PORT})
   SALIDIUM_HISTORY_DAYS  Whole days of transcript history to import, 0 or greater (default 7)
   SALIDIUM_NO_GIT=1      Disable read-only git snapshots and changed-file locations
-  SALIDIUM_EXPLAINER     Visual explainer: auto, claude, codex, or off (default auto)
+  SALIDIUM_EXPLAINER     Visual explainer: auto, claude, codex, ollama, or off (default auto)
   SALIDIUM_EXPLAIN_MODEL Optional model override for the selected explainer
 
 Native Windows imports transcript history but does not install the POSIX live-hook relay.
@@ -613,7 +614,7 @@ async function main(argv: string[]): Promise<number> {
         const state = await currentExplanationState(d, presence);
         const mode = explanationMode(state.effective);
         process.stdout.write(
-          `Explanations: ${explanationStateLabel(state)}\n${mode.detail}. Reports, evidence, and quantities stay local.\nChange with: salidium explanations off|when-done|each-reply\n`,
+          `Explanations: ${explanationStateLabel(state)}\n${state.writer ? `Written by: ${state.writer}\n` : ''}${mode.detail}. Reports, evidence, and quantities stay local.\nChange with: salidium explanations off|when-done|each-reply\n`,
         );
         return 0;
       }
@@ -2031,13 +2032,17 @@ interface ExplanationState {
   stored: ExplainerCadence;
   effective: ExplainerCadence;
   envOff: boolean;
+  /** Which writer the daemon will use, when a running daemon could say. */
+  writer?: string;
 }
 
 function explanationStateFromApi(settings: ExplainerSettings): ExplanationState {
+  const writer = explanationWriter(settings);
   return {
     stored: settings.cadence,
     effective: settings.envOff ? 'off' : settings.cadence,
     envOff: settings.envOff,
+    ...(writer ? { writer } : {}),
   };
 }
 

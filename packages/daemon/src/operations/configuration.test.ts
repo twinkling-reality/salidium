@@ -121,6 +121,96 @@ describe('operational configuration', () => {
     });
   });
 
+  it('reads every 0.6.x-shaped configuration unchanged and never rewrites it', () => {
+    const full = {
+      history: { days: 14 },
+      retention: { days: 90 },
+      git: { enabled: false },
+      providers: { enabled: ['claude-code'] },
+      explainer: { cadence: 'turn', backend: 'auto', model: null },
+      health: { sampleIntervalSeconds: 30, historyMinutes: 120 },
+      alerts: {
+        queueAgeMinutes: 20,
+        queueGrowthFiles: 200,
+        databaseSizeBytes: 2_000_000_000,
+        cooldownMinutes: 60,
+        nativeNotifications: true,
+      },
+      ui: { operationsDetail: 'expanded' },
+    };
+    const shapes = [
+      { version: 1, revision: 0, updatedAt: '2026-09-26T10:00:00.000Z', settings: {} },
+      { version: 1, revision: 4, updatedAt: '2026-09-26T10:00:00.000Z', settings: full },
+      ...(['auto', 'claude', 'codex'] as const).map((backend, index) => ({
+        version: 1,
+        revision: 2 + index,
+        updatedAt: '2026-09-26T10:00:00.000Z',
+        migratedFrom: index === 0 ? 'settings-v0' : 'sqlite-retention',
+        settings: { explainer: { cadence: 'session', backend, model: 'some-model' } },
+      })),
+    ];
+    for (const shape of shapes) {
+      const dir = home();
+      const path = operationalConfigPaths(dir).current;
+      const text = JSON.stringify(shape);
+      writeFileSync(path, text);
+      const read = readOperationalConfig(dir, { migrate: true });
+      expect(read.warning).toBeUndefined();
+      expect(read.migrated).toBe(false);
+      expect(read.stored).toEqual(shape);
+      expect(readFileSync(path, 'utf8')).toBe(text);
+      expect(() => resolveOperationalConfig(dir)).not.toThrow();
+    }
+  });
+
+  it('stores the local Ollama writer as an explicit choice with its own source labels', () => {
+    const dir = home();
+    // A file written before `ollama` existed still reads, and a v0 file can name the new value.
+    writeFileSync(
+      operationalConfigPaths(dir).current,
+      JSON.stringify({
+        version: 1,
+        revision: 3,
+        updatedAt: '2026-09-04T12:00:00.000Z',
+        settings: { explainer: { cadence: 'session', backend: 'codex', model: null } },
+      }),
+    );
+    expect(resolveOperationalConfig(dir).values.explainer.backend).toEqual({
+      value: 'codex',
+      source: 'stored',
+    });
+    expect(
+      migrateOperationalConfig({
+        version: 0,
+        explainerCadence: 'turn',
+        explainerBackend: 'ollama',
+        explainerModel: 'qwen:1b',
+      }).settings.explainer,
+    ).toEqual({ cadence: 'turn', backend: 'ollama', model: 'qwen:1b' });
+
+    setOperationalConfigValue(dir, 'explainer.backend', 'ollama');
+    setOperationalConfigValue(dir, 'explainer.model', 'qwen:1b');
+    const stored = resolveOperationalConfig(dir).values.explainer;
+    expect(stored.backend).toEqual({ value: 'ollama', source: 'stored' });
+    expect(stored.model).toEqual({ value: 'qwen:1b', source: 'stored' });
+
+    const forced = resolveOperationalConfig(dir, {
+      environment: { SALIDIUM_EXPLAINER: 'ollama' },
+    }).values.explainer.backend;
+    expect(forced).toEqual({
+      value: 'ollama',
+      source: 'environment',
+      environment: 'SALIDIUM_EXPLAINER',
+    });
+
+    expect(() => setOperationalConfigValue(dir, 'explainer.backend', 'local')).toThrow();
+    resetOperationalConfig(dir, 'explainer.backend');
+    expect(resolveOperationalConfig(dir).values.explainer.backend).toEqual({
+      value: 'auto',
+      source: 'default',
+    });
+  });
+
   it('retains the last valid configuration and recovers from it when the primary is damaged', () => {
     const dir = home();
     setOperationalConfigValue(dir, 'health.historyMinutes', 120, {

@@ -253,14 +253,14 @@ export function resolveOperationalConfig(
   }
   if (env.SALIDIUM_EXPLAINER !== undefined) {
     const mode = env.SALIDIUM_EXPLAINER.trim().toLowerCase();
-    if (!['auto', 'claude', 'codex', 'off'].includes(mode))
-      throw new Error('SALIDIUM_EXPLAINER must be auto, claude, codex, or off');
+    if (!['auto', 'claude', 'codex', 'ollama', 'off'].includes(mode))
+      throw new Error('SALIDIUM_EXPLAINER must be auto, claude, codex, ollama, or off');
     if (mode === 'off') {
       cadence.value = 'off';
       cadence.source = 'environment';
       cadence.environment = 'SALIDIUM_EXPLAINER';
     } else {
-      backend.value = mode as 'auto' | 'claude' | 'codex';
+      backend.value = mode as 'auto' | 'claude' | 'codex' | 'ollama';
       backend.source = 'environment';
       backend.environment = 'SALIDIUM_EXPLAINER';
     }

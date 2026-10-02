@@ -220,13 +220,21 @@ export type CollectionControlRequest = z.infer<typeof CollectionControlRequestSc
 export const ExplainerCadenceSchema = z.enum(['off', 'session', 'turn']);
 export type ExplainerCadence = z.infer<typeof ExplainerCadenceSchema>;
 
-/** Which installed agent CLI writes Salidium's optional explanation. */
-export const ExplainerBackendSchema = z.enum(['auto', 'claude', 'codex']);
+/**
+ * What writes Salidium's optional explanation: an installed agent CLI, or a local Ollama model
+ * reached over loopback HTTP. `auto` follows the coding agent and never chooses `ollama`; the local
+ * model is used only when it is named explicitly.
+ */
+export const ExplainerBackendSchema = z.enum(['auto', 'claude', 'codex', 'ollama']);
 export type ExplainerBackend = z.infer<typeof ExplainerBackendSchema>;
+
+/** A concrete writer, after `auto` has been resolved. */
+export const ExplainerRouteBackendSchema = z.enum(['claude', 'codex', 'ollama']);
+export type ExplainerRouteBackend = z.infer<typeof ExplainerRouteBackendSchema>;
 
 /** One concrete route after availability, stored choice and environment overrides are applied. */
 export const ExplainerRouteSchema = z.object({
-  backend: z.enum(['claude', 'codex']).nullable(),
+  backend: ExplainerRouteBackendSchema.nullable(),
   /** A real model id, or the provider's explicitly labelled default. */
   model: z.string().min(1).max(120).nullable(),
 });
@@ -287,11 +295,22 @@ export const ExplainerSettingsSchema = z.object({
   /** The override actually in force; null means the environment disabled or invalidated it. */
   activeBackend: ExplainerBackendSchema.nullable(),
   activeModel: ExplainerModelSchema.nullable(),
-  availableBackends: z.array(z.enum(['claude', 'codex'])),
+  availableBackends: z.array(ExplainerRouteBackendSchema),
   routes: z.object({
     claudeCode: ExplainerRouteSchema,
     codex: ExplainerRouteSchema,
   }),
+  /**
+   * The local Ollama route, present when `ollama` is the backend in force. `endpoint` is the
+   * loopback address Salidium will call, or null with `refused` naming why the configured host
+   * was not accepted. Installed models are listed separately, because asking Ollama is a request.
+   */
+  ollama: z
+    .object({
+      endpoint: z.string().max(200).nullable(),
+      refused: z.string().max(300).nullable(),
+    })
+    .optional(),
   usageStatus: z.enum(['ready', 'preparing']).optional(),
   usage: ExplainerUsageSchema.optional(),
 });
@@ -307,6 +326,19 @@ export const ExplainerSettingsRequestSchema = z
   .strict()
   .refine((value) => Object.keys(value).length > 0, 'at least one setting is required');
 export type ExplainerSettingsRequest = z.infer<typeof ExplainerSettingsRequestSchema>;
+
+/**
+ * GET /api/settings/explainer/ollama-models: the models already installed in the local Ollama,
+ * read from its `/api/tags`. Salidium never pulls a model; this is the whole list it offers.
+ * `state` separates a refused host (not loopback) from an Ollama that did not answer.
+ */
+export const OllamaModelsSchema = z.object({
+  state: z.enum(['ready', 'unreachable', 'refused']),
+  endpoint: z.string().max(200).nullable(),
+  models: z.array(ExplainerModelSchema).max(500),
+  reason: z.string().max(300).nullable(),
+});
+export type OllamaModels = z.infer<typeof OllamaModelsSchema>;
 
 /** Compatibility name for callers that only change the cadence. */
 export const ExplainerCadenceRequestSchema = ExplainerSettingsRequestSchema;

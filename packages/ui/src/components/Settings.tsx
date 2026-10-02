@@ -3,6 +3,7 @@ import type {
   ExplainerCadence,
   ExplainerRoute,
   ExplainerUsage,
+  OllamaModels,
   ProviderId,
 } from '@salidium/protocol';
 import { useEffect, useRef, useState } from 'react';
@@ -21,6 +22,9 @@ const BACKENDS: Array<{ value: ExplainerBackend; name: string }> = [
   { value: 'auto', name: 'Same as coding' },
   { value: 'claude', name: 'Claude' },
   { value: 'codex', name: 'Codex' },
+  // Distinct from "Local only", which means no model call at all. This one is a model call that
+  // stays on this machine.
+  { value: 'ollama', name: 'Local model' },
 ];
 
 const CODEX_MODELS = [
@@ -38,6 +42,7 @@ interface ModelChoice {
 function backendName(backend: ExplainerRoute['backend']): string {
   if (backend === 'claude') return 'Claude Code';
   if (backend === 'codex') return 'Codex';
+  if (backend === 'ollama') return 'Ollama';
   return 'Unavailable';
 }
 
@@ -173,7 +178,9 @@ export function ExplanationSettings({
   const [modelDraft, setModelDraft] = useState('');
   const [showModelChoices, setShowModelChoices] = useState(false);
   const [showCustomModel, setShowCustomModel] = useState(false);
+  const [ollamaModels, setOllamaModels] = useState<OllamaModels | undefined>();
   const modelFieldRef = useRef<HTMLInputElement>(null);
+  const ollamaSelected = explainer?.activeBackend === 'ollama';
 
   useEffect(() => {
     if (api) loadExplainer();
@@ -187,6 +194,26 @@ export function ExplanationSettings({
   useEffect(() => {
     if (showCustomModel) modelFieldRef.current?.focus();
   }, [showCustomModel]);
+  // Only ask Ollama what is installed while it is the chosen writer; the list is never cached.
+  useEffect(() => {
+    if (!api || !ollamaSelected) {
+      setOllamaModels(undefined);
+      return;
+    }
+    let current = true;
+    void api.ollamaModels().then(
+      (models) => {
+        if (current) setOllamaModels(models);
+      },
+      () => {
+        if (current)
+          setOllamaModels({ state: 'unreachable', endpoint: null, models: [], reason: null });
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [api, ollamaSelected]);
 
   if (!explainer) {
     return <Loading label="Loading model settings" block />;
@@ -226,7 +253,12 @@ export function ExplanationSettings({
     modelChoices.push(choice);
   };
 
-  if (activeBackend === 'claude' && !explainer.model && activeRoute?.model) {
+  if (activeBackend === 'ollama') {
+    // No automatic choice and no free-text entry: the local route has no default model, and a
+    // name that is not installed would only fail. Salidium never pulls one.
+    for (const model of ollamaModels?.models ?? [])
+      addModel({ value: model, name: model, detail: 'Installed in Ollama' });
+  } else if (activeBackend === 'claude' && !explainer.model && activeRoute?.model) {
     addModel({ value: null, name: activeRoute.model, detail: 'Salidium default' });
   } else {
     addModel({
@@ -243,9 +275,27 @@ export function ExplanationSettings({
       addModel({ value: choice.model, name: choice.model, detail: choice.detail });
     }
   }
-  if (explainer.model) {
+  if (explainer.model && activeBackend !== 'ollama') {
     addModel({ value: explainer.model, name: explainer.model, detail: 'Current selection' });
   }
+  const ollamaEndpoint = explainer.ollama?.endpoint ?? ollamaModels?.endpoint ?? null;
+  const ollamaProblem = !ollamaSelected
+    ? undefined
+    : explainer.ollama?.refused
+      ? `Ollama address refused: ${explainer.ollama.refused}.`
+      : ollamaModels?.state === 'unreachable'
+        ? `Ollama is not answering${ollamaEndpoint ? ` at ${ollamaEndpoint}` : ''}.`
+        : ollamaModels?.state === 'ready' && ollamaModels.models.length === 0
+          ? 'Ollama has no models installed. Salidium never downloads one.'
+          : !explainer.activeModel
+            ? 'Choose an installed model. The local route has no default.'
+            : undefined;
+  const explanationDetail =
+    route?.backend === 'ollama'
+      ? 'Ollama on this machine'
+      : shownExplanationModel.automatic
+        ? `${backendName(route?.backend ?? null)} chooses the model`
+        : undefined;
 
   return (
     <div className="mu">
@@ -262,11 +312,7 @@ export function ExplanationSettings({
                   label="Explanation"
                   model={shownExplanationModel.name}
                   exact={!shownExplanationModel.automatic}
-                  detail={
-                    shownExplanationModel.automatic
-                      ? `${backendName(route?.backend ?? null)} chooses the model`
-                      : undefined
-                  }
+                  detail={explanationDetail}
                 />
               ) : (
                 <ModelRow
@@ -284,6 +330,12 @@ export function ExplanationSettings({
                 />
               )}
             </>
+          ) : explanationsActive && ollamaSelected ? (
+            <ModelRow
+              label="Local model"
+              model={explainer.routes.claudeCode.model}
+              detail="Ollama on this machine"
+            />
           ) : explanationsActive ? (
             <>
               <ModelRow label="Claude" model={explainer.routes.claudeCode.model} />
@@ -310,8 +362,12 @@ export function ExplanationSettings({
         </h3>
 
         {explainer.envOff && <p className="explain-warning">Disabled by the daemon environment.</p>}
+        {!explainer.envOff && explainer.cadence !== 'off' && ollamaProblem && (
+          <p className="explain-warning">{ollamaProblem}</p>
+        )}
         {!explainer.envOff &&
           explainer.cadence !== 'off' &&
+          !ollamaSelected &&
           !explainer.routes.claudeCode.backend &&
           !explainer.routes.codex.backend && (
             <p className="explain-warning">
@@ -329,6 +385,12 @@ export function ExplanationSettings({
             onChange={(cadence) => setExplainer({ cadence })}
           />
           <p className={`mu-cadence-note is-${activeCadence}`}>{cadenceMode.detail}.</p>
+          {explanationsActive && ollamaSelected && (
+            <p className="mu-cadence-note">
+              Written by a model in Ollama on this machine
+              {ollamaEndpoint ? ` (${ollamaEndpoint})` : ''}. Nothing leaves it.
+            </p>
+          )}
           {explanationsActive && (
             <ChoiceGroup
               legend="Agent"
@@ -378,21 +440,23 @@ export function ExplanationSettings({
                   </button>
                 </li>
               ))}
-              <li>
-                <button
-                  type="button"
-                  className="mu-model-option"
-                  aria-expanded={showCustomModel}
-                  disabled={explainer.modelLocked}
-                  onClick={() => {
-                    setModelDraft(explainer.model ?? '');
-                    setShowCustomModel(true);
-                  }}
-                >
-                  <span>Other model…</span>
-                  <small>Enter a model name</small>
-                </button>
-              </li>
+              {activeBackend !== 'ollama' && (
+                <li>
+                  <button
+                    type="button"
+                    className="mu-model-option"
+                    aria-expanded={showCustomModel}
+                    disabled={explainer.modelLocked}
+                    onClick={() => {
+                      setModelDraft(explainer.model ?? '');
+                      setShowCustomModel(true);
+                    }}
+                  >
+                    <span>Other model…</span>
+                    <small>Enter a model name</small>
+                  </button>
+                </li>
+              )}
             </ul>
 
             {showCustomModel && (

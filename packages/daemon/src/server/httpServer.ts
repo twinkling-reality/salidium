@@ -18,6 +18,7 @@ import type {
   ExplainerSettingsRequest,
   LocalAlertState,
   MaintenanceState,
+  OllamaModels,
   OperationalConfigPatch,
   OperationsOverview,
   PersonalizationSettings,
@@ -83,6 +84,8 @@ export interface HttpServerDeps {
   settings?: {
     explainer: () => ExplainerSettings;
     setExplainerSettings: (settings: ExplainerSettingsRequest) => ExplainerSettings;
+    /** Installed local models, asked of the loopback Ollama only when the settings UI needs them. */
+    ollamaModels?: () => Promise<OllamaModels>;
     personalization: () => PersonalizationSettings;
     setPersonalization: (
       settings: PersonalizationSettingsRequest,
@@ -358,6 +361,11 @@ export function createHttpServer(deps: HttpServerDeps): Server {
         return json(res, 200, deps.settings.setExplainerSettings(parsed.data));
       }
       return json(res, 405, { error: 'method not allowed' });
+    }
+
+    if (url.pathname === '/api/settings/explainer/ollama-models' && deps.settings?.ollamaModels) {
+      if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' });
+      return json(res, 200, await deps.settings.ollamaModels());
     }
 
     if (url.pathname === '/api/settings/personalization' && deps.settings) {

@@ -423,7 +423,7 @@ const RAW: Array<Omit<Page, "n">> = [
         "Most of a report is what Salidium observed. One part of it is prose, and prose has to be written by something.",
       ),
       p(
-        "Salidium hands your own installed Claude or Codex CLI a short, redacted summary of the session and lets it write that part. It is labelled wherever it appears. Nothing leaves unless you choose one of these explanation calls, and you can switch scheduled calls off without losing anything else on the page.",
+        "Salidium hands your own installed Claude or Codex CLI, or a local model you run in Ollama, a short, redacted summary of the session and lets it write that part. It is labelled wherever it appears. Nothing leaves unless you choose one of these explanation calls, and you can switch scheduled calls off without losing anything else on the page.",
       ),
       h("When it runs"),
       terms([
@@ -443,6 +443,20 @@ const RAW: Array<Omit<Page, "n">> = [
       ),
       note(
         "Claude defaults to the named Haiku model shown in the panel. When no exact model is chosen, Codex selects its own model. Salidium labels that Automatic instead of exposing CLI terminology or guessing a model name.",
+      ),
+      h("A local model"),
+      p(
+        "Choose Local model to have the explanation written by a model you already run in Ollama on the same machine. It is a model call, so it is not the same thing as Local only, but nothing crosses the machine's boundary: Salidium sends the same redacted summary to Ollama at `127.0.0.1:11434` and to nothing else.",
+      ),
+      list(
+        "There is no default model. Choose a model lists only the models Ollama already has installed, and Salidium never downloads one.",
+        "`OLLAMA_HOST` can move the port, but only to a loopback address: `127.0.0.1`, `::1` or `localhost`, which is read as `127.0.0.1` without asking a name server. Any other address is refused and nothing is called.",
+        "A redirect from that address is refused rather than followed, and a reply larger than the same 128 KB limit the CLI routes have is cut off and counted as a failure.",
+        "Same as coding never picks the local model, and choosing it never falls back to Claude or Codex. If Ollama is not running, or the model is missing, nothing is sent anywhere.",
+        "The explanation names the model it was written by, for example `qwen3.6:35b-a3b-nvfp4 · Ollama`.",
+      ),
+      note(
+        "Salidium first asks Ollama to hold the answer to the explanation's schema. Some local builds, including the MLX ones, answer that they cannot (HTTP 501, structured output is unavailable). Salidium then asks once more with the schema written into the request instead, and remembers that for the model until the daemon restarts. Either way, what comes back is validated before it can appear, and an answer that does not fit is recorded as a failure.",
       ),
       h("What it is given"),
       list(
@@ -479,7 +493,7 @@ const RAW: Array<Omit<Page, "n">> = [
         ["Explanations are off", "Nothing was sent to any agent."],
         [
           "No compatible command",
-          "No Claude or Codex CLI that Salidium can run was found, so nothing was sent.",
+          "No Claude or Codex CLI that Salidium can run was found, or Local model has no model chosen or a refused address, so nothing was sent.",
         ],
         [
           "Asked, and nothing usable came back",
@@ -623,7 +637,7 @@ const RAW: Array<Omit<Page, "n">> = [
         ],
         [
           "`SALIDIUM_EXPLAINER`",
-          "`auto`, `claude`, `codex` or `off`. Enforces the helper choice and locks that control in the page.",
+          "`auto`, `claude`, `codex`, `ollama` or `off`. Enforces the helper choice and locks that control in the page.",
         ],
         ["`SALIDIUM_EXPLAIN_MODEL`", "Enforces a model id for the explainer and locks that control in the page."],
         ["`SALIDIUM_NO_GIT`", "Set to `1` to stop the git snapshots."],
@@ -632,6 +646,7 @@ const RAW: Array<Omit<Page, "n">> = [
         ["`SALIDIUM_EXPLAIN`", "Set to `0` to switch explanations off. The older spelling of `SALIDIUM_EXPLAINER=off`."],
         ["`CLAUDE_CONFIG_DIR`", "Where Claude Code keeps its settings. Defaults to `~/.claude`."],
         ["`CODEX_HOME`", "Where Codex keeps its state. Defaults to `~/.codex`."],
+        ["`OLLAMA_HOST`", "Where the Local model route reaches Ollama. Defaults to `127.0.0.1:11434`. Only a loopback address is accepted."],
       ]),
     ],
   },

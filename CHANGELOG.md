@@ -21,6 +21,18 @@
   commit is no longer skipped.
 - Every store replays its sessions once after upgrading, because session state gained revision
   anchors, file locations, and the code-cell rule (reducer 1.14.0).
+- Let a local Ollama model write the Why and How explanation, with nothing leaving the machine.
+  Choose **Local model** under Models & Usage, or `salidium config set explainer.backend ollama`,
+  then pick one of the models Ollama already has installed; there is no default model and Salidium
+  never downloads one. The daemon calls Ollama directly at `127.0.0.1:11434`, accepts `OLLAMA_HOST`
+  only when it names a loopback address, refuses redirects, and bounds the reply like the CLI routes.
+  `auto` never chooses it, and when it cannot run nothing else is tried in its place. Builds that
+  cannot hold an answer to a JSON Schema (Ollama's 501, as MLX builds give) are asked once more with
+  the schema in the request. Personalize uses the same route when it is selected.
+- Downgrade note: once the explainer backend is set to `ollama`, Salidium 0.6.x cannot read
+  `operations-config.json`. It uses the previous saved copy when that is readable and otherwise
+  falls back to safe defaults for every setting, with explanations off. Set the backend back to
+  `auto`, `claude` or `codex` before downgrading to keep your choices.
 
 ## 0.6.1 - 2026-10-02
 

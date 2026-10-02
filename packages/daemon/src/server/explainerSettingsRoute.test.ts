@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DaemonInfo, ExplainerSettings } from '@salidium/protocol';
-import { ExplainerSettingsSchema } from '@salidium/protocol';
+import { ExplainerSettingsSchema, OllamaModelsSchema } from '@salidium/protocol';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { readSettings, writeSettings } from '../daemon.ts';
 import type { HookIngress } from '../ingest/hookIngress.ts';
@@ -24,6 +24,7 @@ let store: SqliteStore;
 let registry: SessionRegistry;
 let server: Server;
 let base: string;
+let ollamaListings = 0;
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), 'salidium-settings-route-'));
@@ -66,6 +67,15 @@ beforeAll(async () => {
         writeSettings(dir, stored);
         registry.setExplainerCadence(effectiveCadence(stored.explainerCadence, {}));
         return answer();
+      },
+      ollamaModels: async () => {
+        ollamaListings += 1;
+        return {
+          state: 'ready',
+          endpoint: 'http://127.0.0.1:11434',
+          models: ['local-a:1b'],
+          reason: null,
+        };
       },
     },
     log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} } as never,
@@ -132,6 +142,36 @@ describe('the explainer settings route', () => {
       explainerBackend: 'codex',
       explainerModel: 'gpt-5.6-luna',
     });
+  });
+
+  it('stores the local Ollama writer and its model as explicit choices', async () => {
+    const res = await call('PUT', { backend: 'ollama', model: 'local-a:1b' });
+    expect(res.status).toBe(200);
+    expect(ExplainerSettingsSchema.parse(await res.json())).toMatchObject({
+      backend: 'ollama',
+      model: 'local-a:1b',
+    });
+    expect(readSettings(dir)).toMatchObject({
+      explainerBackend: 'ollama',
+      explainerModel: 'local-a:1b',
+    });
+    expect((await call('PUT', { backend: 'local' })).status).toBe(400);
+  });
+
+  it('lists installed Ollama models only when asked, behind the owner token', async () => {
+    expect(ollamaListings).toBe(0);
+    const url = `${base}/api/settings/explainer/ollama-models`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${TOKEN}` } });
+    expect(res.status).toBe(200);
+    expect(OllamaModelsSchema.parse(await res.json()).models).toEqual(['local-a:1b']);
+    expect(ollamaListings).toBe(1);
+    expect((await fetch(url)).status).toBe(401);
+    const post = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
+    expect(post.status).toBe(405);
+    expect(ollamaListings).toBe(1);
   });
 
   it('refuses a stop it does not know rather than storing it', async () => {

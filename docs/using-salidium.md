@@ -264,6 +264,32 @@ Typing a model name is kept under **Other model** for installations with a model
 seen. **Usage** keeps session tokens separate from the explanation ledger across all runs. The same
 control is available before the first session exists, so defaults can be set up front.
 
+### A local model in Ollama
+
+Choose **Local model** under **Explanation** to have a model you already run in Ollama on the same
+machine write the explanation. It is still a model call, so it is not **Local only**, but nothing
+leaves the machine on this route: Salidium sends the same bounded, redacted summary to Ollama's
+`/api/chat` at `127.0.0.1:11434` and calls nothing else. The explanation is labelled with the model
+that wrote it, for example `qwen3.6:35b-a3b-nvfp4 · Ollama`.
+
+- There is no default model. **Choose a model** lists the models Ollama already has installed, read
+  from its `/api/tags` only while this route is selected. Salidium never pulls a model.
+- `OLLAMA_HOST` may move the port, and is accepted only when it names a loopback address:
+  `127.0.0.1`, `::1`, or `localhost`, which Salidium reads as `127.0.0.1` without consulting a name
+  server. Any other value, including `0.0.0.0`, is refused, the panel says why, and nothing is called.
+- A redirect is refused rather than followed. A reply over the same 128 KB ceiling the CLI routes have
+  is cut off and recorded as a failure, and the call shares their two-at-a-time limit, timeout, and
+  cancellation.
+- **Same as coding** never chooses the local model, and choosing it never falls back to Claude or
+  Codex. When Ollama is not running or the model is missing, nothing is sent anywhere.
+- Personalize uses the same route when it is selected, so personalized wording stays local too.
+
+Salidium first asks Ollama to constrain the answer to the explanation's JSON Schema. Some local builds,
+including MLX ones, answer HTTP 501 "structured output is unavailable". Salidium then asks once more
+with the schema stated in the request instead, and remembers that for the model until the daemon
+restarts. The answer is validated the same way in both cases; one that does not fit is a failure.
+Ollama calls create no agent transcript, so they do not appear in the explanation token ledger.
+
 The selected **Local only**, **When done**, or **Each reply** mode is visible in the rail. In Local
 only mode the agent and model controls stay hidden because neither can be used.
 
@@ -298,7 +324,7 @@ into Verified, Left, Review, history, checkpoints, raw evidence, session exports
 sync outbox. The selected agent CLI may contact its provider when you explicitly personalize, under
 that provider's own data policy. Deleting the saved terms cannot delete a record kept by that agent.
 
-Set `SALIDIUM_EXPLAINER` to `auto`, `claude`, `codex`, or `off` to enforce a helper choice when the
+Set `SALIDIUM_EXPLAINER` to `auto`, `claude`, `codex`, `ollama`, or `off` to enforce a helper choice when the
 daemon starts. `SALIDIUM_EXPLAIN_MODEL` similarly enforces a model override. Environment choices
 lock the matching controls in the interface until the override is removed. With explanations off,
 nothing is sent to an agent and the deterministic report remains available.

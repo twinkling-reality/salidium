@@ -21,6 +21,7 @@ import {
   type ExplainerCadence,
   type ExplainerSettings,
   type ExplainerSettingsRequest,
+  type OllamaModels,
   OPERATIONS_CONTRACT_VERSION,
   type OperationalConfigPatch,
   type OperationsHealthSnapshot,
@@ -47,6 +48,7 @@ import {
 import { createConsumerRoutes } from './consumer/routes.ts';
 import { explainWithStatus } from './enrich/explainer.ts';
 import { explainedConfiguration } from './enrich/explainerBackends.ts';
+import { listOllamaModels } from './enrich/ollamaBackend.ts';
 import { personalizeExplanation } from './enrich/personalizeExplanation.ts';
 import { FileLocationEnricher } from './enrichers/fileLocation.ts';
 import { GitSnapshotEnricher } from './enrichers/gitSnapshot.ts';
@@ -336,13 +338,11 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
       envOff: active.mode === 'off',
       backendLocked: active.backendLocked,
       modelLocked: active.modelLocked,
-      activeBackend:
-        active.mode === 'auto' || active.mode === 'claude' || active.mode === 'codex'
-          ? active.mode
-          : null,
+      activeBackend: active.mode === 'off' || active.mode === 'invalid' ? null : active.mode,
       activeModel: active.model ?? null,
       availableBackends: active.availableBackends,
       routes: active.routes,
+      ...(active.ollama ? { ollama: active.ollama } : {}),
       usageStatus: store.usageBackfillProgress?.().complete === false ? 'preparing' : 'ready',
       ...(usage ? { usage } : {}),
     };
@@ -656,6 +656,14 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
     },
     settings: {
       explainer: explainerSettings,
+      ollamaModels: async (): Promise<OllamaModels> => {
+        const list = await listOllamaModels(process.env);
+        return list.state === 'ready'
+          ? { state: 'ready', endpoint: list.endpoint, models: list.models, reason: null }
+          : list.state === 'unreachable'
+            ? { state: 'unreachable', endpoint: list.endpoint, models: [], reason: list.reason }
+            : { state: 'refused', endpoint: null, models: [], reason: list.reason };
+      },
       setExplainerSettings: (change: ExplainerSettingsRequest) => {
         // Persist a candidate before it becomes live. A failed disk write must not leave this
         // process using settings the API reported as rejected.
