@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.1 - 2026-10-02
 
 - Redact credentials written as JSON, YAML, HTTP headers, and environment variables. The key
   rules needed the separator right after the key, so the closing quote of a JSON key hid
