@@ -111,6 +111,9 @@ Check that your discovery entry's `minor` is at least 1 before relying on any of
   objects with the ids `lookup` takes. An id that is not listed is not observed until Salidium
   restarts with a new `instanceId`, so gate lookups on it rather than on the version. A 1.0 daemon
   does not send it: treat its absence as unknown.
+- Discovery's top-level `experimental`: local contracts the instance serves that are not part of
+  this one and carry no compatibility promise, each with a name, version and loopback base URL.
+  Do not depend on one without checking it yourself.
 
 ## Compatibility
 

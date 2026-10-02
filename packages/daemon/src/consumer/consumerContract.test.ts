@@ -20,7 +20,7 @@ import {
   listConsumerCredentials,
   revokeConsumerCredential,
 } from './credentials.ts';
-import { consumerDiscovery, consumerDiscoveryPath } from './discovery.ts';
+import { consumerDiscovery, consumerDiscoveryPath, experimentalContracts } from './discovery.ts';
 import {
   CONSUMER_CANARIES,
   CONSUMER_SECRET,
@@ -197,6 +197,93 @@ describe('consumer discovery', () => {
       headers: { 'If-Match': String(effective.revision) },
     });
     expect(restored.status).toBe(200);
+  });
+
+  it('lists no experimental contract unless the embedder supplies one', async () => {
+    const served = exactly(
+      ConsumerDiscoverySchema,
+      (await get('/consumer/v1/discovery', null)).body,
+    );
+    expect(served.experimental).toEqual([]);
+  });
+
+  it('lists supplied experimental contracts once each, sorted, valid, and at most eight', () => {
+    const entry = (name: string, path = 'map') => ({
+      name,
+      major: 0,
+      minor: 1,
+      baseUrl: `http://127.0.0.1:47822/${path}/v0`,
+    });
+    const reasons: string[] = [];
+    const listed = experimentalContracts(
+      [
+        entry('salidium.project-map'),
+        entry('salidium.another'),
+        entry('salidium.project-map'),
+        { ...entry('salidium.remote'), baseUrl: 'http://example.com:47822/x/v0' },
+        { ...entry('salidium.negative'), major: -1 },
+        'not an entry',
+        ...Array.from({ length: 9 }, (_, i) => entry(`salidium.z${i}`)),
+      ],
+      (reason) => reasons.push(reason),
+    );
+    expect(listed.map((e) => e.name)).toEqual([
+      'salidium.another',
+      'salidium.project-map',
+      'salidium.z0',
+      'salidium.z1',
+      'salidium.z2',
+      'salidium.z3',
+      'salidium.z4',
+      'salidium.z5',
+    ]);
+    expect(reasons).toHaveLength(5);
+  });
+
+  it('serves the same experimental list in the file and at the endpoint, asked once', async () => {
+    const otherRoot = mkdtempSync(join(tmpdir(), 'salidium-experimental-'));
+    let calls = 0;
+    const other = await startDaemon({
+      home: join(otherRoot, 'salidium'),
+      userHome: join(otherRoot, 'providers'),
+      port: 0,
+      providers: [],
+      gitEnrichment: false,
+      historyDays: 0,
+      logLevel: 'silent',
+      alertSink: { publish: () => {} },
+      experimentalContracts: ({ port }) => {
+        calls += 1;
+        return [
+          {
+            name: 'salidium.project-map',
+            major: 0,
+            minor: 0,
+            baseUrl: `http://127.0.0.1:${port}/project-map/v0`,
+          },
+        ];
+      },
+    });
+    try {
+      const file = ConsumerDiscoverySchema.parse(
+        JSON.parse(readFileSync(consumerDiscoveryPath(join(otherRoot, 'salidium')), 'utf8')),
+      );
+      const response = await fetch(`http://127.0.0.1:${other.port}/consumer/v1/discovery`);
+      const served = exactly(ConsumerDiscoverySchema, await response.json());
+      expect(served.experimental).toEqual([
+        {
+          name: 'salidium.project-map',
+          major: 0,
+          minor: 0,
+          baseUrl: `http://127.0.0.1:${other.port}/project-map/v0`,
+        },
+      ]);
+      expect(file.experimental).toEqual(served.experimental);
+      expect(calls).toBe(1);
+    } finally {
+      await other.stop();
+      rmSync(otherRoot, { recursive: true, force: true });
+    }
   });
 
   it('names each provider once, sorted, by the id lookup takes', () => {

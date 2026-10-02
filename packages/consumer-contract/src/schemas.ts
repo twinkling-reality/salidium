@@ -452,6 +452,21 @@ export const ConsumerContractEntrySchema = z.object({
     .describe('Loopback only. The endpoints under it are fixed by that major version.'),
 });
 
+/**
+ * A local contract this daemon serves that is not part of `salidium.consumer` and makes no
+ * compatibility promise, such as a version 0 under trial. Added in 1.1.
+ */
+export const ExperimentalContractEntrySchema = z.object({
+  name: z.string().regex(/^salidium\.[a-z][a-z0-9-]{0,40}$/),
+  major: z.number().int().nonnegative(),
+  minor: z.number().int().nonnegative(),
+  baseUrl: z
+    .string()
+    .regex(/^http:\/\/127\.0\.0\.1:\d{1,5}\/[a-z][a-z0-9-]{0,40}\/v\d+$/)
+    .describe('Loopback only.'),
+});
+export type ExperimentalContractEntry = z.infer<typeof ExperimentalContractEntrySchema>;
+
 export const ConsumerDiscoverySchema = z.object({
   ...Envelope('salidium.consumer-discovery', 1),
   contracts: z
@@ -466,6 +481,12 @@ export const ConsumerDiscoverySchema = z.object({
     .max(32)
     .describe(
       "Providers this daemon instance observes, by the id lookup's provider= takes. An id not listed is not observed by this instance until it restarts with a new instanceId. Sorted by id, each once. Added in 1.1: check minor in your contract entry first; a 1.0 daemon does not send it.",
+    ),
+  experimental: z
+    .array(ExperimentalContractEntrySchema)
+    .max(8)
+    .describe(
+      'Experimental local contracts this instance serves. No compatibility promise; consumers must not depend on them without checking. Sorted by name, each once. Added in 1.1.',
     ),
   instanceId: z
     .string()

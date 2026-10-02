@@ -11,6 +11,7 @@ import {
   ProviderRegistry,
   trustedPathEntries,
 } from '@salidium/adapter-kit';
+import type { ExperimentalContractEntry } from '@salidium/consumer-contract';
 import type { RunState } from '@salidium/core';
 import {
   type CollectionStatus,
@@ -39,6 +40,7 @@ import {
 import { ConsumerCredentialVerifier } from './consumer/credentials.ts';
 import {
   consumerDiscovery,
+  experimentalContracts,
   removeConsumerDiscovery,
   writeConsumerDiscovery,
 } from './consumer/discovery.ts';
@@ -133,6 +135,12 @@ export type StartDaemonOptions = Partial<DaemonConfig> & {
    * node_modules for executable plug-ins; callers must load and pass reviewed descriptors.
    */
   providerDescriptors?: readonly ProviderDescriptor[];
+  /**
+   * Experimental local contracts to list in consumer discovery, given the port the daemon listens
+   * on. Called once, after the port is known, so `consumer.json` and the discovery endpoint agree
+   * for the instance's whole life. Defaults to none.
+   */
+  experimentalContracts?: (context: { port: number }) => readonly unknown[];
   /** Internal persistence seam; SQLite is the production authority and default. */
   storeFactory?: SalidiumStoreFactory;
   /** Test/embedding seam; the native desktop sink is used when notification policy enables it. */
@@ -576,16 +584,23 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
 
   let port = config.port;
   const instanceId = randomBytes(16).toString('hex');
-  const discovery = () =>
-    consumerDiscovery({
+  let experimental: ExperimentalContractEntry[] | undefined;
+  const discovery = () => {
+    experimental ??= experimentalContracts(
+      overrides.experimentalContracts?.({ port }) ?? [],
+      (reason) => log.warn(reason),
+    );
+    return consumerDiscovery({
       port,
       providers: config.providers,
+      experimental,
       pid: process.pid,
       instanceId,
       startedAt,
       version: runtimeVersion,
       now: (overrides.now ?? Date.now)(),
     });
+  };
   const consumer = createConsumerRoutes({
     registry,
     credentials: new ConsumerCredentialVerifier(config.home, (reason) => log.warn(reason)),

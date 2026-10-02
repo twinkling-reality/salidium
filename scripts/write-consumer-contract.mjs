@@ -163,7 +163,11 @@ async function writeFixtures(dir) {
       },
     ]);
     daemon.registry.flush(failingId);
-    write(join(dir, 'session-feed-session-changed.json'), await feed.next('session.changed'));
+    // The seeded sessions may still announce themselves; this fixture is the late message's.
+    write(
+      join(dir, 'session-feed-session-changed.json'),
+      await feed.next('session.changed', (message) => message.sessionId === failingId),
+    );
     process.stdout.write('waiting for a heartbeat (15 s)\n');
     write(join(dir, 'session-feed-heartbeat.json'), await feed.next('heartbeat'));
     daemon.registry.forget(failingId);
@@ -182,7 +186,7 @@ async function openFeed(url, token) {
   const decoder = new TextDecoder();
   let buffer = '';
   return {
-    async next(type) {
+    async next(type, matches = () => true) {
       for (;;) {
         const boundary = buffer.indexOf('\n\n');
         if (boundary >= 0) {
@@ -193,7 +197,10 @@ async function openFeed(url, token) {
             .filter((line) => line.startsWith('data: '))
             .map((line) => line.slice(6))
             .join('\n');
-          if (data && JSON.parse(data).type === type) return JSON.parse(data);
+          if (data) {
+            const message = JSON.parse(data);
+            if (message.type === type && matches(message)) return message;
+          }
           continue;
         }
         const chunk = await reader.read();
