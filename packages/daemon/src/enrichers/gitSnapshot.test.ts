@@ -9,14 +9,12 @@ const SESSION = 'codex:thread';
 const quiet = { debug() {}, info() {}, warn() {}, error() {} } as unknown as Logger;
 
 function harness() {
-  let subscriber: ((sessionId: string, events: StoredEvent[]) => void) | undefined;
+  const subscribers: Array<(sessionId: string, events: StoredEvent[]) => void> = [];
   const ingested: CanonicalEvent[] = [];
   const registry = {
     subscribeAll(sub: (sessionId: string, events: StoredEvent[]) => void) {
-      subscriber = sub;
-      return () => {
-        subscriber = undefined;
-      };
+      subscribers.push(sub);
+      return () => {};
     },
     peek: () => ({ state: { cwd: '/repo' } }),
     ingest: (_sessionId: string, events: CanonicalEvent[]) => ingested.push(...events),
@@ -25,18 +23,22 @@ function harness() {
   const reads: Array<(observation: GitObservation) => void> = [];
   const enricher = new GitSnapshotEnricher(registry, quiet, {
     now: () => NOW,
+    minIntervalMs: 0,
     read: () => new Promise((resolve) => reads.push(resolve)),
   });
   enricher.start();
   let seq = 0;
-  const emit = (...events: Array<Partial<StoredEvent> & { kind: StoredEvent['kind'] }>) =>
-    subscriber?.(
-      SESSION,
+  const emitFor = (
+    session: string,
+    ...events: Array<Partial<StoredEvent> & { kind: StoredEvent['kind'] }>
+  ) =>
+    subscribers[0]?.(
+      session,
       events.map(
         (e) =>
           ({
             id: `e${seq}`,
-            sessionId: SESSION,
+            sessionId: session,
             ts: new Date(NOW - 1000).toISOString(),
             tsSource: 'provider',
             source: { provider: 'codex', channel: 'rollout' },
@@ -45,6 +47,8 @@ function harness() {
           }) as StoredEvent,
       ),
     );
+  const emit = (...events: Array<Partial<StoredEvent> & { kind: StoredEvent['kind'] }>) =>
+    emitFor(SESSION, ...events);
   const head = (sha: string): GitObservation => ({ repoRoot: '/repo', head: sha, dirty: [] });
   const release = async (sha: string) => {
     for (let i = 0; i < 20 && reads.length === 0; i++) await Promise.resolve();
@@ -53,7 +57,15 @@ function harness() {
   };
   const snapshots = () =>
     ingested.flatMap((e) => (e.kind === 'git.snapshot' ? [[e.trigger, e.head]] : []));
-  return { enricher, emit, release, snapshots, pendingReads: () => reads.length };
+  return {
+    enricher,
+    emit,
+    emitFor,
+    release,
+    snapshots,
+    ingested,
+    pendingReads: () => reads.length,
+  };
 }
 
 const commit = {
@@ -119,5 +131,31 @@ describe('git snapshots at session boundaries', () => {
     await enricher.settled();
     expect(pendingReads()).toBe(0);
     expect(snapshots()).toEqual([]);
+  });
+});
+
+describe('git snapshots under load', () => {
+  it('reads at most four repositories at once, across sessions', async () => {
+    const { emitFor, release, pendingReads, enricher } = harness();
+    for (let i = 0; i < 6; i++)
+      emitFor(`codex:s${i}`, { kind: 'turn.ended', outcome: 'completed' });
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect(pendingReads()).toBe(4);
+    await release('a'.repeat(40));
+    await release('a'.repeat(40));
+    expect(pendingReads()).toBe(4);
+    for (let i = 0; i < 4; i++) await release('a'.repeat(40));
+    await enricher.settled();
+    expect(pendingReads()).toBe(0);
+  });
+
+  it('reads HEAD at a resume but does not offer it as where the session started', async () => {
+    const { emit, release, ingested, enricher } = harness();
+    emit({ kind: 'session.started', cwd: '/repo', reason: 'resume' });
+    await release('a'.repeat(40));
+    await enricher.settled();
+    const [snapshot] = ingested;
+    expect(snapshot).toMatchObject({ kind: 'git.snapshot', head: 'a'.repeat(40) });
+    expect(snapshot && 'trigger' in snapshot ? snapshot.trigger : undefined).toBeUndefined();
   });
 });

@@ -651,3 +651,33 @@ describe('reducer: a removed line count that is unknown', () => {
     });
   });
 });
+
+describe('reducer: provider paths are data', () => {
+  it('records a location for a path named __proto__ without touching any prototype', () => {
+    const b = new EventBuilder();
+    const { state } = run([
+      b.sessionStarted(),
+      b.raw({
+        id: 'located:proto',
+        kind: 'file.located',
+        files: [
+          { path: '__proto__', repository: { root: '/repo', path: '__proto__' } },
+          { path: 'constructor', repository: null },
+        ],
+      }),
+    ]);
+    expect(Object.getPrototypeOf(state.fileLocations)).toBe(Object.prototype);
+    expect(Object.hasOwn(state.fileLocations, '__proto__')).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(state.fileLocations, '__proto__')?.value).toEqual({
+      root: '/repo',
+      path: '__proto__',
+    });
+    expect(({} as Record<string, unknown>).root).toBeUndefined();
+    // It survives a checkpoint, which is JSON.
+    const restored = JSON.parse(JSON.stringify(state.fileLocations));
+    expect(Object.getOwnPropertyDescriptor(restored, '__proto__')?.value).toEqual({
+      root: '/repo',
+      path: '__proto__',
+    });
+  });
+});

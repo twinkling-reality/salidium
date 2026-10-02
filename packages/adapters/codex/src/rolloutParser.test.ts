@@ -1064,6 +1064,27 @@ describe('CodexRolloutParser: the command inside a code cell (D8)', () => {
     expect(shape(store(hooks, legacy)).commands).toBe(3);
   });
 
+  it('dates an item by its record when its own times are impossible or later', () => {
+    const odd = lines.map((l) => {
+      const o = JSON.parse(l);
+      if (o.payload?.item?.id === TEST) {
+        o.payload.started_at_ms = 1e20;
+        o.payload.completed_at_ms = Date.parse('2099-01-01T00:00:00.000Z');
+      }
+      return JSON.stringify(o);
+    });
+    const events = parseAll(odd, sessionId, THREAD);
+    const call = events.find((e) => e.kind === 'tool.called' && e.callId === TEST);
+    expect(call?.ts).toBe('2026-01-01T00:00:12.000Z');
+    const result = events.find((e) => e.kind === 'tool.completed' && e.callId === TEST);
+    expect(
+      result?.kind === 'tool.completed' && result.result.kind === 'command' && result.result.exit,
+    ).toEqual({
+      code: 0,
+      observation: 'explicit',
+    });
+  });
+
   /** Events grouped by the rollout record that produced them, in record order. */
   function groupByRecord(events: CanonicalEvent[]): CanonicalEvent[][] {
     const groups = new Map<number, CanonicalEvent[]>();

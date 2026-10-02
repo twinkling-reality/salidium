@@ -135,7 +135,15 @@ export function applyEvent(state: RunState, event: StoredEvent): SemanticChange[
       onGitSnapshot(state, event, log);
       break;
     case 'file.located':
-      for (const file of event.files) state.fileLocations[file.path] = file.repository;
+      // Defined, not assigned: a path is provider data, and assigning `__proto__` would replace
+      // the record's prototype instead of adding an entry.
+      for (const file of event.files)
+        Object.defineProperty(state.fileLocations, file.path, {
+          value: file.repository,
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
       break;
     case 'ingest.warning':
       state.counters.ingestWarnings += 1;
@@ -559,19 +567,28 @@ function failureFidelity(e: StoredEventOf<'tool.failed'>): number {
 function absorbed(state: RunState, e: StoredEvent): boolean {
   if (e.kind !== 'tool.called' && e.kind !== 'tool.completed' && e.kind !== 'tool.failed')
     return false;
-  let parentId = state.absorbedCalls[e.callId];
+  // Call ids are provider data: only own entries count, so an id such as `constructor` is not
+  // mistaken for a folded call, and `__proto__` is recorded rather than assigned.
+  const own = <T>(record: Record<string, T>, key: string): T | undefined =>
+    Object.hasOwn(record, key) ? record[key] : undefined;
+  let parentId = own(state.absorbedCalls, e.callId);
   if (
     !parentId &&
     e.kind === 'tool.called' &&
     e.parentCallId &&
-    !state.activities[e.callId] &&
-    state.activities[e.parentCallId]?.kind === 'command'
+    !own(state.activities, e.callId) &&
+    own(state.activities, e.parentCallId)?.kind === 'command'
   ) {
     parentId = e.parentCallId;
-    state.absorbedCalls[e.callId] = parentId;
+    Object.defineProperty(state.absorbedCalls, e.callId, {
+      value: parentId,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
   if (!parentId) return false;
-  const parent = state.activities[parentId];
+  const parent = own(state.activities, parentId);
   if (parent) rememberEventId(parent, e.id);
   return true;
 }
@@ -1565,6 +1582,8 @@ function onGitSnapshot(state: RunState, e: StoredEventOf<'git.snapshot'>, log: C
   if (!state.repoRoot) state.repoRoot = e.repoRoot;
   // Anchors come only from snapshots that say which boundary they observed. One written before
   // snapshots named their trigger anchors nothing, rather than being guessed into a boundary.
+  // The start anchor is the first start Salidium watched. A resume, clear, or compaction reads
+  // HEAD without naming a trigger (see the git snapshot enricher), so it never stands in for one.
   const anchor = { head: e.head, branch: e.branch, at: e.ts };
   if (e.trigger === 'session.started' && !state.git.atStart) state.git.atStart = anchor;
   if (e.trigger === 'turn.ended') state.git.atTurnEnd = anchor;

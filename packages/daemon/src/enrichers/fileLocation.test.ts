@@ -1,4 +1,13 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CanonicalEvent, StoredEvent } from '@salidium/protocol';
@@ -127,6 +136,66 @@ describe('locating the repository that holds a changed file', () => {
     expect(await locator().locate(join(borrowed, 'h.ts'))).toBeNull();
   });
 
+  it('never waits on a FIFO where a pointer file should be', async () => {
+    const fifoTree = join(me, 'dev', 'fifo-tree');
+    mkdirSync(fifoTree, { recursive: true });
+    const target = join(repo, '.git', 'worktrees', 'fifo-tree');
+    gitDir(target);
+    execFileSync('mkfifo', [join(target, 'commondir')]);
+    writeFileSync(join(fifoTree, '.git'), `gitdir: ${target}\n`);
+    // Opened without blocking and refused as not a regular file; a blocking open would hang here.
+    expect(await locator().locate(join(fifoTree, 'f.ts'))).toBeNull();
+  });
+
+  it('treats a directory named like ..cache as inside, not as leaving the tree', async () => {
+    expect(await locator().locate(join(repo, '..cache', 'g.ts'))).toEqual({
+      root: repo,
+      path: '..cache/g.ts',
+    });
+  });
+
+  it('never touches a UNC or device path', async () => {
+    for (const path of ['//server/share/repo/a.ts', '\\\\server\\share\\a.ts', '\\\\?\\C:\\a.ts'])
+      expect(await locator().locate(path)).toBeNull();
+  });
+
+  it("knows home by its real path too, so another user's home stays out when home is a link", async () => {
+    const linkedHome = join(root, 'home-link');
+    symlinkSync(me, linkedHome);
+    const viaLink = new RepositoryLocator({ home: linkedHome });
+    expect(await viaLink.locate(join(theirs, 'h.ts'))).toBeNull();
+    expect(await viaLink.locate(join(repo, 'src', 'h.ts'))).toEqual({
+      root: repo,
+      path: 'src/h.ts',
+    });
+  });
+
+  it('reports no repository whose files belong to someone else', async () => {
+    const asSomeoneElse = new RepositoryLocator({ home: me, owner: (process.getuid?.() ?? 0) + 1 });
+    expect(await asSomeoneElse.locate(join(repo, 'src', 'n.ts'))).toBeNull();
+    expect(await asSomeoneElse.locate(join(tree, 'n.ts'))).toBeNull();
+  });
+
+  it('stops at a sticky directory anyone can write to, where a planted .git could claim files', async () => {
+    const shared = join(me, 'shared-tmp');
+    gitDir(join(shared, '.git'));
+    mkdirSync(join(shared, 'work'), { recursive: true });
+    chmodSync(shared, 0o1777);
+    expect(await locator().locate(join(shared, 'work', 'o.ts'))).toBeNull();
+  });
+
+  it('does not locate a path with . or .. segments, which symlinks could send elsewhere', async () => {
+    expect(await locator().locate(`${repo}/src/../src/p.ts`)).toBeNull();
+    expect(await locator().locate(`${repo}/./src/p.ts`)).toBeNull();
+  });
+
+  it('never follows a pointer to a UNC path', async () => {
+    const remote = join(me, 'dev', 'remote-pointer');
+    mkdirSync(remote, { recursive: true });
+    writeFileSync(join(remote, '.git'), 'gitdir: //attacker/share/g\n');
+    expect(await locator().locate(join(remote, 'q.ts'))).toBeNull();
+  });
+
   it('remembers directories for a while and then looks again', async () => {
     let now = 0;
     const l = new RepositoryLocator({ home: me, now: () => now });
@@ -210,6 +279,13 @@ describe('file locations for live sessions', () => {
       tsSource: 'ingest',
       source: { provider: 'codex', channel: 'salidium' },
     });
+  });
+
+  it('never looks for a change dated in the future', async () => {
+    const { enricher, change, located } = harness();
+    change([join(repo, 'src', 'm.ts')], new Date(NOW + 60_000).toISOString());
+    await enricher.settled();
+    expect(located()).toEqual([]);
   });
 
   it('never looks for a change read from history', async () => {

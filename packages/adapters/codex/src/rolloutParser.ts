@@ -735,8 +735,11 @@ export class CodexRolloutParser implements RecordParser {
     if (!callId?.startsWith('exec-') || !command) return [];
     const sid = this.ctx.sessionId;
     const turnId = asString(p.turn_id);
+    // The record's own time bounds the item's: a start or end after it, or one no date can hold,
+    // is not used, so an item cannot date a session into the future or fail the record.
+    const recorded = Date.parse(base('').ts);
     const at = (field: unknown) =>
-      typeof field === 'number' && Number.isFinite(field)
+      typeof field === 'number' && Number.isFinite(field) && field >= 0 && field <= recorded
         ? new Date(field).toISOString()
         : undefined;
     const started = at(p.started_at_ms);

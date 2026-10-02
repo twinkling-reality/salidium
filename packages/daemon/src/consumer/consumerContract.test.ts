@@ -37,6 +37,8 @@ let token: string;
 
 const CHECKOUT = '/Users/dev/acme/checkout';
 const LANE = '/Users/dev/acme/checkout-refunds';
+/** The scenario's scratch repository, whose name holds the secret, as it crosses: redacted. */
+const SCRATCH = '/Users/dev/scratch-ghp_[GITHUB_TOKEN#1]';
 const VERIFIED_ID = `claude-code:${SCENARIO_SESSIONS.verified.sessionId}`;
 const WORKING_ID = `claude-code:${SCENARIO_SESSIONS.working.sessionId}`;
 const FAILING_ID = `codex:${SCENARIO_SESSIONS.failing.sessionId}`;
@@ -476,6 +478,7 @@ describe('consumer documents', () => {
     expect(destructive?.items[0]?.instance).toBe('rm -rf node_modules/.cache');
     expect(report.verdict).toMatchObject({ tone: 'attention', provenance: 'observed' });
     expect(report.changes.files.map((file) => file.path)).toEqual([
+      `${SCRATCH}/notes.md`,
       `${LANE}/src/payments/refunds.ts`,
       `${CHECKOUT}/src/payments/ChargeService.test.ts`,
       `${CHECKOUT}/src/checkout/RetryWorker.ts`,
@@ -486,7 +489,7 @@ describe('consumer documents', () => {
       (file) => file.path === `${CHECKOUT}/src/payments/ChargeService.test.ts`,
     );
     expect(delegated?.reason).toBeNull();
-    const [refunds, retry] = report.changes.files;
+    const [, refunds, retry] = report.changes.files;
     expect(refunds?.coverage).toEqual({ verifiedAfter: false, by: null, provenance: 'inferred' });
     expect(retry?.coverage).toMatchObject({ verifiedAfter: true, provenance: 'inferred' });
     expect(report.verification.runs[0]).toMatchObject({
@@ -494,7 +497,10 @@ describe('consumer documents', () => {
       outcome: 'pass',
       counts: { passed: 118, failed: null, skipped: null, total: 118 },
     });
-    expect(report.verification.unverifiedFiles).toEqual([`${LANE}/src/payments/refunds.ts`]);
+    expect(report.verification.unverifiedFiles).toEqual([
+      `${SCRATCH}/notes.md`,
+      `${LANE}/src/payments/refunds.ts`,
+    ]);
     // 1.1: where the work started and stands, and where each file lives. The agent wrote one file
     // in a linked worktree of the session's repository, which session.repositoryRoot cannot say.
     expect(report.revision).toEqual({
@@ -506,12 +512,13 @@ describe('consumer documents', () => {
       },
       atLatestTurnEnd: {
         head: '8b1e4d7a2c9f6b3e0d5a8c1f4b7e2d9a6c3f0b5e',
-        branch: 'fix/double-charge',
+        branch: 'fix/ghp_[GITHUB_TOKEN#1]',
         at: expect.any(String),
         provenance: 'observed',
       },
     });
     expect(report.changes.files.map((file) => file.repository)).toEqual([
+      { root: SCRATCH, path: 'notes.md', mainRoot: null, provenance: 'observed' },
       { root: LANE, path: 'src/payments/refunds.ts', mainRoot: CHECKOUT, provenance: 'observed' },
       {
         root: CHECKOUT,

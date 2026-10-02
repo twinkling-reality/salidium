@@ -290,7 +290,12 @@ export function toSessionReport(
       files: view.changes.files.map((file) => ({
         // Identifiers cross whole; like every string that crosses, they pass the redactor again.
         path: text.exact(file.path),
-        repository: repository(state.fileLocations[file.path], text),
+        repository: repository(
+          Object.hasOwn(state.fileLocations, file.path)
+            ? state.fileLocations[file.path]
+            : undefined,
+          text,
+        ),
         changeCount: file.changeCount,
         linesAdded: file.linesAdded,
         linesRemoved: file.linesRemoved,

@@ -14,14 +14,14 @@
     "model": "claude-opus-5",
     "status": "ended",
     "startedAt": "2026-09-20T15:40:00.000Z",
-    "lastEventAt": "2026-09-20T15:41:30.000Z",
-    "endedAt": "2026-09-20T15:41:25.000Z",
-    "evidenceSeq": 24,
+    "lastEventAt": "2026-09-20T15:41:35.000Z",
+    "endedAt": "2026-09-20T15:41:30.000Z",
+    "evidenceSeq": 26,
     "counts": {
       "turns": 1,
-      "toolCalls": 6,
-      "filesChanged": 4,
-      "linesAdded": 43,
+      "toolCalls": 7,
+      "filesChanged": 5,
+      "linesAdded": 46,
       "linesRemoved": 6,
       "linesRemovedExact": true,
       "reviewOpen": 2,
@@ -35,17 +35,17 @@
     "explanation": "generated"
   },
   "verdict": {
-    "headline": "4 files changed, unverified",
+    "headline": "5 files changed, unverified",
     "tone": "attention",
     "provenance": "observed",
-    "because": "1 file changed after the last passing check (118/118 tests passed (vitest)).",
+    "because": "2 files changed after the last passing check (118/118 tests passed (vitest)).",
     "at": "2026-09-20T15:40:50.000Z"
   },
   "latestStatement": {
     "text": "Fixed the double charge with one idempotency key per order.",
     "provenance": "reported",
     "author": "agent",
-    "at": "2026-09-20T15:41:15.000Z"
+    "at": "2026-09-20T15:41:20.000Z"
   },
   "waiting": null,
   "revision": {
@@ -57,14 +57,42 @@
     },
     "atLatestTurnEnd": {
       "head": "8b1e4d7a2c9f6b3e0d5a8c1f4b7e2d9a6c3f0b5e",
-      "branch": "fix/double-charge",
-      "at": "2026-09-20T15:41:20.000Z",
+      "branch": "fix/ghp_[GITHUB_TOKEN#1]",
+      "at": "2026-09-20T15:41:25.000Z",
       "provenance": "observed"
     }
   },
   "changes": {
-    "glance": "4 files changed (+43 −6) · 2 commands",
+    "glance": "5 files changed (+46 −6) · 2 commands",
     "files": [
+      {
+        "path": "/Users/dev/scratch-ghp_[GITHUB_TOKEN#1]/notes.md",
+        "repository": {
+          "root": "/Users/dev/scratch-ghp_[GITHUB_TOKEN#1]",
+          "path": "notes.md",
+          "mainRoot": null,
+          "provenance": "observed"
+        },
+        "changeCount": 1,
+        "linesAdded": 3,
+        "linesRemoved": 0,
+        "linesRemovedExact": true,
+        "kinds": [
+          "update"
+        ],
+        "lastChangedAt": "2026-09-20T15:41:05.000Z",
+        "coverage": {
+          "verifiedAfter": false,
+          "by": null,
+          "provenance": "inferred"
+        },
+        "reason": {
+          "text": "I will add an idempotency key in ChargeService so a retried charge returns the first one.",
+          "provenance": "reported",
+          "author": "agent",
+          "at": "2026-09-20T15:40:15.000Z"
+        }
+      },
       {
         "path": "/Users/dev/acme/checkout-refunds/src/payments/refunds.ts",
         "repository": {
@@ -227,6 +255,7 @@
       }
     ],
     "unverifiedFiles": [
+      "/Users/dev/scratch-ghp_[GITHUB_TOKEN#1]/notes.md",
       "/Users/dev/acme/checkout-refunds/src/payments/refunds.ts"
     ],
     "statements": [
@@ -248,13 +277,13 @@
         "label": "Recursive force delete",
         "severity": "medium",
         "occurrences": 1,
-        "latestAt": "2026-09-20T15:41:07.000Z",
+        "latestAt": "2026-09-20T15:41:12.000Z",
         "items": [
           {
             "id": "destructive:c5",
             "label": "Recursive force delete",
             "instance": "rm -rf node_modules/.cache",
-            "createdAt": "2026-09-20T15:41:07.000Z",
+            "createdAt": "2026-09-20T15:41:12.000Z",
             "provenance": "observed",
             "repeats": 1
           }
@@ -262,16 +291,16 @@
       },
       {
         "rule": "changes-unverified",
-        "label": "1 file changed since the last passing check",
+        "label": "2 files changed since the last passing check",
         "severity": "low",
         "occurrences": 1,
-        "latestAt": "2026-09-20T15:41:15.000Z",
+        "latestAt": "2026-09-20T15:41:20.000Z",
         "items": [
           {
-            "id": "changes-unverified:21",
-            "label": "1 file changed since the last passing check",
+            "id": "changes-unverified:23",
+            "label": "2 files changed since the last passing check",
             "instance": null,
-            "createdAt": "2026-09-20T15:41:15.000Z",
+            "createdAt": "2026-09-20T15:41:20.000Z",
             "provenance": "inferred",
             "repeats": 1
           }
@@ -295,8 +324,8 @@
     "status": "generated",
     "provenance": "explained",
     "current": true,
-    "basedOnSeq": 23,
-    "generatedAt": "2026-09-20T15:41:30.000Z",
+    "basedOnSeq": 25,
+    "generatedAt": "2026-09-20T15:41:35.000Z",
     "model": "claude-opus-5",
     "content": {
       "what": {
@@ -341,7 +370,7 @@
   "usage": null,
   "ingest": {
     "warnings": 0,
-    "redactions": 1,
+    "redactions": 2,
     "compactions": 0
   }
 }

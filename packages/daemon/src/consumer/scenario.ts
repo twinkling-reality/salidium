@@ -36,6 +36,8 @@ export const SCENARIO_SESSIONS = {
 const CWD = '/Users/dev/acme/checkout';
 /** A linked worktree of CWD, where the agent wrote one file: the session's root does not hold it. */
 const LANE = '/Users/dev/acme/checkout-refunds';
+/** A scratch repository whose name holds the secret, so located paths prove the boundary redacts. */
+const SCRATCH = `/Users/dev/scratch-${CONSUMER_SECRET}`;
 
 const VITEST_PASS = `
  ✓ src/payments/ChargeService.test.ts (14 tests) 210ms
@@ -109,6 +111,7 @@ function verifiedSession(): CanonicalEvent[] {
     ...b.command('c3', `pnpm test ${CONSUMER_CANARIES.command}`, VITEST_PASS, { exitCode: 0 }),
     b.message(`All tests pass. The staging key ${CONSUMER_SECRET} was never used by the fix.`),
     ...b.edit('c4', `${LANE}/src/payments/refunds.ts`, 5, 1),
+    ...b.edit('c4b', `${SCRATCH}/notes.md`, 3, 0),
     // Where Salidium found each changed file, as its file locator reports it for a live session.
     b.raw({
       id: 'located:1',
@@ -123,6 +126,7 @@ function verifiedSession(): CanonicalEvent[] {
           path: `${LANE}/src/payments/refunds.ts`,
           repository: { root: LANE, path: 'src/payments/refunds.ts', mainRoot: CWD },
         },
+        { path: `${SCRATCH}/notes.md`, repository: { root: SCRATCH, path: 'notes.md' } },
       ],
     } as never),
     // The destructive segment is the review finding and crosses; the rest of the line does not.
@@ -148,7 +152,8 @@ function verifiedSession(): CanonicalEvent[] {
       kind: 'git.snapshot',
       repoRoot: CWD,
       head: '8b1e4d7a2c9f6b3e0d5a8c1f4b7e2d9a6c3f0b5e',
-      branch: 'fix/double-charge',
+      // The agent switched to a branch whose name holds the secret; the anchor must not carry it.
+      branch: `fix/${CONSUMER_SECRET}`,
       dirty: [],
       trigger: 'turn.ended',
     } as never),

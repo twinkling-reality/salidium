@@ -363,7 +363,7 @@ export const SessionReportSchema = z.object({
   revision: z
     .object({
       atStart: RevisionAnchorSchema.nullable().describe(
-        'When the session started. Kept from the first start; a resumed session does not replace it.',
+        'When the session started. Kept from the first start Salidium watched. A resume, clear, or compaction does not count as a start, so a session Salidium first watched after it started has none.',
       ),
       atLatestTurnEnd: RevisionAnchorSchema.nullable().describe(
         'When the most recent turn ended. Commits made since then are in changes.commits.',
