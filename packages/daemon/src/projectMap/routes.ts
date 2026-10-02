@@ -130,8 +130,8 @@ export function createProjectMapRoutes(deps: ProjectMapRouteDeps) {
   }
 
   function write(res: ServerResponse, result: RouteResult): void {
-    if (result.status === 200) return json(res, 200, result.body);
-    return fail(res, result.error, result.message, result.status);
+    if (result.status === 200) json(res, 200, result.body);
+    else fail(res, result.error, result.message, result.status);
   }
 
   return {
