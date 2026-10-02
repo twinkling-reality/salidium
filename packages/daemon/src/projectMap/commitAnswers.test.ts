@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
@@ -98,5 +98,18 @@ describe('commit answers', () => {
     expect(reads.count).toBe(2);
     advance(60_001);
     expect(await maps.commitExists(repo.dir, 'e'.repeat(40))).toEqual({ ok: true, exists: false });
+  });
+
+  test('a commit that vanished under its grant is remembered as missing once a build finds it gone', async () => {
+    const { repo, commit, maps, reads } = setup();
+    expect(await maps.commitExists(repo.dir, commit)).toEqual({ ok: true, exists: true });
+    unlinkSync(repo.objectPath(commit));
+    expect(await maps.getMap(repo.dir, commit)).toMatchObject({
+      ok: false,
+      refusal: { error: 'commit-unknown' },
+    });
+    const before = reads.count;
+    expect(await maps.commitExists(repo.dir, commit)).toEqual({ ok: true, exists: false });
+    expect(reads.count).toBe(before);
   });
 });

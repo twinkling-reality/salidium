@@ -216,6 +216,9 @@ export class DaemonProjectMapService implements ProjectMapService {
           : undefined;
       if (cached) return this.remember(key, cached.map, cached.text);
       const built = await this.build(repository, commit);
+      // A commit can vanish under its grant (gc after a rebase or a deleted branch). Remembering
+      // that here, under the same key, stops readers from spending a build on it again and again.
+      if (!built.ok && built.refusal.error === 'commit-unknown') this.rememberCommit(key, false);
       return built.ok ? this.remember(key, built.map, built.text) : built;
     }).finally(() => this.inFlight.delete(key));
     this.inFlight.set(key, work);
