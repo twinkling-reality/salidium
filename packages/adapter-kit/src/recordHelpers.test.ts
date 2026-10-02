@@ -46,5 +46,7 @@ describe('pathArgumentMetadata', () => {
     ).toBe(true);
     expect(pathArgumentMetadata({ path: '/repo/100%.md' }).undecodable).toBe(false);
     expect(pathArgumentMetadata({ uri: 'file:///repo/100%25.md' }).undecodable).toBe(false);
+    expect(pathArgumentMetadata({ url: 'https://x/?q=100%' }).undecodable).toBe(false);
+    expect(pathArgumentMetadata({ url: 'file:///repo/100%' }).undecodable).toBe(true);
   });
 });

@@ -47,11 +47,18 @@
   `view_image`, the MCP filesystem tool `read_media_file`, and an MCP path argument too long to keep
   whole.
 - More shell commands count as printing a sensitive file: through `sudo`, `env`, `command`, `nice`,
-  `time`, `timeout`, `nohup` or `xargs`; with readers such as `tac`, `nl`, `base64`, `xxd`, `od`,
-  `hexdump` and `strings`; by input redirection (`< .env cat`); by a glob that carries a sensitive
-  name's stem (`.env*`, `*.pem`, `id_*`, `~/.ssh/*`, but not `*.json`); as `git show <rev>:.env`
-  or `git cat-file -p <rev>:.env`; and inside `$(...)`, `bash -c` or `find -exec`. A recursive
-  search of a directory that merely contains a sensitive file (`grep -r KEY .`) is not caught.
+  `time`, `timeout`, `nohup` or `xargs` (option clusters such as `sudo -Eu root` included); with
+  readers such as `tac`, `nl`, `base64`, `xxd`, `od`, `hexdump` and `strings`; by input
+  redirection (`< .env cat`); across a line continuation; by a glob that carries enough of a
+  sensitive name (`.env*`, `.e*`, `*.pem`, `cred*`, `id_*`, `~/.kube/*`, but not `*.json` or
+  `package*.json`); as `git show <rev>:.env` or `git cat-file -p <rev>:.env`; and inside `$(...)`,
+  `bash -c` or `find -exec`. A grep, sed or awk pattern, `git log -S` or `--grep`, and filters such
+  as `--exclude=.env` are not read as paths, and `set -e` or `export FOO=1` no longer hide a
+  command's output; only a bare `set` or `export` counts as a dump.
+- Known limits: a recursive search of a directory that merely contains a sensitive file
+  (`grep -r KEY .`), output lines whose `path:` prefix names a sensitive file, names reached by
+  indirection (`f=.env; cat "$f"`), PowerShell, `cmd` and interpreter readers, Claude Code's Grep
+  `glob` argument, `git show :0:.env`, and Windows 8.3 short names are not recognized.
 
 ## 0.8.0 - 2026-10-02
 

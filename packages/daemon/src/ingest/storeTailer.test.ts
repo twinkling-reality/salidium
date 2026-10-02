@@ -382,6 +382,36 @@ describe('OpenCode through the daemon', () => {
     });
   });
 
+  it('keeps the raw view of a web fetch whose address holds a literal percent', async () => {
+    const step = store.message(
+      nativeId,
+      'assistant',
+      stepData(T0 + 190, [
+        {
+          type: 'tool',
+          id: 'call_web',
+          name: 'webfetch',
+          executed: false,
+          state: {
+            status: 'completed',
+            input: { url: 'https://example.com/?q=100%' },
+            content: [{ type: 'text', text: 'ordinary page' }],
+            metadata: {},
+          },
+          time: { created: T0 + 191, completed: T0 + 192 },
+        },
+      ]),
+    );
+    const callId = `${step.id}/call_web`;
+    const completed = await waitFor(async () =>
+      (await events()).find((e) => e.kind === 'tool.completed' && e.callId === callId),
+    );
+    const raw = await api<{ raw: unknown; reason?: string }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/raw/${encodeURIComponent(completed.id)}`,
+    );
+    expect(JSON.stringify(raw.raw)).toContain('ordinary page');
+  });
+
   it('keeps the raw view of a read whose native path holds a literal percent', async () => {
     const step = store.message(
       nativeId,

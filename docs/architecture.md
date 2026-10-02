@@ -273,16 +273,30 @@ redacted event still matches the immutable stored event apart from its fingerpri
 Structural suppression runs before general text redaction for credential dumps and reads of
 sensitive files. A path is compared in every spelling a tool might open: as given, as a `file:`
 URI's path, percent-decoded, with separators, `.` and `..` segments and trailing dots normalized,
-and without regard to case. The comparison is lexical and never consults the filesystem. A URI
-(a `file:` value, or one under a `uri`, `url` or `href` argument) whose percent-encoding cannot
-be decoded counts as sensitive; in a native path a `%` that is not a valid escape is literal.
+and without regard to case. The comparison is lexical and never consults the filesystem. A `file:`
+or scheme-less URI (including one under a `uri`, `url` or `href` argument) whose percent-encoding
+cannot be decoded counts as sensitive; in a native path or a web address a `%` that is not a
+valid escape is literal.
+
 Shell arguments are not percent-decoded, since a shell passes them through as written. A command
-counts as printing a sensitive file when a reader names it directly, through a prefix such as
-`sudo`, `env`, `xargs` or `bash -c`, by input redirection, by a glob that can match a sensitive
-name and whose literal characters carry that name's distinctive stem (`.env*`, `*.pem`, `id_*`,
-but not `*.json`), or as `git show <rev>:<path>`. Windows 8.3 short names are not recognized, a
-recursive read of a directory that merely contains a sensitive file (`grep -r KEY .`) is not
-caught, and events stored before a rule changed keep what they stored. General redaction then replaces recognized secrets with stable placeholders so a
+counts as printing a sensitive file when a reader is given it as a file: directly, through a
+prefix such as `sudo`, `env`, `xargs` or `bash -c`, by input redirection, by a glob that can
+match a sensitive name and carries enough of it (its stem, a leading dot for a dotfile, or the
+first three or more characters of the name: `.env*`, `.e*`, `*.pem`, `cred*`, `~/.kube/*`, but not
+`*.json`), or as `git show <rev>:<path>`. A pattern or program operand (`grep 'process\.env'`,
+`awk '/\.env/'`, `git log -S .env`) and a filter (`--exclude=.env`, `rg -g '!.env'`) are never
+read as paths, and `set` and `export` count as dumps only when bare.
+
+Known limits: Windows 8.3 short names are not recognized; a recursive read of a directory that
+merely contains a sensitive file (`grep -r KEY .`) is not caught; output is suppressed per command,
+not filtered line by line where a prefix such as `path:` names a sensitive file; a name reached by
+indirection (`f=.env; cat "$f"`, `cat $(echo .env)`, a `for` list, a here-string) is not followed;
+PowerShell, `cmd` and interpreter readers (`python -c`, `node -e`) are not recognized; Claude
+Code's Grep `glob` argument and `git show :0:.env` are not checked; and events stored before a rule
+changed keep what they stored. Recognizing printing commands from a list of readers is the weaker
+design; an allowlist of commands known not to print files would be stronger.
+
+General redaction then replaces recognized secrets with stable placeholders so a
 repeated secret remains recognizable without revealing it. Provider records are not copied into a
 hosted Salidium service.
 

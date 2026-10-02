@@ -242,12 +242,16 @@ export function isSensitivePath(path: string): boolean {
   return isSensitiveSpelling(path, 'path');
 }
 
+/** A URI with a scheme other than `file:` (`https:`); a one-letter drive (`C:`) is not one. */
+const OTHER_SCHEME = /^(?!file:)[a-z][a-z0-9+.-]+:/i;
+
 /**
  * As {@link isSensitivePath}, for a value given as a URI (under a `uri`, `url` or `href` key):
- * a malformed escape counts as sensitive whatever the value looks like.
+ * a `file:` or scheme-less value with a malformed escape counts as sensitive. A web address
+ * (`https://x/?q=100%`) is not a file a tool opens, so its `%` is read as in a path.
  */
 export function isSensitiveUri(value: string): boolean {
-  return isSensitiveSpelling(value, 'uri');
+  return isSensitiveSpelling(value, OTHER_SCHEME.test(trimControls(value)) ? 'path' : 'uri');
 }
 
 /** Keys whose values are URIs, decoded by whatever opens them. */
@@ -339,7 +343,9 @@ export function isSensitiveMcpFileRead(input: McpInput): boolean {
   }
 }
 
-const ENV_OUTPUT_COMMANDS = new Set(['printenv', 'set', 'export']);
+/** `printenv` prints a value even when named; `set` and `export` print only when bare. */
+const ENV_OUTPUT_COMMANDS = new Set(['printenv']);
+const BARE_ENV_OUTPUT_COMMANDS = new Set(['set', 'export', 'declare', 'typeset']);
 
 /** Commands that print the contents of a file named in their arguments. */
 const FILE_OUTPUT_COMMANDS = new Set([
@@ -382,20 +388,123 @@ const FILE_OUTPUT_COMMANDS = new Set([
 ]);
 
 /**
- * Readers whose first operand is a pattern or program rather than a file, and the options that
- * supply it instead (`grep -e KEY .env`); null when no option does. Case matters: `-E` is not `-e`.
+ * How a reader's options and operands are read: which options take a value that is a pattern
+ * or program (never a path), a file (checked), or something else (skipped), and whether the first
+ * operand is a pattern or program unless an option supplies one. Short options are single
+ * letters, so a cluster (`-rne PATTERN`) is read letter by letter. Case matters: `-E` is not `-e`.
  */
-const SCRIPT_FIRST_COMMANDS: Record<string, RegExp | null> = {
-  grep: /^(?:-[a-zA-Z]*[ef]|--regexp|--file)/,
-  egrep: /^(?:-[a-zA-Z]*[ef]|--regexp|--file)/,
-  fgrep: /^(?:-[a-zA-Z]*[ef]|--regexp|--file)/,
-  rg: /^(?:-[a-zA-Z]*[ef]|--regexp|--file)/,
-  sed: /^(?:-[a-zA-Z]*[ef]|--expression|--file)/,
-  awk: /^(?:-[a-zA-Z]*f|--file)/,
-  gawk: /^(?:-[a-zA-Z]*f|--file)/,
-  jq: null,
-  yq: null,
+interface ReaderSyntax {
+  scriptFirst?: boolean;
+  pattern?: string[];
+  file?: string[];
+  value?: string[];
+}
+
+const GREP_SYNTAX: ReaderSyntax = {
+  scriptFirst: true,
+  pattern: ['e', '--regexp'],
+  file: ['f', '--file'],
+  value: ['A', 'B', 'C', 'm', 'd', 'D', '--max-count', '--context', '--label', '--color'],
 };
+
+const READER_SYNTAX: Record<string, ReaderSyntax> = {
+  grep: GREP_SYNTAX,
+  egrep: GREP_SYNTAX,
+  fgrep: GREP_SYNTAX,
+  rg: {
+    scriptFirst: true,
+    pattern: ['e', '--regexp'],
+    file: ['f', '--file'],
+    value: ['g', 't', 'T', 'A', 'B', 'C', 'm', 'M', 'j', 'E', 'r', '--glob', '--iglob', '--type'],
+  },
+  sed: {
+    scriptFirst: true,
+    pattern: ['e', '--expression'],
+    file: ['f', '--file'],
+    value: ['l', '--line-length'],
+  },
+  awk: {
+    scriptFirst: true,
+    pattern: ['e', '--source'],
+    file: ['f', '--file'],
+    value: ['v', 'F', '--assign', '--field-separator'],
+  },
+  jq: {
+    scriptFirst: true,
+    file: ['f', '--from-file'],
+    value: ['--indent', '--tab'],
+  },
+  yq: { scriptFirst: true, file: ['--from-file'], value: ['--indent'] },
+};
+READER_SYNTAX.gawk = READER_SYNTAX.awk as ReaderSyntax;
+
+/** jq options followed by a name and then a value: the value of the file ones is read. */
+const JQ_NAMED_VALUES: Record<string, 'file' | 'value'> = {
+  '--arg': 'value',
+  '--argjson': 'value',
+  '--slurpfile': 'file',
+  '--rawfile': 'file',
+};
+
+/** What kind of value an option takes for this reader; `--include*` and `--exclude*` are filters. */
+function optionKind(syntax: ReaderSyntax, name: string): 'pattern' | 'file' | 'value' | 'flag' {
+  if (syntax.pattern?.includes(name)) return 'pattern';
+  if (syntax.file?.includes(name)) return 'file';
+  if (syntax.value?.includes(name) || /^--(?:include|exclude)/.test(name)) return 'value';
+  return 'flag';
+}
+
+/**
+ * The words a reader is given as files: its operands, less a leading pattern or program, plus the
+ * values of options that name a file. Pattern and filter values are never read as paths.
+ */
+function readerFiles(executable: string, args: string[]): string[] {
+  const syntax = READER_SYNTAX[executable] ?? {};
+  const files: string[] = [];
+  const operands: string[] = [];
+  let scriptGiven = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] ?? '';
+    if (arg === '--') {
+      operands.push(...args.slice(i + 1));
+      break;
+    }
+    if (arg.startsWith('--')) {
+      const eq = arg.indexOf('=');
+      const name = eq < 0 ? arg : arg.slice(0, eq);
+      const named = executable === 'jq' ? JQ_NAMED_VALUES[name] : undefined;
+      if (named) {
+        if (named === 'file' && args[i + 2] !== undefined) files.push(args[i + 2] ?? '');
+        i += 2;
+        continue;
+      }
+      const kind = optionKind(syntax, name);
+      if (kind === 'flag') {
+        // An unknown `--option=value` may name a file; checking it only over-matches.
+        if (eq >= 0) files.push(arg.slice(eq + 1));
+        continue;
+      }
+      if (kind === 'pattern' || kind === 'file') scriptGiven = true;
+      const value = eq >= 0 ? arg.slice(eq + 1) : args[++i];
+      if (kind === 'file' && value !== undefined) files.push(value);
+      continue;
+    }
+    if (arg.startsWith('-') && arg.length > 1) {
+      for (let k = 1; k < arg.length; k++) {
+        const kind = optionKind(syntax, arg[k] ?? '');
+        if (kind === 'flag') continue;
+        if (kind === 'pattern' || kind === 'file') scriptGiven = true;
+        const value = k + 1 < arg.length ? arg.slice(k + 1) : args[++i];
+        if (kind === 'file' && value !== undefined) files.push(value);
+        break;
+      }
+      continue;
+    }
+    operands.push(arg);
+  }
+  if (syntax.scriptFirst && !scriptGiven) operands.shift();
+  return [...files, ...operands];
+}
 
 /**
  * Commands that run the command after them, with the options that take a value and the number of
@@ -557,7 +666,10 @@ function shellSegments(command: string): ShellSegment[] {
       continue;
     }
     if (char === '\\' && quote !== "'") {
-      escaped = true;
+      // A line continuation joins the lines: `ca\<newline>t .env` runs `cat .env`.
+      if (chars[i + 1] === '\n') i++;
+      else if (chars[i + 1] === '\r' && chars[i + 2] === '\n') i += 2;
+      else escaped = true;
       continue;
     }
     if (quote) {
@@ -634,6 +746,19 @@ function executableName(token: string): string {
   return normalized.slice(normalized.lastIndexOf('/') + 1);
 }
 
+/**
+ * Whether an option takes the next word as its value: named in `values`, or a short-option
+ * cluster whose last letter is (`sudo -Eu root`, `env -iu NAME`).
+ */
+function takesValue(arg: string, values: string[] | undefined): boolean {
+  if (!values) return false;
+  if (values.includes(arg)) return true;
+  return /^-[A-Za-z]{2,}$/.test(arg) && values.includes(`-${arg.at(-1)}`);
+}
+
+const ENV_VALUE_OPTIONS = ['-u', '--unset', '-C', '--chdir', '-S', '--split-string'];
+
+/** Whether `env` with these arguments prints the environment rather than running a command. */
 function envCommandIsDump(args: string[]): boolean {
   let i = 0;
   while (i < args.length) {
@@ -642,12 +767,9 @@ function envCommandIsDump(args: string[]): boolean {
       i++;
       continue;
     }
-    if (arg === '-u' || arg === '--unset' || arg === '-C' || arg === '--chdir' || arg === '-S') {
-      i += 2;
-      continue;
-    }
+    // A bare `-` is `-i`.
     if (arg.startsWith('-')) {
-      i++;
+      i += takesValue(arg, ENV_VALUE_OPTIONS) ? 2 : 1;
       continue;
     }
     return false;
@@ -695,8 +817,9 @@ function invocation(words: string[]): Invocation | undefined {
           script: [inline, ...words.slice(i + 1)].join(' '),
         };
       }
-      if (arg.startsWith('-') && arg !== '-') {
-        i += prefix.values?.includes(arg) ? 2 : 1;
+      // After `env`, a bare `-` is an option (`-i`), not a command.
+      if (arg.startsWith('-') && (arg !== '-' || executable === 'env')) {
+        i += takesValue(arg, prefix.values) ? 2 : 1;
         continue;
       }
       if (executable === 'env' && ASSIGNMENT.test(arg)) {
@@ -858,14 +981,20 @@ function globsIntersect(a: GlobToken[], b: GlobToken[]): boolean {
   return go(0, 0);
 }
 
+const allStars = (tokens: GlobToken[]) => tokens.every((t) => t.kind === 'star');
+
 /**
  * Whether a user's glob segment can match a sensitive one. A leading dot is matched only by a
  * dot (the shell default), and a segment that is all `*` names everything rather than a sensitive
- * file, so it matches only a sensitive segment that is itself all `*` (`~/.ssh/*`).
+ * file, so it matches only a sensitive segment that is itself all `*` (`~/.ssh/*`), unless the
+ * caller has already matched the directories above it literally (`~/.kube/*`).
  */
-function segmentMatches(user: GlobToken[], family: GlobToken[]): boolean {
-  const allStars = (tokens: GlobToken[]) => tokens.every((t) => t.kind === 'star');
-  if (allStars(user)) return allStars(family);
+function segmentMatches(
+  user: GlobToken[],
+  family: GlobToken[],
+  underLiteralDirs: boolean,
+): boolean {
+  if (allStars(user)) return allStars(family) || underLiteralDirs;
   const first = user[0];
   if (
     family[0]?.kind === 'char' &&
@@ -881,6 +1010,8 @@ const MAX_NAME_CHARS = 255;
 const MAX_READER_OPERANDS = 1024;
 const SENSITIVE_GLOB_TOKENS = SENSITIVE_GLOBS.map((family) => ({
   segments: family.segments.map(globTokens),
+  /** Each segment's literal text, wildcards removed (`*.key` is `.key`). */
+  literals: family.segments.map((segment) => segment.replace(/[*?]/g, '')),
   stem: family.stem,
 }));
 
@@ -911,6 +1042,28 @@ function braceExpansions(word: string): string[] {
   return out.slice(0, 64);
 }
 
+/**
+ * Whether a glob that can match a sensitive name also carries enough of it to single it out:
+ * the name's distinctive stem (`auth*.json`, `*.pem`); a leading dot against a dotfile or dot
+ * directory (`.e*`, `.*`, a `.s*` directory), since dotfiles are globbed on purpose; or a literal run of
+ * three or more characters that begins the name (`cred*`, `*.ke?`). `*.json` and `package*.json`
+ * carry none of these.
+ */
+function carriesSensitiveName(
+  userParts: string[],
+  user: GlobToken[][],
+  family: { literals: string[]; stem: RegExp },
+): boolean {
+  if (family.stem.test(globLiterals(userParts.join('/')))) return true;
+  return user.some((tokens, k) => {
+    const name = family.literals[k] ?? '';
+    const first = tokens[0];
+    if (name.startsWith('.') && first?.kind === 'char' && first.char === '.') return true;
+    const runs = globLiterals(userParts[k] ?? '').split('\0');
+    return runs.some((run) => run.length >= 3 && name.startsWith(run));
+  });
+}
+
 /** Whether a shell glob (`.env*`, `*.pem`, `id_*`, `.env{,.local}`) can match a sensitive name. */
 function globNamesSensitive(word: string): boolean {
   if (!/[*?[{]/.test(word)) return false;
@@ -928,13 +1081,22 @@ function globNamesSensitive(word: string): boolean {
     // No file name is longer than 255 characters; a longer pattern is not scanned.
     if (parts.some((part) => part.length > MAX_NAME_CHARS)) return true;
     const segments = parts.map(globTokens);
-    const literals = globLiterals(parts.join('/'));
-    for (const { segments: family, stem: familyStem } of SENSITIVE_GLOB_TOKENS) {
-      if (!familyStem.test(literals)) continue;
+    for (const family of SENSITIVE_GLOB_TOKENS) {
       // Align the ends; a glob shorter than the family may name its directory (`.ss*`).
-      const user = segments.length >= family.length ? segments.slice(-family.length) : segments;
-      const against = segments.length >= family.length ? family : family.slice(0, segments.length);
-      if (user.length && user.every((u, k) => segmentMatches(u, against[k] ?? []))) return true;
+      const longEnough = segments.length >= family.segments.length;
+      const user = longEnough ? segments.slice(-family.segments.length) : segments;
+      const against = longEnough ? family.segments : family.segments.slice(0, segments.length);
+      if (!user.length) continue;
+      const userParts = longEnough ? parts.slice(-family.segments.length) : parts;
+      // `~/.kube/*`: the directories match the family's literally, so `*` stands for its files.
+      const literalDirs =
+        user.length > 1 &&
+        userParts.slice(0, -1).every((part, k) => part === family.literals[k]) &&
+        family.segments.length === user.length;
+      const matches = user.every((u, k) =>
+        segmentMatches(u, against[k] ?? [], literalDirs && k === user.length - 1),
+      );
+      if (matches && carriesSensitiveName(userParts, user, family)) return true;
     }
   }
   return false;
@@ -956,30 +1118,105 @@ function namesSensitiveFileOrTree(word: string): boolean {
   return isSensitiveShellWord(word) || isSensitiveSpelling(`${word}/_`, 'none');
 }
 
-/** A reader's operands, with a pattern or program operand checked only literally. */
-function readerReadsSensitive(executable: string, args: string[], extra: string[]): boolean {
-  const scriptOption = SCRIPT_FIRST_COMMANDS[executable];
-  const firstOperand =
-    scriptOption !== undefined && !args.some((a) => scriptOption?.test(a))
-      ? args.findIndex((a) => !a.startsWith('-'))
-      : -1;
-  if (isSensitiveSpelling(args[firstOperand] ?? '', 'none')) return true;
-  const operands = new Set([...args.filter((_, k) => k !== firstOperand), ...extra]);
+/** Whether any of these words names a sensitive file or tree; too many count as sensitive. */
+function anyNamesSensitive(words: Iterable<string>): boolean {
+  const unique = new Set(words);
   // More operands than any real invocation names: counted as sensitive rather than scanned.
-  if (operands.size > MAX_READER_OPERANDS) return true;
-  return [...operands].some(namesSensitiveFileOrTree);
+  if (unique.size > MAX_READER_OPERANDS) return true;
+  for (const word of unique) if (namesSensitiveFileOrTree(word)) return true;
+  return false;
 }
 
+/** Git options whose value is a pattern, a revision or a format, never a path to read. */
+const GIT_SKIPPED_VALUES = new Set([
+  '-S',
+  '-G',
+  '-e',
+  '--grep',
+  '--author',
+  '--committer',
+  '-n',
+  '--max-count',
+  '--skip',
+  '--since',
+  '--after',
+  '--until',
+  '--before',
+  '--format',
+  '--pretty',
+  '--date',
+  '-m',
+  '--max-depth',
+  '-O',
+  '-U',
+  '--unified',
+  '--diff-filter',
+]);
+
+/**
+ * Whether git prints a sensitive file: `git show HEAD:.env`, `git cat-file -p :.env`, a path
+ * after `--`, `git log -L1,9:.env`, or a `git grep -f` pattern file. Pattern and revision options
+ * (`-S`, `--grep`, `--author`) and `git grep`'s own pattern are never read as paths.
+ */
 function gitShowsSensitive(args: string[]): boolean {
   let i = 0;
   while (i < args.length && (args[i] ?? '').startsWith('-'))
     i += GIT_VALUE_OPTIONS.has(args[i] ?? '') ? 2 : 1;
-  if (!GIT_CONTENT_COMMANDS.has(args[i] ?? '')) return false;
-  // `git show HEAD:.env` and `git cat-file -p :.env` name the file after the revision.
-  return args.slice(i + 1).some((arg) => {
+  const subcommand = args[i] ?? '';
+  if (!GIT_CONTENT_COMMANDS.has(subcommand)) return false;
+  const named = (arg: string) => {
     const colon = arg.indexOf(':');
     return isSensitiveShellWord(arg) || (colon >= 0 && isSensitiveShellWord(arg.slice(colon + 1)));
-  });
+  };
+  const operands: string[] = [];
+  let patternGiven = false;
+  for (let k = i + 1; k < args.length; k++) {
+    const arg = args[k] ?? '';
+    if (arg === '--') return args.slice(k + 1).some(named) || false;
+    if (!arg.startsWith('-') || arg === '-') {
+      operands.push(arg);
+      continue;
+    }
+    const eq = arg.indexOf('=');
+    const name = eq < 0 ? arg : arg.slice(0, eq);
+    const attached = eq < 0 && /^-[A-Za-z]./.test(arg) ? arg.slice(2) : undefined;
+    if (name === '-L' || name.startsWith('-L')) {
+      const value = eq >= 0 ? arg.slice(eq + 1) : attached || args[++k];
+      if (value !== undefined && named(value)) return true;
+      continue;
+    }
+    if (subcommand === 'grep' && (name === '-f' || name === '--file')) {
+      patternGiven = true;
+      const value = eq >= 0 ? arg.slice(eq + 1) : (attached ?? args[++k]);
+      if (value !== undefined && named(value)) return true;
+      continue;
+    }
+    if (subcommand === 'grep' && (name === '-e' || name === '--regexp')) patternGiven = true;
+    if (eq < 0 && attached === undefined && GIT_SKIPPED_VALUES.has(name)) k++;
+  }
+  if (subcommand === 'grep' && !patternGiven) operands.shift();
+  return operands.some(named);
+}
+
+/** `set`, `export`, `declare` and `typeset` print variables only when bare (or given `-p`). */
+function printsVariables(args: string[]): boolean {
+  return args.every((arg) => /^-[px]+$/.test(arg));
+}
+
+/**
+ * The words a command passes on that may be file names for an `xargs` later in the pipeline:
+ * a reader's files, and any other command's operands. Options and patterns are left out.
+ */
+function forwardedNames(segments: ShellSegment[]): string[] {
+  const names: string[] = [];
+  for (const segment of segments) {
+    const call = invocation(segment.words);
+    if (!call) continue;
+    if (FILE_OUTPUT_COMMANDS.has(call.executable))
+      names.push(...readerFiles(call.executable, call.args));
+    else names.push(...call.args.filter((arg) => !arg.startsWith('-')));
+  }
+  return names;
 }
 
 function dumps(command: string, depth: number): boolean {
@@ -987,7 +1224,8 @@ function dumps(command: string, depth: number): boolean {
   const { outer, inner } = substitutions(command);
   if (inner.some((script) => dumps(script, depth + 1))) return true;
   const segments = shellSegments(outer);
-  const allWords = segments.flatMap((s) => s.words);
+  // What an `xargs` reader may be fed, worked out once per command rather than per segment.
+  let xargsFed: boolean | undefined;
   for (const segment of segments) {
     // Whatever reads a sensitive file on standard input can print it: `< .env cat`, `done < .env`.
     if (segment.inputs.some(isSensitiveShellWord)) return true;
@@ -996,6 +1234,7 @@ function dumps(command: string, depth: number): boolean {
     const { executable, args } = call;
     if (call.script !== undefined && dumps(call.script, depth + 1)) return true;
     if (ENV_OUTPUT_COMMANDS.has(executable)) return true;
+    if (BARE_ENV_OUTPUT_COMMANDS.has(executable) && printsVariables(args)) return true;
     if (executable === 'env' && envCommandIsDump(args)) return true;
     if (SHELLS.has(executable)) {
       const flag = args.findIndex((a) => /^-[a-z]*c[a-z]*$/i.test(a));
@@ -1006,15 +1245,16 @@ function dumps(command: string, depth: number): boolean {
     if (executable === 'find') {
       const exec = args.findIndex((a) => /^-(?:exec|execdir|ok|okdir)$/.test(a));
       const run = exec >= 0 ? invocation(args.slice(exec + 1)) : undefined;
-      if (run && FILE_OUTPUT_COMMANDS.has(run.executable) && args.some(namesSensitiveFileOrTree))
+      if (run && FILE_OUTPUT_COMMANDS.has(run.executable) && anyNamesSensitive(args.slice(0, exec)))
         return true;
     }
-    // `xargs` takes file names from its input, so any word in the command may be one.
-    if (
-      FILE_OUTPUT_COMMANDS.has(executable) &&
-      readerReadsSensitive(executable, args, call.viaXargs ? allWords : [])
-    )
-      return true;
+    if (!FILE_OUTPUT_COMMANDS.has(executable)) continue;
+    if (anyNamesSensitive(readerFiles(executable, args))) return true;
+    // `xargs` takes file names from its input, so a name earlier in the pipeline may be one.
+    if (call.viaXargs) {
+      xargsFed ??= anyNamesSensitive(forwardedNames(segments));
+      if (xargsFed) return true;
+    }
   }
   return false;
 }

@@ -166,12 +166,18 @@ describe('sensitive path normalization', () => {
     expect(isSensitivePath('/repo/100%/.ENV.')).toBe(true);
   });
 
-  it.each(['/repo/%ZZ/readme.md', '100%.md', 'https://example.com/%E0%A4%A'])(
+  it.each(['/repo/%ZZ/readme.md', '100%.md', 'file:///repo/%E0%A4%A'])(
     'treats a malformed escape in the URI value %s as sensitive',
     (value) => {
       expect(isSensitiveUri(value)).toBe(true);
     },
   );
+
+  it('reads a web address as a path, since no tool opens it as a file', () => {
+    expect(isSensitiveUri('https://x/?q=100%')).toBe(false);
+    expect(isSensitiveUri('https://example.com/%E0%A4%A')).toBe(false);
+    expect(isSensitiveUri('https://example.com/%2Eenv')).toBe(true);
+  });
 
   it('reads a well-formed URI value as its path', () => {
     expect(isSensitiveUri('file:///repo/src/%63onfig.ts')).toBe(false);
@@ -395,11 +401,89 @@ describe('globs name a sensitive file only through a distinctive stem', () => {
     ['*.ts', false],
     ['src/**/*.tsx', false],
     ['*', false],
-    ['.en?', false],
-    ['.*rc', false],
+    ['.en?', true],
+    ['.*rc', true],
+    ['.en*', true],
+    ['.e*', true],
+    ['.*', true],
+    ['cred*', true],
+    ['.git-cred*', true],
+    ['*.ke?', true],
+    ['.pg*', true],
+    ['.my.c*', true],
+    ['~/.s*/*', true],
+    ['~/.kube/*', true],
+    ['~/.codex/*', true],
+    ['~/.docker/*', true],
+    ['.github/*', false],
+    ['.config/*.yml', false],
+    ['*.js', false],
+    ['*.tf', false],
     ['environment*.ts', false],
     ['docs/env-*.md', false],
   ])('cat %s: %s', (glob, sensitive) => {
     expect(isCredentialDumpCommand(`cat ${glob}`)).toBe(sensitive);
+  });
+});
+
+describe('shell syntax the first review missed', () => {
+  it.each([
+    'cat .e\\\nnv',
+    'ca\\\nt .env',
+    'cat .e\\\r\nnv',
+    'sudo -Eu root cat .env',
+    'sudo -nEu root cat /root/.ssh/id_rsa',
+    'env -iu X cat .env',
+    'env - cat .env',
+    'env -iu X',
+    'set',
+    'export',
+    'export -p',
+    'declare -x',
+    'grep -f .env src/a.ts',
+    'grep --file=.env src/a.ts',
+    'git log -L1,9:.env',
+    'git grep -f .env',
+    'git show HEAD -- .env',
+  ])('suppresses %s', (command) => {
+    expect(isCredentialDumpCommand(command)).toBe(true);
+  });
+
+  it.each([
+    'grep --exclude=.env -r KEY .',
+    'grep --exclude .env -r KEY .',
+    'grep --exclude-dir=.ssh -r KEY .',
+    "rg -g '!.env' KEY",
+    "rg --glob '!.env*' KEY src",
+    "awk '/\\.env/' a.txt",
+    "git grep '\\.env'",
+    "git grep -e '.env' -- src",
+    "git log -S '.env'",
+    "git log --grep='.env'",
+    "git log --author='.env bot'",
+    "rg 'process\\.env\\.' src",
+    "grep -rn 'process\\.env' src",
+    "grep -e '\\.env' src/a.ts",
+    "sed -e 's/.env/x/' notes.txt",
+    "jq '.env' package.json",
+    'set -e; npm test',
+    'set -euo pipefail',
+    'export FOO=1 && npm test',
+    'echo a | xargs cat',
+  ])('leaves %s alone', (command) => {
+    expect(isCredentialDumpCommand(command)).toBe(false);
+  });
+
+  it('reads an xargs pipeline once, however many readers it has', () => {
+    const words = Array.from({ length: 1000 }, (_, i) => `src/file-${i}.ts`).join(' ');
+    const command = `echo ${words} | ${'xargs cat; '.repeat(1000)}`;
+    let best = Number.POSITIVE_INFINITY;
+    for (let run = 0; run < 5; run++) {
+      const started = performance.now();
+      expect(isCredentialDumpCommand(command)).toBe(false);
+      best = Math.min(best, performance.now() - started);
+    }
+    // The per-segment rescan took over a second; once per command it is a few milliseconds.
+    expect(best).toBeLessThan(250);
   });
 });

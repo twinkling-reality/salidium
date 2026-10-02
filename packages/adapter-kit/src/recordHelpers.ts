@@ -111,8 +111,13 @@ export function pathArgumentMetadata(value: unknown): {
   const visit = (current: unknown, context: Context, root = false): void => {
     if (typeof current === 'string') {
       // A URI's opener decodes it, so a malformed escape leaves what it names unknown. The list
-      // below keeps no key, so this is recorded beside it.
-      if (context === 'uri' && !undecodable) {
+      // below keeps no key, so this is recorded beside it. A web address (`https:`) is not a
+      // file a tool opens; only a `file:` or scheme-less value counts.
+      if (
+        context === 'uri' &&
+        !undecodable &&
+        !/^(?!file:)[a-z][a-z0-9+.-]+:/i.test(current.trim())
+      ) {
         try {
           decodeURIComponent(current);
         } catch {
