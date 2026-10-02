@@ -141,7 +141,8 @@ export function toSessionEntry(
     // the identifier rule, as every 1.1 path and branch does.
     cwd: text.exact(summary.cwd),
     repositoryRoot: identifier(summary.repoRoot, 4096, text),
-    model: summary.model ?? null,
+    // Nullable, so one the contract cannot carry whole is null rather than clipped into another id.
+    model: identifier(summary.model, 200, text),
     status: currentStatus(summary, now),
     startedAt: summary.startedAt ?? null,
     lastEventAt: summary.lastEventAt ?? null,
@@ -250,14 +251,29 @@ function run(row: VerificationRow, text: ConsumerText): VerificationRun {
   };
 }
 
+/** A path is required wherever it appears and never clipped, so the contract's bound is a limit. */
+export const MAX_CONSUMER_PATH = 4096;
+
+/**
+ * Builds the report. A changed file whose path cannot cross whole, which redaction can cause by
+ * lengthening it, is left out of `changes.files` and `verification.unverifiedFiles`; the contract
+ * has no count of omitted files, so each one is passed to `omitted` by length for the caller to log.
+ */
 export function toSessionReport(
   state: RunState,
   view: SessionView,
   summary: SessionSummary,
   now: number,
   text: ConsumerText,
+  omitted: (pathLength: number) => void = () => {},
 ): SessionReport {
   const session = toSessionEntry(summary, now, text);
+  const carried = (path: string): string | undefined => {
+    const crossing = text.exact(path);
+    if (crossing.length <= MAX_CONSUMER_PATH) return crossing;
+    omitted(crossing.length);
+    return undefined;
+  };
   const explained = view.explained;
   const current = explained ? explanationIsCurrent(summary.latestSeq, explained.basedOnSeq) : false;
   return {
@@ -292,28 +308,32 @@ export function toSessionReport(
     },
     changes: {
       glance: text(view.changes.glance, 300),
-      files: view.changes.files.map((file) => ({
+      files: view.changes.files.flatMap((file) => {
         // Identifiers cross whole; like every string that crosses, they pass the redactor again.
-        path: text.exact(file.path),
-        repository: repository(
-          Object.hasOwn(state.fileLocations, file.path)
-            ? state.fileLocations[file.path]
-            : undefined,
-          text,
-        ),
-        changeCount: file.changeCount,
-        linesAdded: file.linesAdded,
-        linesRemoved: file.linesRemoved,
-        linesRemovedExact: !state.files[file.path]?.linesRemovedUnknown,
-        kinds: [...file.kinds],
-        lastChangedAt: file.lastChangedAt,
-        coverage: {
-          verifiedAfter: file.verifiedAfter,
-          by: text(file.verifiedBy, 300),
-          provenance: 'inferred',
-        },
-        reason: statement(file.reason, text),
-      })),
+        const path = carried(file.path);
+        if (path === undefined) return [];
+        return {
+          path,
+          repository: repository(
+            Object.hasOwn(state.fileLocations, file.path)
+              ? state.fileLocations[file.path]
+              : undefined,
+            text,
+          ),
+          changeCount: file.changeCount,
+          linesAdded: file.linesAdded,
+          linesRemoved: file.linesRemoved,
+          linesRemovedExact: !state.files[file.path]?.linesRemovedUnknown,
+          kinds: [...file.kinds],
+          lastChangedAt: file.lastChangedAt,
+          coverage: {
+            verifiedAfter: file.verifiedAfter,
+            by: text(file.verifiedBy, 300),
+            provenance: 'inferred',
+          },
+          reason: statement(file.reason, text),
+        };
+      }),
       commits: view.changes.commits.map((commit) => ({ sha: commit.sha, at: commit.at })),
     },
     verification: {
@@ -323,7 +343,7 @@ export function toSessionReport(
         ...run(row, text),
         laterUnreadable: row.laterUnreadable,
       })),
-      unverifiedFiles: view.verified.unverifiedFiles.map((path) => text.exact(path)),
+      unverifiedFiles: view.verified.unverifiedFiles.flatMap((path) => carried(path) ?? []),
       statements: view.verified.claims.flatMap((line) => statement(line, text) ?? []),
     },
     review: {

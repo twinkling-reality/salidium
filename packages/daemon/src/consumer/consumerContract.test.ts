@@ -11,6 +11,8 @@ import {
   SessionLookupSchema,
   SessionReportSchema,
 } from '@salidium/consumer-contract';
+import type { EventBuilder } from '@salidium/core/testing';
+import type { CanonicalEvent } from '@salidium/protocol';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { type DaemonHandle, startDaemon } from '../daemon.ts';
@@ -836,6 +838,235 @@ describe('sessions the contract cannot identify', () => {
     } finally {
       feed.close();
       for (const id of [...UNREPRESENTABLE, NEIGHBOUR]) daemon.registry.forget(id);
+    }
+  });
+});
+
+/*
+ * The producer's rule: every document served under /consumer passes its own exact parse. These
+ * sessions are stored with values the contract bounds: a cwd longer than any path it carries, a
+ * model id longer than its field, a changed file path that cannot cross whole, and a plan step id
+ * that makes a remaining item's id too long.
+ */
+describe('values a stored session holds that the contract cannot carry', () => {
+  const LONG = (n: number) => `/repo/${'d'.repeat(n)}`;
+
+  async function store(sessionId: string, build: (b: EventBuilder) => CanonicalEvent[]) {
+    const { EventBuilder } = await import('@salidium/core/testing');
+    const b = new EventBuilder(sessionId, '2026-09-20T16:20:00.000Z');
+    const events = build(b);
+    daemon.registry.ingest(sessionId, events, { cwd: '/repo' });
+    daemon.registry.flush(sessionId);
+  }
+  const report = (id: string) => get(`/consumer/v1/sessions/${encodeURIComponent(id)}/report`);
+  const listed = async () =>
+    exactly(SessionListSchema, (await get('/consumer/v1/sessions?limit=2000')).body);
+
+  it('leaves out a session whose cwd cannot cross whole, everywhere a session is named', async () => {
+    const id = 'claude-code:cwd-too-long';
+    const neighbour = 'claude-code:cwd-neighbour';
+    const before = await listed();
+    const feed = await openFeed(token);
+    expect(await feed.next()).toMatchObject({ type: 'resync' });
+    try {
+      await store(id, (b) => [
+        b.sessionStarted(LONG(5000)),
+        b.turnStarted('Go'),
+        b.turnEnded('Done.'),
+      ]);
+      await store(neighbour, (b) => [b.sessionStarted('/repo'), b.turnStarted('Go')]);
+      expect(daemon.registry.summaryOf(id)?.cwd.length).toBeGreaterThan(4096);
+
+      let message = await feed.next();
+      while (message !== 'ended' && message.type === 'heartbeat') message = await feed.next();
+      expect(message).toMatchObject({ type: 'session.changed', sessionId: neighbour });
+
+      const after = await listed();
+      expect(after.total).toBe(before.total + 1);
+      expect(after.sessions.map((s) => s.id)).not.toContain(id);
+
+      const lookup = await get(
+        '/consumer/v1/sessions/lookup?provider=claude-code&sessionId=cwd-too-long',
+      );
+      expect(lookup.status).toBe(404);
+      expect(exactly(ConsumerErrorSchema, lookup.body).error).toBe('session-not-observed');
+      const r = await report(id);
+      expect(r.status).toBe(404);
+      expect(exactly(ConsumerErrorSchema, r.body).error).toBe('not-found');
+    } finally {
+      feed.close();
+      daemon.registry.forget(id);
+      daemon.registry.forget(neighbour);
+    }
+  });
+
+  it('serves a model id that cannot cross whole as null, and the session with it', async () => {
+    const id = 'claude-code:model-too-long';
+    try {
+      await store(id, (b) => [
+        b.sessionStarted('/repo', `model-${'m'.repeat(300)}`),
+        b.turnStarted('Go'),
+      ]);
+      const entry = (await listed()).sessions.find((s) => s.id === id);
+      expect(entry?.model).toBeNull();
+      const r = await report(id);
+      expect(r.status).toBe(200);
+      expect(exactly(SessionReportSchema, r.body).session.model).toBeNull();
+      const lookup = await get(
+        '/consumer/v1/sessions/lookup?provider=claude-code&sessionId=model-too-long',
+      );
+      expect(exactly(SessionLookupSchema, lookup.body).session.model).toBeNull();
+    } finally {
+      daemon.registry.forget(id);
+    }
+  });
+
+  it('leaves a changed file whose path cannot cross whole out of the report, and serves the rest', async () => {
+    const id = 'claude-code:path-too-long';
+    const long = LONG(4200);
+    try {
+      await store(id, (b) => [
+        b.sessionStarted('/repo'),
+        b.turnStarted('Edit two files'),
+        ...b.edit('e1', long, 3, 1),
+        ...b.edit('e2', '/repo/short.ts', 2, 0),
+        b.turnEnded('Done.'),
+      ]);
+      expect(Object.keys(daemon.registry.readSession(id)?.state.files ?? {})).toContain(long);
+      const r = await report(id);
+      expect(r.status).toBe(200);
+      const body = exactly(SessionReportSchema, r.body);
+      expect(body.changes.files.map((f) => f.path)).toEqual(['/repo/short.ts']);
+      expect(body.verification.unverifiedFiles).toEqual(['/repo/short.ts']);
+    } finally {
+      daemon.registry.forget(id);
+    }
+  });
+
+  it('answers not found for a report that fails its own schema, without losing the session', async () => {
+    const id = 'claude-code:plan-id-too-long';
+    try {
+      await store(id, (b) => [
+        b.sessionStarted('/repo'),
+        b.turnStarted('Plan it'),
+        b.plan([{ id: 'p'.repeat(700), text: 'Write the migration', status: 'pending' }]),
+      ]);
+      const r = await report(id);
+      expect(r.status).toBe(404);
+      expect(exactly(ConsumerErrorSchema, r.body).error).toBe('not-found');
+      // The entry itself is valid, so the session is still listed and can still be looked up.
+      expect((await listed()).sessions.map((s) => s.id)).toContain(id);
+      const lookup = await get(
+        '/consumer/v1/sessions/lookup?provider=claude-code&sessionId=plan-id-too-long',
+      );
+      expect(lookup.status).toBe(200);
+    } finally {
+      daemon.registry.forget(id);
+    }
+  });
+
+  it('drops what fails its schema from the list and feed, and logs where, never what', async () => {
+    const { createServer } = await import('node:http');
+    const { createConsumerRoutes } = await import('./routes.ts');
+    const { ConsumerCredentialVerifier } = await import('./credentials.ts');
+    const netHome = mkdtempSync(join(tmpdir(), 'salidium-consumer-net-'));
+    const { token: netToken } = createConsumerCredential(netHome, 'net test');
+    const good = daemon.registry.summaryOf(VERIFIED_ID);
+    if (!good) throw new Error('the verified session is seeded');
+    const SECRET_TIME = 'not-a-time-planted-value';
+    const badTime = {
+      ...good,
+      id: 'claude-code:bad-time',
+      providerSessionId: 'bad-time',
+      startedAt: SECRET_TIME,
+    };
+    const badId = {
+      ...good,
+      id: 'claude-code:bad\u0001planted',
+      providerSessionId: 'bad\u0001planted',
+    };
+    const summaries = [badTime, badId, good];
+    let publish: (summary: typeof good) => void = () => {};
+    const warn = vi.fn();
+    const routes = createConsumerRoutes({
+      registry: {
+        listSessions: () => summaries,
+        summaryOf: (sessionId: string) => summaries.find((s) => s.id === sessionId),
+        subscribeSummaries: (sub: typeof publish) => {
+          publish = sub;
+          return () => {};
+        },
+        subscribeRemovals: () => () => {},
+      } as never,
+      credentials: new ConsumerCredentialVerifier(netHome),
+      discovery: () => ({ format: 'salidium.consumer-discovery' }) as never,
+      now: () => SCENARIO_CLOCK,
+      log: { info: () => {}, warn, debug: () => {} },
+    });
+    const server = createServer((req, res) =>
+      routes.handle(req, res, new URL(req.url ?? '/', 'http://127.0.0.1')),
+    );
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as { port: number };
+    const at = (path: string) =>
+      fetch(`http://127.0.0.1:${port}${path}`, {
+        headers: { Authorization: `Bearer ${netToken}` },
+      });
+    try {
+      const list = exactly(SessionListSchema, await (await at('/consumer/v1/sessions')).json());
+      expect(list.sessions.map((s) => s.id)).toEqual([VERIFIED_ID]);
+      expect(list.total).toBe(1);
+
+      const lookup = await at(
+        '/consumer/v1/sessions/lookup?provider=claude-code&sessionId=bad-time',
+      );
+      expect(lookup.status).toBe(404);
+      expect(exactly(ConsumerErrorSchema, await lookup.json()).error).toBe('session-not-observed');
+
+      const discovery = await at('/consumer/v1/discovery');
+      expect(discovery.status).toBe(500);
+      expect(exactly(ConsumerErrorSchema, await discovery.json()).error).toBe('internal');
+
+      const controller = new AbortController();
+      const feed = await fetch(`http://127.0.0.1:${port}/consumer/v1/feed`, {
+        headers: { Authorization: `Bearer ${netToken}` },
+        signal: controller.signal,
+      });
+      const reader = feed.body?.getReader();
+      if (!reader) throw new Error('no feed body');
+      let received = '';
+      const until = async (needle: string) => {
+        while (!received.includes(needle)) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          received += new TextDecoder().decode(value);
+        }
+      };
+      await until('"resync"');
+      publish(badTime);
+      publish(badId);
+      publish(good);
+      await until(VERIFIED_ID);
+      controller.abort();
+      const messages = received
+        .split('\n\n')
+        .filter((frame) => frame.startsWith('data: '))
+        .map((frame) => readFeedMessage(frame.slice(6)));
+      expect(messages.map((m) => m?.type)).toEqual(['resync', 'session.changed']);
+      expect(messages[1]).toMatchObject({ sessionId: VERIFIED_ID });
+
+      const logged = JSON.stringify(warn.mock.calls);
+      expect(logged).toContain('startedAt');
+      expect(logged).toContain('sessionIdLength');
+      expect(logged).not.toContain(SECRET_TIME);
+      expect(logged).not.toContain('planted');
+      // Once per session and cause, however often it is asked for.
+      await at('/consumer/v1/sessions');
+      expect(warn.mock.calls.length).toBe(JSON.parse(logged).length);
+    } finally {
+      routes.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      rmSync(netHome, { recursive: true, force: true });
     }
   });
 });
