@@ -2,7 +2,7 @@ import type { ProviderId } from '@salidium/protocol';
 import type { RunState } from './runState.ts';
 
 /** Bump when the reducer's derivation changes in a way that invalidates checkpoints. */
-export const REDUCER_VERSION = '1.12.0';
+export const REDUCER_VERSION = '1.13.0';
 
 export function createInitialState(args: {
   sessionId: string;
@@ -23,6 +23,7 @@ export function createInitialState(args: {
     activities: {},
     activityOrder: [],
     files: {},
+    fileLocations: {},
     verifications: [],
     plan: { items: [] },
     claims: [],

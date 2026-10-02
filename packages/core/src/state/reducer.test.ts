@@ -457,3 +457,93 @@ describe('reducer: idempotence, duplicates and checkpoint replay', () => {
     expect(v?.caveats).toContain('no-summary-parsed');
   });
 });
+
+describe('reducer: revision anchors and file locations', () => {
+  const A = 'a'.repeat(40);
+  const B = 'b'.repeat(40);
+  const C = 'c'.repeat(40);
+  const D = 'd'.repeat(40);
+
+  function snapshot(
+    b: EventBuilder,
+    id: string,
+    head: string,
+    trigger?: 'session.started' | 'turn.ended' | 'commit',
+    branch = 'main',
+  ): StoredEvent {
+    return b.raw({ id, kind: 'git.snapshot', repoRoot: '/repo', head, branch, dirty: [], trigger });
+  }
+
+  function session() {
+    const b = new EventBuilder();
+    return [
+      b.sessionStarted(),
+      snapshot(b, 'git:start', A, 'session.started'),
+      b.turnStarted('First'),
+      snapshot(b, 'git:commit', B, 'commit'),
+      b.turnEnded('Done.'),
+      snapshot(b, 'git:end1', B, 'turn.ended'),
+      // A resume starts the session again; the anchor at start stays the first one.
+      b.sessionStarted(),
+      snapshot(b, 'git:resume', C, 'session.started', 'feature'),
+      b.turnStarted('Second'),
+      b.turnEnded('Done again.'),
+      snapshot(b, 'git:end2', D, 'turn.ended', 'feature'),
+      b.raw({
+        id: 'located:1',
+        kind: 'file.located',
+        files: [
+          {
+            path: '/work/tree/src/a.ts',
+            repository: { root: '/work/tree', path: 'src/a.ts', mainRoot: '/repo' },
+          },
+          { path: '/tmp/scratch.txt', repository: null },
+        ],
+      }),
+      b.raw({
+        id: 'located:2',
+        kind: 'file.located',
+        files: [
+          {
+            path: '/work/tree/src/a.ts',
+            repository: { root: '/repo', path: 'work/tree/src/a.ts' },
+          },
+        ],
+      }),
+    ];
+  }
+
+  it('anchors the first session start and the latest turn end, and nothing else', () => {
+    const { state } = run(session());
+    expect(state.git.atStart).toMatchObject({ head: A, branch: 'main' });
+    expect(state.git.atTurnEnd).toMatchObject({ head: D, branch: 'feature' });
+    expect(state.git.head).toBe(D);
+  });
+
+  it('does not guess a boundary for a snapshot written before snapshots named their trigger', () => {
+    const b = new EventBuilder();
+    const { state } = run([b.sessionStarted(), snapshot(b, 'git:old', A), b.turnEnded('Done.')]);
+    expect(state.git.head).toBe(A);
+    expect(state.git.atStart).toBeUndefined();
+    expect(state.git.atTurnEnd).toBeUndefined();
+  });
+
+  it('keeps the latest location of each path, including that none was found', () => {
+    const { state } = run(session());
+    expect(state.fileLocations).toEqual({
+      '/work/tree/src/a.ts': { root: '/repo', path: 'work/tree/src/a.ts' },
+      '/tmp/scratch.txt': null,
+    });
+  });
+
+  it('replays to the same anchors and locations from a checkpoint as from the start', () => {
+    const events = session();
+    const whole = run(events).state;
+    const split = events.findIndex((e) => e.id === 'git:resume');
+    const checkpoint = cloneState(replayEvents(fresh(), events.slice(0, split)).state);
+    const resumed = replayEvents(JSON.parse(JSON.stringify(checkpoint)), events.slice(split)).state;
+    expect(resumed.git.atStart).toEqual(whole.git.atStart);
+    expect(resumed.git.atTurnEnd).toEqual(whole.git.atTurnEnd);
+    expect(resumed.fileLocations).toEqual(whole.fileLocations);
+  });
+});

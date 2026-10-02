@@ -133,6 +133,9 @@ export function applyEvent(state: RunState, event: StoredEvent): SemanticChange[
     case 'git.snapshot':
       onGitSnapshot(state, event, log);
       break;
+    case 'file.located':
+      for (const file of event.files) state.fileLocations[file.path] = file.repository;
+      break;
     case 'ingest.warning':
       state.counters.ingestWarnings += 1;
       break;
@@ -1512,6 +1515,11 @@ function onGitSnapshot(state: RunState, e: StoredEventOf<'git.snapshot'>, log: C
   state.git.dirtyCount = e.dirty.length + (e.dirtyTruncated ? 1 : 0);
   state.git.snapshotAt = e.ts;
   if (!state.repoRoot) state.repoRoot = e.repoRoot;
+  // Anchors come only from snapshots that say which boundary they observed. One written before
+  // snapshots named their trigger anchors nothing, rather than being guessed into a boundary.
+  const anchor = { head: e.head, branch: e.branch, at: e.ts };
+  if (e.trigger === 'session.started' && !state.git.atStart) state.git.atStart = anchor;
+  if (e.trigger === 'turn.ended') state.git.atTurnEnd = anchor;
   if (e.head && prevHead && e.head !== prevHead) {
     const known = state.git.commits.find(
       (c) => c.sha && (e.head?.startsWith(c.sha) || c.sha.startsWith(e.head ?? '')),

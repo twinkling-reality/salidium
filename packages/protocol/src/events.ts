@@ -411,6 +411,34 @@ export const GitSnapshotEventSchema = Base.extend({
   dirtyTruncated: z.boolean().optional(),
 });
 
+/**
+ * Where Salidium found changed files on disk, by its own read-only look at the filesystem when the
+ * change was live: the Git working tree that holds each path and the path relative to it. Never
+ * written for history imports, because the filesystem now says nothing about the filesystem then.
+ * `repository` is null when no repository holds the path or Salidium could not tell; nothing is
+ * guessed. An entry supersedes the session's earlier entry for the same path.
+ */
+export const FileLocatedEventSchema = Base.extend({
+  kind: z.literal('file.located'),
+  files: z
+    .array(
+      z.object({
+        path: z.string(),
+        repository: z
+          .object({
+            /** Top level of the working tree that holds the path. */
+            root: z.string(),
+            /** The path relative to `root`, with `/` separators. */
+            path: z.string(),
+            /** For a linked worktree, the repository it belongs to; absent for a main tree. */
+            mainRoot: z.string().optional(),
+          })
+          .nullable(),
+      }),
+    )
+    .max(64),
+});
+
 /** Ingest problems are events too, so the UI can say "3 records could not be parsed" honestly. */
 export const IngestWarningEventSchema = Base.extend({
   kind: z.literal('ingest.warning'),
@@ -512,6 +540,7 @@ export const CanonicalEventSchema = z.discriminatedUnion('kind', [
   PermissionRequestedEventSchema,
   NotificationEventSchema,
   GitSnapshotEventSchema,
+  FileLocatedEventSchema,
   IngestWarningEventSchema,
   ExplanationEventSchema,
 ]);

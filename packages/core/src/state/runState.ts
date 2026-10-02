@@ -68,6 +68,11 @@ export interface RunState {
   activities: Record<string, Activity>;
   activityOrder: string[];
   files: Record<string, FileState>;
+  /**
+   * The repository Salidium found holding each changed path, by absolute path, from `file.located`.
+   * Null when it looked and no repository held the path; absent when it never looked.
+   */
+  fileLocations: Record<string, FileLocation | null>;
   verifications: Verification[];
   plan: PlanState;
   claims: Claim[];
@@ -278,7 +283,25 @@ export interface SubagentState {
   eventId: string;
 }
 
+/** A changed path's place in a Git working tree, as Salidium observed it when the change was live. */
+export interface FileLocation {
+  root: string;
+  path: string;
+  mainRoot?: string;
+}
+
+/** HEAD and branch at one session boundary, from the snapshot that boundary triggered. */
+export interface RevisionAnchor {
+  head?: string;
+  branch?: string;
+  at: string;
+}
+
 export interface GitState {
+  /** The first snapshot a session start triggered. Later starts (resumes) do not replace it. */
+  atStart?: RevisionAnchor;
+  /** The snapshot the latest turn end triggered. */
+  atTurnEnd?: RevisionAnchor;
   head?: string;
   branch?: string;
   dirtyCount?: number;

@@ -99,6 +99,8 @@ function title(e: StoredEvent): string {
       return 'Notification';
     case 'git.snapshot':
       return 'Repository snapshot';
+    case 'file.located':
+      return 'Changed files located';
     case 'ingest.warning':
       return 'A record could not be read';
     case 'salidium.explanation':
@@ -333,6 +335,15 @@ function facts(e: StoredEvent): Fact[] {
           mono: true,
         })),
       ];
+    case 'file.located':
+      return e.files.map((f) => ({
+        label: f.repository ? f.repository.path : 'not in a repository',
+        value: f.path,
+        mono: true,
+        note: f.repository
+          ? `in ${f.repository.root}${f.repository.mainRoot ? `, a worktree of ${f.repository.mainRoot}` : ''}`
+          : undefined,
+      }));
     case 'ingest.warning':
       return [{ label: 'Problem', value: e.code }, ...opt('Detail', e.detail, true, false, true)];
     case 'salidium.explanation':
