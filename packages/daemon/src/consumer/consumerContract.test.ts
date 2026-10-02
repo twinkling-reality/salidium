@@ -1389,6 +1389,132 @@ describe('text stored before a rule existed', () => {
     // A redactor lives for one document, so the number does not depend on what was asked before.
     expect(build()).toEqual(report);
   });
+
+  it('gives one session the same entry in the list, its lookup, its report, and the feed', async () => {
+    // The title holds a password no ingest redactor saw, and the later cwd a stored placeholder.
+    const { createServer } = await import('node:http');
+    const { applyEvent, createInitialState, summarizeSession } = await import('@salidium/core');
+    const { EventBuilder } = await import('@salidium/core/testing');
+    const { createConsumerRoutes } = await import('./routes.ts');
+    const { ConsumerCredentialVerifier } = await import('./credentials.ts');
+    const b = new EventBuilder('claude-code:entry', '2026-09-20T16:00:00.000Z');
+    const state = createInitialState({
+      sessionId: 'claude-code:entry',
+      provider: 'claude-code',
+      providerSessionId: 'entry',
+      cwd: '/repo/[SECRET#1]',
+    });
+    for (const event of [
+      b.sessionStarted('/repo/[SECRET#1]'),
+      b.turnStarted('Deploy the preview'),
+      b.turnEnded('Deployed.'),
+    ])
+      applyEvent(state, event);
+    const at = Date.parse('2026-09-20T16:01:00.000Z');
+    const summary = {
+      ...summarizeSession(state, at),
+      title: `Deploy with {"password":"${CONSUMER_JSON_SECRET}"}`,
+      titleSource: 'provider' as const,
+      cwd: '/repo/[SECRET#1]',
+    };
+    let changed: ((summary: typeof summary) => void) | undefined;
+    const entryHome = mkdtempSync(join(tmpdir(), 'salidium-consumer-entry-'));
+    const { token: entryToken } = createConsumerCredential(entryHome, 'entry test');
+    const routes = createConsumerRoutes({
+      registry: {
+        listSessions: () => [summary],
+        summaryOf: (id: string) => (id === summary.id ? summary : undefined),
+        readSession: (id: string) => (id === summary.id ? { state, summary } : undefined),
+        subscribeSummaries: (sub: typeof changed) => {
+          changed = sub;
+          return () => {};
+        },
+        subscribeRemovals: () => () => {},
+      } as never,
+      credentials: new ConsumerCredentialVerifier(entryHome),
+      discovery: () => ({}) as never,
+      now: () => at,
+      log: { info: () => {}, warn: () => {}, debug: () => {} },
+    });
+    const server = createServer((req, res) =>
+      routes.handle(req, res, new URL(req.url ?? '/', 'http://127.0.0.1')),
+    );
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as { port: number };
+    const headers = { Authorization: `Bearer ${entryToken}` };
+    const read = async (path: string) => {
+      const response = await fetch(`http://127.0.0.1:${port}/consumer/v1${path}`, { headers });
+      expect(response.status).toBe(200);
+      return response.json();
+    };
+    const controller = new AbortController();
+    try {
+      // The first list builds the entry and the second reads it from the cache.
+      const missed = exactly(SessionListSchema, await read('/sessions')).sessions[0];
+      const hit = exactly(SessionListSchema, await read('/sessions')).sessions[0];
+      const looked = exactly(
+        SessionLookupSchema,
+        await read('/sessions/lookup?provider=claude-code&sessionId=entry'),
+      ).session;
+      const reported = exactly(
+        SessionReportSchema,
+        await read(`/sessions/${encodeURIComponent(summary.id)}/report`),
+      ).session;
+      expect(missed?.title).toBe('Deploy with {"password":"[SECRET#2]"}');
+      expect(missed?.cwd).toBe('/repo/[SECRET#1]');
+      const bytes = JSON.stringify(missed);
+      for (const entry of [hit, looked, reported]) expect(JSON.stringify(entry)).toBe(bytes);
+
+      const response = await fetch(`http://127.0.0.1:${port}/consumer/v1/feed`, {
+        headers,
+        signal: controller.signal,
+      });
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('no feed body');
+      const decoder = new TextDecoder();
+      let buffer = '';
+      // Frames without data, such as the stream's opening comment, carry no message.
+      const next = async (): Promise<FeedMessage> => {
+        for (;;) {
+          const boundary = buffer.indexOf('\n\n');
+          if (boundary < 0) {
+            const chunk = await reader.read();
+            if (chunk.done) throw new Error('the feed ended');
+            buffer += decoder.decode(chunk.value, { stream: true });
+            continue;
+          }
+          const frame = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          const data = frame
+            .split('\n')
+            .filter((line) => line.startsWith('data: '))
+            .map((line) => line.slice(6))
+            .join('\n');
+          const message = data ? readFeedMessage(data) : undefined;
+          if (message) return message;
+        }
+      };
+      expect(await next()).toMatchObject({ type: 'resync' });
+      changed?.(summary);
+      const feedEntry = await next();
+      if (feedEntry.type !== 'session.changed') throw new Error(`got ${feedEntry.type}`);
+      const { sessionId, native, evidenceSeq, status, explanation } = feedEntry;
+      expect(JSON.stringify({ sessionId, native, evidenceSeq, status, explanation })).toBe(
+        JSON.stringify({
+          sessionId: missed?.id,
+          native: missed?.native,
+          evidenceSeq: missed?.evidenceSeq,
+          status: missed?.status,
+          explanation: missed?.explanation,
+        }),
+      );
+    } finally {
+      controller.abort();
+      routes.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      rmSync(entryHome, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('identifiers at the boundary', () => {

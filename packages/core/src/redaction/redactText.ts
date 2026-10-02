@@ -106,6 +106,13 @@ const GENERIC_VALUE = /[A-Za-z0-9_+/=.~!#$%^&*-]*/y;
 const ENV_VALUE = /(?:[^\s"'`\\;|()<>,}[\]]|\[[^\s"'`\\[\]]*\])*/y;
 /** A placeholder already in the text, whose number a fresh redactor must not hand out again. */
 const PLACEHOLDER_NUMBER = /\[[A-Z_]+#(\d+)\]/g;
+/**
+ * The highest number a placeholder is taken to hold. Ours count the secrets in one session and
+ * never come near it. A larger one is not ours, and reserving it would carry the counter past
+ * 2^53, where `++counter` stops changing and every new secret shares one number, or to 1e21,
+ * where the number prints as `1e+21`.
+ */
+const MAX_PLACEHOLDER_NUMBER = 1e9;
 
 const RULES: Rule[] = [
   {
@@ -506,8 +513,10 @@ export function createRedactor(): Redactor {
   const reserve = (text: string): number => {
     let highest = 0;
     if (text.includes('#'))
-      for (const placeholder of text.matchAll(PLACEHOLDER_NUMBER))
-        highest = Math.max(highest, Number(placeholder[1]));
+      for (const placeholder of text.matchAll(PLACEHOLDER_NUMBER)) {
+        const n = Number(placeholder[1]);
+        if (n <= MAX_PLACEHOLDER_NUMBER) highest = Math.max(highest, n);
+      }
     counter = Math.max(counter, highest);
     return highest;
   };
