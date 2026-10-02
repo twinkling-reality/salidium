@@ -519,9 +519,11 @@ export function createHttpServer(deps: HttpServerDeps): Server {
         }
         case rest === 'links' && deps.sessionLinks !== undefined: {
           const result = await deps.sessionLinks({ sessionId, query: url.searchParams });
-          return 'body' in result
-            ? json(res, 200, result.body)
-            : json(res, result.status, { error: result.message });
+          if ('body' in result) return json(res, 200, result.body);
+          // Not found reads as it does on every other session route.
+          return json(res, result.status, {
+            error: result.status === 404 ? 'unknown session' : result.message,
+          });
         }
         case rest.startsWith('raw/'): {
           const eventId = decodeSegment(rest.slice(4));

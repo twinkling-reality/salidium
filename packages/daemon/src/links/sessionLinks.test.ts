@@ -435,6 +435,46 @@ describe('the owner route', () => {
     }
   });
 
+  /*
+   * The same six shapes main pins on every other session route. An unknown one is simply not
+   * found; a stored session whose id the document cannot carry is not found here either, rather
+   * than a failure.
+   */
+  test('answers an unusual but well-encoded session id as not found', async () => {
+    const ids = [
+      `claude-code:${'a'.repeat(600)}`,
+      'a'.repeat(513),
+      'claude-code:a\u0001b',
+      'claude-code:a\u0000b',
+      'a\u007fb',
+      'claude-code:a\nb',
+    ];
+    for (const id of ids) {
+      const res = await fetch(`${base}/api/sessions/${encodeURIComponent(id)}/links`, {
+        headers: { Authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.status, JSON.stringify(id)).toBe(404);
+      expect(await res.json(), JSON.stringify(id)).toEqual({ error: 'unknown session' });
+    }
+    const stored = `claude-code:${'b'.repeat(600)}`;
+    const b = new EventBuilder(stored, '2026-10-02T10:00:00.000Z');
+    registry.ingest(
+      stored,
+      provider([
+        b.sessionStarted(REPO, 'model'),
+        b.turnStarted('Long id'),
+        ...b.edit('c1', `${REPO}/src/pay.ts`, 1, 0),
+      ]),
+      { cwd: REPO },
+    );
+    registry.flush(stored);
+    expect(registry.readSession(stored)).toBeDefined();
+    const res = await fetch(`${base}/api/sessions/${encodeURIComponent(stored)}/links`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.status).toBe(404);
+  });
+
   test('refuses a cross-site request before anything else', async () => {
     const res = await fetch(`${base}/api/sessions/${encodeURIComponent(LIVE)}/links`, {
       headers: { Authorization: `Bearer ${TOKEN}`, Origin: 'http://evil.example' },

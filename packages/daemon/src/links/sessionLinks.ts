@@ -80,6 +80,9 @@ export function createSessionLinks(deps: SessionLinksDeps) {
     maps: ProjectMapService,
     sessionId: string,
   ): Promise<ExecutionLinks | undefined> {
+    // An id the document cannot carry (over its bound, or with control characters) belongs to no
+    // session this view can describe: not found, as on every other session route.
+    if (!ExecutionLinksSchema.shape.sessionId.safeParse(sessionId).success) return undefined;
     const read = deps.registry.readSession(sessionId);
     if (!read || !isUserSession(read.summary)) return undefined;
     const { state } = read;

@@ -1,7 +1,11 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type ExecutionLinks, ExecutionLinksSchema } from '@salidium/project-map';
+import {
+  type ExecutionLinks,
+  ExecutionLinksSchema,
+  ProjectMapErrorSchema,
+} from '@salidium/project-map';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createConsumerCredential } from '../consumer/credentials.ts';
 import { type DaemonHandle, startDaemon } from '../daemon.ts';
@@ -137,6 +141,27 @@ describe('execution links end to end', () => {
     for (const headers of [{ Authorization: `Bearer ${daemon.token}` }, {}]) {
       const refused = await fetch(url, { headers });
       expect(refused.status).toBe(401);
+    }
+  });
+
+  test('an unusual but well-encoded session id is not found on the consumer route', async () => {
+    const { token } = createConsumerCredential(daemon.config.home, 'links ids');
+    for (const id of [
+      `claude-code:${'a'.repeat(600)}`,
+      'a'.repeat(513),
+      'claude-code:a\u0001b',
+      'claude-code:a\u0000b',
+      'a\u007fb',
+      'claude-code:a\nb',
+    ]) {
+      const res = await fetch(
+        `http://127.0.0.1:${daemon.port}/project-map/v0/sessions/${encodeURIComponent(id)}/links`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      expect(res.status, JSON.stringify(id)).toBe(404);
+      expect(ProjectMapErrorSchema.parse(await res.json()).error, JSON.stringify(id)).toBe(
+        'not-found',
+      );
     }
   });
 
