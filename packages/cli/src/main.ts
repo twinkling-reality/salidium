@@ -38,6 +38,7 @@ import {
   isOperationalConfigKey,
   OPERATIONAL_CONFIG_KEYS,
   observeCollectionStatus,
+  oldestWaitingAt,
   readDaemonJson,
   readMaintenanceState,
   readSettings,
@@ -1268,7 +1269,7 @@ async function readOperationsOverview(
     {
       files: queue.totalFiles ?? 0,
       bytes: queue.totalBytes ?? 0,
-      oldestAt: queue.entries[0]?.queuedAt ?? null,
+      oldestAt: oldestWaitingAt(queue),
     },
   );
   const db = daemonPaths(salidiumHome).db;
@@ -1711,6 +1712,10 @@ async function maintenanceCommand(
             ? `Queue: ${queue.totalFiles} files, ${formatBytes(queue.totalBytes ?? 0)} (exact)\n`
             : 'Queue totals unavailable; the scan safety ceiling was reached.\n',
         );
+        if (queue.quarantinedFiles)
+          process.stdout.write(
+            `Quarantined: ${queue.quarantinedFiles} files, ${formatBytes(queue.quarantinedBytes ?? 0)} kept as evidence; a drain will not store them\n`,
+          );
         for (const entry of queue.entries)
           process.stdout.write(
             `${entry.queuedAt}  ${String(entry.provider ?? 'unknown').padEnd(12)} ${entry.state.padEnd(10)} ${formatBytes(entry.bytes)}  ${entry.id}\n`,

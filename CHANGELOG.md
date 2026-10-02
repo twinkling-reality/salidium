@@ -34,6 +34,14 @@
   `operations-config.json`. It uses the previous saved copy when that is readable and otherwise
   falls back to safe defaults for every setting, with explanations off. Set the backend back to
   `auto`, `claude` or `codex` before downgrading to keep your choices.
+- Stop a full process table from writing hook envelopes that name no provider. The relay built the
+  provider part of a queued file's name in a subprocess, and when that fork failed it wrote
+  `_<time>-<pid>-<random>.json` and carried on. The drain read those as a disabled provider and
+  kept them forever, which held the queue's oldest item at the day they were written. The relay now
+  names the provider without a subprocess. An envelope that still names no provider is quarantined
+  unread with an `.unattributed` suffix and recorded as a collection gap without a loss count.
+- Count quarantined files apart from waiting work in `salidium maintenance queue`, and measure queue
+  age, the drain result, and the storage optimization precondition from waiting work only.
 
 ## 0.6.1 - 2026-10-02
 

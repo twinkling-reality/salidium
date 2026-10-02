@@ -13,7 +13,7 @@ import {
 } from 'node:fs';
 import { basename, dirname, join, sep } from 'node:path';
 import { normalizeProviderTimestamp, type ProviderAdapter } from '@salidium/adapter-kit';
-import { CanonicalTimestampSchema, type ProviderId } from '@salidium/protocol';
+import { CanonicalTimestampSchema, type ProviderId, ProviderIdSchema } from '@salidium/protocol';
 import type { Logger } from '../logging/logger.ts';
 import type { SessionRegistry } from '../sessions/sessionRegistry.ts';
 import {
@@ -33,6 +33,7 @@ import {
   MAX_INGEST_PAYLOAD_BYTES,
   MAX_SPOOL_DRAIN_BATCH,
   TRUNCATED_HOOK_PAYLOAD_KEY,
+  UNATTRIBUTED_SUFFIX,
 } from './limits.ts';
 import type { TranscriptTailer } from './transcriptTailer.ts';
 
@@ -348,9 +349,14 @@ export class HookIngress {
     // them, so an enabled provider's envelopes sat behind them and were never read at all while
     // the pass re-armed itself indefinitely. Set them aside before the batch is cut; they rejoin
     // it unchanged the moment their provider is enabled again.
-    const drainable = all.filter((f) =>
-      this.adapters.has(this.providerFromPendingName(f) as ProviderId),
-    );
+    //
+    // A name that carries no valid provider id is different. No configuration change can ever make
+    // it drainable, so retaining it as though its provider were merely disabled kept it waiting
+    // forever and pinned the queue's oldest item. It joins the batch only to be quarantined.
+    const drainable = all.filter((f) => {
+      const provider = this.providerFromPendingName(f);
+      return !attributable(provider) || this.adapters.has(provider as ProviderId);
+    });
     const retained = all.length - drainable.length;
     if (retained > 0)
       this.log.debug('retaining envelopes for providers that are not enabled', { files: retained });
@@ -369,6 +375,10 @@ export class HookIngress {
         const st = statSync(path);
         const ready = f.endsWith('.ready.json') || f.endsWith('.ready.json.processing');
         if (!ready && !alreadyProcessing && st.mtimeMs > cutoff) continue;
+        if (!attributable(this.providerFromPendingName(f))) {
+          this.quarantineUnattributed(pending, f, st.mtime.toISOString());
+          continue;
+        }
         if (!alreadyProcessing) {
           try {
             renameSync(path, processing);
@@ -447,6 +457,23 @@ export class HookIngress {
     return more;
   }
 
+  /**
+   * Sets aside an envelope whose name says nothing about which provider produced it. Its payload is
+   * not read, because attributing it from untrusted content would be a guess presented as fact, and
+   * it is not deleted, because it may be the only copy of real evidence. The single rename is the
+   * claim, so a concurrent pass cannot quarantine it twice or record a second gap for it.
+   */
+  private quarantineUnattributed(pending: string, file: string, queuedAt: string): void {
+    const quarantined = join(pending, `${file}${UNATTRIBUTED_SUFFIX}`);
+    try {
+      renameSync(join(pending, file), quarantined);
+    } catch {
+      return;
+    }
+    this.recordObservedGap('hook-envelope-unattributed', null, queuedAt);
+    this.log.warn('hook envelope without a provider quarantined', { file, quarantined });
+  }
+
   private providerFromSpoolName(file: string): string {
     const stem = file.replace(/\.processing$/, '');
     for (const id of this.adapters.keys()) if (stem.startsWith(`${id}.`)) return id;
@@ -499,6 +526,11 @@ export class HookIngress {
     if (this.catchUp) clearTimeout(this.catchUp);
     this.catchUp = undefined;
   }
+}
+
+/** Whether a name-derived provider is one any adapter could ever own. */
+function attributable(provider: string): boolean {
+  return ProviderIdSchema.safeParse(provider).success;
 }
 
 type BoundedLine = { line: string; oversized?: false } | { oversized: true };

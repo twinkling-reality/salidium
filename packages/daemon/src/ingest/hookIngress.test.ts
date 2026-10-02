@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   rmSync,
   utimesSync,
   writeFileSync,
@@ -217,6 +218,59 @@ describe('HookIngress durability and recovery', () => {
     expect(seenPayloads).toEqual([{ enabled: 'drained' }]);
     expect(existsSync(join(pending, 'claude-code_2-9999-x.ready.json'))).toBe(false);
     expect(existsSync(join(pending, 'codex_1-0000-x.ready.json.processing'))).toBe(true);
+  });
+
+  /*
+   * A relay that lost its provider to a failed fork named its envelopes `_<time>-<pid>-<random>`.
+   * The drain read `_<time>` as the provider, found it disabled, and retained the envelope forever.
+   * No configuration can enable a provider that is not a provider id, so these are quarantined:
+   * kept unread and undeleted, each one counted as an observed gap without a guessed loss count.
+   */
+  it('quarantines an envelope whose name carries no provider instead of retaining it forever', () => {
+    const { dir, hooks, seenPayloads } = fixture();
+    const pending = join(dir, 'pending');
+    mkdirSync(pending);
+    const old = new Date('2026-09-09T19:15:30.000Z');
+    const plant = (name: string, at: Date | undefined) => {
+      writeFileSync(join(pending, name), JSON.stringify({ synthetic: name }));
+      if (at) utimesSync(join(pending, name), at, at);
+    };
+    plant('_1788981330-49817-147de426.json', old);
+    plant('_1788981410-77997-13ca39bc.ready.json', old);
+    plant('_1788981852-8914-.json', old);
+    // A plain envelope may still belong to a sender that is about to deliver or publish it.
+    plant('_1790954716-15107-3aef6314.json', undefined);
+    plant('claude-code_1790954716-11848-57f91d27.ready.json', undefined);
+
+    hooks.drainSpool();
+
+    expect(seenPayloads).toEqual([
+      { synthetic: 'claude-code_1790954716-11848-57f91d27.ready.json' },
+    ]);
+    expect(readdirSync(pending).sort()).toEqual([
+      '_1788981330-49817-147de426.json.unattributed',
+      '_1788981410-77997-13ca39bc.ready.json.unattributed',
+      '_1788981852-8914-.json.unattributed',
+      '_1790954716-15107-3aef6314.json',
+    ]);
+    expect(
+      JSON.parse(readFileSync(join(pending, '_1788981852-8914-.json.unattributed'), 'utf8')),
+    ).toEqual({ synthetic: '_1788981852-8914-.json' });
+    const ledger = join(dir, 'collection-gaps.json');
+    const gap = {
+      reason: 'hook-envelope-unattributed',
+      provider: null,
+      event: null,
+      pressure: null,
+      firstDroppedAt: old.toISOString(),
+      exactCount: null,
+    };
+    expect(readCollectionGapLedger(ledger).episodes).toMatchObject([gap, gap, gap]);
+
+    // Quarantine is the claim. Later passes neither retry the files nor count them again.
+    hooks.drainSpool();
+    expect(readCollectionGapLedger(ledger).episodes).toHaveLength(3);
+    expect(seenPayloads).toHaveLength(1);
   });
 
   it('preserves processing and pending files when persistence is deferred', () => {

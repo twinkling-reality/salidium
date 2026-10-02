@@ -42,6 +42,12 @@ export const HOOK_SHED_SECOND_FILE = 'hooks-shed-second';
 export const HOOK_SHED_RETAIN_FILE = 'hooks-shed-retain';
 
 /**
+ * Suffix for a pending envelope whose name carries no valid provider id. It stays beside the queue,
+ * outside every pattern the relay counts or the drain claims.
+ */
+export const UNATTRIBUTED_SUFFIX = '.unattributed';
+
+/**
  * Spool envelopes recovered in one drain pass before the daemon yields.
  *
  * The drain is synchronous and each payload reaches the reducer and SQLite, so an uncapped pass

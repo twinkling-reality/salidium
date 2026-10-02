@@ -109,7 +109,13 @@ old stream generation, loads a fresh snapshot, and reconnects from its new seque
 Hook delivery is asynchronous and must never block the coding agent. If the daemon cannot be
 reached, each hook invocation writes its own spool envelope and atomically renames it ready. The
 daemon atomically claims ready files before ingestion. Legacy shared spool files remain readable for
-upgrade recovery, but new senders never concurrently append to one record.
+upgrade recovery, but new senders never concurrently append to one record. The relay names each
+envelope by its provider without starting a subprocess, so a full process table cannot strip the
+provider from the name. An envelope whose name still carries no valid provider id is never read or
+deleted: the drain renames it with an `.unattributed` suffix and records one collection gap without
+a loss count. Quarantined files appear in queue inspection under their own count. They do not count
+as waiting work, so they hold neither queue age nor the empty-queue precondition for storage
+optimization.
 
 Operational policy is a versioned sparse document in `operations-config.json`. Owner-only,
 same-directory atomic replacement retains `operations-config.previous.json` as a recovery copy.

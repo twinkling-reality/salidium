@@ -216,7 +216,10 @@ a few gigabytes. It is never run on a timer and never as part of health. The dae
 worker with its own connection, so collection and control are unaffected while it works, and the
 answer carries the moment it was true rather than presenting itself as live.
 
-`salidium maintenance queue` lists bounded queue metadata without reading payloads.
+`salidium maintenance queue` lists bounded queue metadata without reading payloads. Its totals count
+envelopes waiting to be stored. Quarantined files, an oversized payload or an envelope that names no
+provider, are listed after them with their own count: they are kept as evidence, each was recorded
+as a collection gap, and no drain will store them.
 `salidium maintenance drain` asks the running daemon to make bounded batches durable; repeat or add
 `--wait=SECONDS` to wait for empty. `salidium maintenance optimize --dry-run` reports the queue and
 free-space preflight. The actual optimize flow drains, pauses, stops, checkpoints, performs the

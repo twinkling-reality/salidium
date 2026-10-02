@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CollectionStatus } from '@salidium/protocol';
@@ -10,6 +10,7 @@ import {
   calculateHealthEstimates,
   createHealthSnapshot,
   inspectQueue,
+  oldestWaitingAt,
   retainHealthSample,
 } from './health.ts';
 
@@ -127,10 +128,83 @@ describe('bounded operational health', () => {
     const observed = inspectQueue(dir);
     expect(observed).toMatchObject({
       exactTotals: true,
-      totalFiles: 1,
+      totalFiles: 0,
+      quarantinedFiles: 1,
+      quarantinedBytes: 15,
       entries: [{ provider: 'codex', state: 'quarantined', bytes: 15 }],
+      entriesTruncated: false,
     });
     expect(JSON.stringify(observed)).not.toContain('private payload');
+  });
+
+  /*
+   * The shape found on a real machine: envelopes from a process-table exhaustion whose names lost
+   * their provider, sitting weeks older than everything around them. Once quarantined they are
+   * evidence, not waiting work, so they must neither hold queue age at that day nor count as input
+   * a drain or a storage optimization is still waiting for.
+   */
+  it('measures queue age from waiting work, not from quarantined evidence', () => {
+    const dir = home();
+    const pending = join(dir, 'spool', 'pending');
+    mkdirSync(pending, { recursive: true });
+    const plant = (name: string, body: string, at: string) => {
+      writeFileSync(join(pending, name), body);
+      utimesSync(join(pending, name), new Date(at), new Date(at));
+    };
+    plant(
+      '_1788981330-49817-147de426.json.unattributed',
+      'synthetic one',
+      '2026-09-09T19:15:30.000Z',
+    );
+    plant('_1788981852-8914-.json.unattributed', 'synthetic two', '2026-09-09T19:24:12.000Z');
+    plant('claude-code_1790954716-1-a.ready.json', 'synthetic three', '2026-10-02T15:25:16.000Z');
+    plant('claude-code_1790954717-2-b.json', 'synthetic four', '2026-10-02T15:25:17.000Z');
+    const now = new Date('2026-10-02T15:30:00.000Z');
+
+    const listed = inspectQueue(dir, { now });
+    expect(listed).toMatchObject({
+      exactTotals: true,
+      totalFiles: 2,
+      totalBytes: 29,
+      quarantinedFiles: 2,
+      quarantinedBytes: 26,
+      entriesTruncated: false,
+    });
+    expect(listed.entries.map((entry) => [entry.provider, entry.state, entry.queuedAt])).toEqual([
+      ['claude-code', 'ready', '2026-10-02T15:25:16.000Z'],
+      ['claude-code', 'ready', '2026-10-02T15:25:17.000Z'],
+      [null, 'quarantined', '2026-09-09T19:15:30.000Z'],
+      [null, 'quarantined', '2026-09-09T19:24:12.000Z'],
+    ]);
+
+    // Health and status read a one-entry view. It must still name the oldest waiting envelope.
+    const single = inspectQueue(dir, { entryLimit: 1, now });
+    expect(oldestWaitingAt(single)).toBe('2026-10-02T15:25:16.000Z');
+    expect(single.entriesTruncated).toBe(true);
+    const snapshot = createHealthSnapshot({
+      home: dir,
+      collection: collection(now.toISOString()),
+      daemon: { state: 'running', pid: 42, startedAt: now.toISOString(), version: '1.0.0' },
+      hooks: [],
+      maintenance: null,
+      config: resolveOperationalConfig(dir, { environment: {}, now }),
+      history: [],
+      schemaVersion: 8,
+      layoutVersion: 1,
+      now,
+    });
+    expect(snapshot.queue).toMatchObject({
+      files: 2,
+      bytes: 29,
+      oldestAt: '2026-10-02T15:25:16.000Z',
+    });
+
+    // With nothing waiting, quarantined files leave no oldest item at all.
+    rmSync(join(pending, 'claude-code_1790954716-1-a.ready.json'));
+    rmSync(join(pending, 'claude-code_1790954717-2-b.json'));
+    const quarantinedOnly = inspectQueue(dir, { entryLimit: 1, now });
+    expect(quarantinedOnly).toMatchObject({ totalFiles: 0, quarantinedFiles: 2 });
+    expect(oldestWaitingAt(quarantinedOnly)).toBeNull();
   });
 
   it('retains aggregate samples by both time and a hard row bound', () => {

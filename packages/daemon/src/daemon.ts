@@ -94,7 +94,12 @@ import {
   updateOperationalConfig,
 } from './operations/configuration.ts';
 import { writePrivateJsonAtomic, writePrivateTextAtomic } from './operations/files.ts';
-import { createHealthSnapshot, inspectQueue, retainHealthSample } from './operations/health.ts';
+import {
+  createHealthSnapshot,
+  inspectQueue,
+  oldestWaitingAt,
+  retainHealthSample,
+} from './operations/health.ts';
 import { readMaintenanceState, runQueueDrainMaintenance } from './operations/maintenance.ts';
 import { NativeAlertSink } from './operations/nativeNotifications.ts';
 import { createHttpServer } from './server/httpServer.ts';
@@ -450,7 +455,7 @@ export async function startDaemon(overrides: StartDaemonOptions = {}): Promise<D
       queue: {
         files: queue.totalFiles ?? 0,
         bytes: queue.totalBytes ?? 0,
-        oldestAt: queue.entries[0]?.queuedAt ?? null,
+        oldestAt: oldestWaitingAt(queue),
       },
       now,
     });
@@ -1202,7 +1207,13 @@ PROVIDER="\${1:-claude-code}"
 # Provider ids can contain the namespacing slash, but a slash in FILE creates an unintended
 # directory and makes the hook silently discard its stdin. Tilde and underscore cannot occur in a valid
 # provider id, so this is an injective, filename-safe encoding with an unambiguous separator.
-PROVIDER_FILE=$(printf '%s' "$PROVIDER" | tr '/' '~')
+# A provider id has at most one slash, so parameter expansion encodes it without a subprocess. The
+# earlier \`printf | tr\` substitution expanded to nothing when the process table was full, and the
+# envelope it named carried no provider the drain could ever attribute.
+case "$PROVIDER" in
+  */*) PROVIDER_FILE="\${PROVIDER%%/*}~\${PROVIDER#*/}";;
+  *) PROVIDER_FILE="$PROVIDER";;
+esac
 PENDING="$HOME_DIR/spool/pending"
 mkdir -p "$PENDING" 2>/dev/null && chmod 700 "$HOME_DIR/spool" "$PENDING" 2>/dev/null
 FILE="$PENDING/\${PROVIDER_FILE}_$(date -u +%s)-$$-$(od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \\n').json"

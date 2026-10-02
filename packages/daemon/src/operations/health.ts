@@ -9,7 +9,7 @@ import type {
   QueueInspection,
 } from '@salidium/protocol';
 import { OperationsHealthSnapshotSchema, QueueInspectionSchema } from '@salidium/protocol';
-import { MAX_HOOK_ABSOLUTE_PENDING_FILES } from '../ingest/limits.ts';
+import { MAX_HOOK_ABSOLUTE_PENDING_FILES, UNATTRIBUTED_SUFFIX } from '../ingest/limits.ts';
 import type { HealthHistorySample, SalidiumStore } from '../storage/salidiumStore.ts';
 
 type DerivedEstimate = NonNullable<OperationsHealthSnapshot['estimates']['queueVelocity']>;
@@ -19,10 +19,14 @@ type HookHealth = OperationsHealthSnapshot['hooks'][number];
 export const MAX_QUEUE_STATUS_FILES = MAX_HOOK_ABSOLUTE_PENDING_FILES + 1024;
 export const MAX_HEALTH_SAMPLES = 17_280;
 
+function quarantinedFile(name: string): boolean {
+  return name.endsWith('.oversized') || name.endsWith(UNATTRIBUTED_SUFFIX);
+}
+
 function queueFile(name: string, legacy: boolean): boolean {
   if (legacy) return name.endsWith('.jsonl') || name.endsWith('.jsonl.processing');
   return (
-    name.endsWith('.oversized') ||
+    quarantinedFile(name) ||
     name.endsWith('.ready.json') ||
     name.endsWith('.ready.json.processing') ||
     (name.endsWith('.json') && !name.endsWith('.oversized')) ||
@@ -35,7 +39,7 @@ function queueState(
   legacy: boolean,
 ): 'ready' | 'processing' | 'legacy' | 'quarantined' {
   if (legacy) return 'legacy';
-  if (name.endsWith('.oversized')) return 'quarantined';
+  if (quarantinedFile(name)) return 'quarantined';
   return name.endsWith('.processing') ? 'processing' : 'ready';
 }
 
@@ -48,9 +52,29 @@ function providerFromName(name: string): string | null {
   return daily?.[1] ?? null;
 }
 
+/** Waiting entries list before quarantined ones, so even a one-entry view names the oldest wait. */
+function compareEntries(
+  left: QueueInspection['entries'][number],
+  right: QueueInspection['entries'][number],
+): number {
+  const waiting = Number(left.state === 'quarantined') - Number(right.state === 'quarantined');
+  return waiting || left.queuedAt.localeCompare(right.queuedAt);
+}
+
+/**
+ * When the oldest envelope still waiting to be stored was queued. A quarantined file is kept as
+ * evidence but will never drain, so it must not hold queue age at the day it was set aside.
+ */
+export function oldestWaitingAt(queue: QueueInspection): string | null {
+  const first = queue.entries[0];
+  return first && first.state !== 'quarantined' ? first.queuedAt : null;
+}
+
 /**
  * Reads metadata only, never queued payloads. Totals are either exact or absent: crossing the
  * explicit scan ceiling is reported as unavailable rather than returning a partial number as fact.
+ * The totals count what is waiting to be stored. Quarantined files are counted on their own, since
+ * nothing a drain does will reduce them.
  */
 export function inspectQueue(
   home: string,
@@ -67,6 +91,8 @@ export function inspectQueue(
   ];
   let files = 0;
   let bytes = 0;
+  let quarantinedFiles = 0;
+  let quarantinedBytes = 0;
   let scanned = 0;
   let exactTotals = true;
   const entries: QueueInspection['entries'] = [];
@@ -87,17 +113,23 @@ export function inspectQueue(
         }
         try {
           const metadata = statSync(join(candidate.path, item.name));
-          files += 1;
-          bytes += metadata.size;
+          const state = queueState(item.name, candidate.legacy);
+          if (state === 'quarantined') {
+            quarantinedFiles += 1;
+            quarantinedBytes += metadata.size;
+          } else {
+            files += 1;
+            bytes += metadata.size;
+          }
           if (entryLimit > 0) {
             entries.push({
               id: item.name,
               provider: providerFromName(item.name),
-              state: queueState(item.name, candidate.legacy),
+              state,
               bytes: metadata.size,
               queuedAt: metadata.mtime.toISOString(),
             });
-            entries.sort((left, right) => left.queuedAt.localeCompare(right.queuedAt));
+            entries.sort(compareEntries);
             if (entries.length > entryLimit) entries.pop();
           }
         } catch {
@@ -117,8 +149,10 @@ export function inspectQueue(
     observedAt: (options.now ?? new Date()).toISOString(),
     totalFiles: exactTotals ? files : null,
     totalBytes: exactTotals ? bytes : null,
+    quarantinedFiles: exactTotals ? quarantinedFiles : null,
+    quarantinedBytes: exactTotals ? quarantinedBytes : null,
     entries,
-    entriesTruncated: !exactTotals || files > entries.length,
+    entriesTruncated: !exactTotals || files + quarantinedFiles > entries.length,
     exactTotals,
   });
 }
@@ -238,7 +272,7 @@ export function createHealthSnapshot(input: HealthSnapshotInput): OperationsHeal
     ...input.history.filter((sample) => Date.parse(sample.observedAt) >= since),
     current,
   ];
-  const queueOldestAt = queue.entries[0]?.queuedAt ?? null;
+  const queueOldestAt = oldestWaitingAt(queue);
   const queueAgeMs = queueOldestAt ? now.getTime() - Date.parse(queueOldestAt) : 0;
   const maintenanceNeedsRecovery =
     input.maintenance?.phase === 'failure' || input.maintenance?.phase === 'recovery';

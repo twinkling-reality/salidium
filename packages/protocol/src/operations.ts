@@ -455,8 +455,13 @@ export const QueueInspectionSchema = z
   .object({
     contractVersion: z.literal(OPERATIONS_CONTRACT_VERSION),
     observedAt: CanonicalTimestampSchema,
+    /** Files waiting to be stored. Quarantined files are excluded; nothing will drain them. */
     totalFiles: z.number().int().nonnegative().nullable(),
     totalBytes: z.number().int().nonnegative().nullable(),
+    /** Files kept as evidence but set aside from the drain. Absent from older daemons. */
+    quarantinedFiles: z.number().int().nonnegative().nullable().optional(),
+    quarantinedBytes: z.number().int().nonnegative().nullable().optional(),
+    /** Waiting entries first, then quarantined ones, each oldest first. */
     entries: z.array(QueueEntrySchema),
     entriesTruncated: z.boolean(),
     exactTotals: z.boolean(),

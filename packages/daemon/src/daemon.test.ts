@@ -132,10 +132,12 @@ describe('daemon', () => {
     const home = join(root, 'salidium');
     const pending = join(home, 'spool', 'pending');
     mkdirSync(pending, { recursive: true });
-    const quarantined = join(pending, 'claude-code_visual.ready.json.processing.oversized');
-    writeFileSync(quarantined, 'metadata-only test fixture');
+    // No provider is enabled, so this envelope is retained unread and waits. A quarantined file
+    // would not do: it is kept as evidence, not as work, and holds no queue age.
+    const waiting = join(pending, 'claude-code_visual.ready.json');
+    writeFileSync(waiting, 'metadata-only test fixture');
     const old = new Date(Date.now() - 2 * 60_000);
-    utimesSync(quarantined, old, old);
+    utimesSync(waiting, old, old);
     updateOperationalConfig(home, {
       alerts: { nativeNotifications: true, queueAgeMinutes: 1 },
     });
@@ -165,7 +167,7 @@ describe('daemon', () => {
     const home = join(root, 'salidium');
     const pending = join(home, 'spool', 'pending');
     mkdirSync(pending, { recursive: true });
-    const queued = join(pending, 'claude-code_visual.ready.json.processing.oversized');
+    const queued = join(pending, 'claude-code_visual.ready.json');
     writeFileSync(queued, 'metadata-only test fixture');
     const old = new Date(Date.now() - 2 * 60_000);
     utimesSync(queued, old, old);

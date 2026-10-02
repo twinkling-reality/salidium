@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { ProviderAdapter } from '@salidium/adapter-kit';
+import { isolateProviders } from '@salidium/adapter-kit/testing';
 import type { CanonicalEvent } from '@salidium/protocol';
 import { describe, expect, it } from 'vitest';
 import { writeRelayScript } from './daemon.ts';
@@ -120,6 +121,56 @@ describe('the installed hook relay', () => {
       expect(seen).toEqual([payload]);
       expect(readdirSync(pendingDir)).toEqual([]);
     } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /*
+   * On 2026-09-09 a full process table left envelopes named `_<time>-<pid>-<random>.json`, and one
+   * `_<time>-<pid>-.json`. macOS /bin/sh reproduces both under a tight `ulimit -u`: when the fork
+   * inside a `$(... | tr ...)` substitution fails, the substitution expands to nothing and the
+   * script carries on. A `tr` that prints nothing stands in for that failed fork here. The random
+   * suffix may still come out empty; the provider must not.
+   */
+  it('names the provider in a spooled envelope even when a subprocess produces nothing', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'salidium-relay-nofork-'));
+    const isolation = isolateProviders();
+    try {
+      const home = join(root, 'state');
+      const pendingDir = join(home, 'spool', 'pending');
+      const failingBin = join(root, 'installed', 'bin');
+      mkdirSync(failingBin, { recursive: true });
+      writeFileSync(join(failingBin, 'tr'), '#!/bin/sh\nexit 1\n');
+      chmodSync(join(failingBin, 'tr'), 0o700);
+      const relay = writeRelayScript(join(home, 'hooks'), home, {
+        PATH: [failingBin, '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(delimiter),
+      });
+
+      for (const provider of ['claude-code', 'example/agent']) {
+        const result = spawnSync('/bin/sh', [relay, provider, 'Stop', 'lifecycle'], {
+          env: isolation.environment({}, {}),
+          encoding: 'utf8',
+          input: JSON.stringify({ synthetic: provider }),
+        });
+        expect(result.status).toBe(0);
+      }
+
+      let ready: string[] = [];
+      for (let attempt = 0; attempt < 200 && ready.length < 2; attempt++) {
+        ready = existsSync(pendingDir)
+          ? readdirSync(pendingDir).filter((name) => name.endsWith('.ready.json'))
+          : [];
+        if (ready.length < 2) await sleep(10);
+      }
+      expect(ready.sort()).toEqual([
+        expect.stringMatching(/^claude-code_\d+-\d+-[0-9a-f]*\.ready\.json$/),
+        expect.stringMatching(/^example~agent_\d+-\d+-[0-9a-f]*\.ready\.json$/),
+      ]);
+      const script = readFileSync(relay, 'utf8');
+      const naming = script.slice(script.lastIndexOf('\nPROVIDER='));
+      expect(naming.slice(0, naming.indexOf('\nFILE='))).not.toContain('$(');
+    } finally {
+      isolation.dispose();
       rmSync(root, { recursive: true, force: true });
     }
   });
