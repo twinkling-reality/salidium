@@ -349,6 +349,9 @@ export function effectiveExplainerModel(
     : validModel(environment.SALIDIUM_EXPLAIN_MODEL);
 }
 
+/** Providers whose sessions an agent CLI may explain: the agents those CLIs belong to. */
+const HOSTED_EXPLAINABLE_PROVIDERS: ReadonlySet<ProviderId> = new Set(['claude-code', 'codex']);
+
 export function chooseExplainerBackendId(
   sourceProvider: ProviderId,
   mode: ExplainerMode | 'invalid',
@@ -357,6 +360,11 @@ export function chooseExplainerBackendId(
   if (mode === 'off' || mode === 'invalid') return undefined;
   // An explicit choice is that writer or nothing. Selecting `ollama` and finding it unavailable
   // must never fall through to a CLI that could contact a hosted service.
+  if (mode === 'ollama') return available.has(mode) ? mode : undefined;
+  // A CLI writer may call a hosted model. Sessions from any other provider (OpenCode is often run
+  // on local models so that nothing leaves the machine) are never routed to one; the local
+  // Ollama writer, when the person selected it, is their only explainer.
+  if (!HOSTED_EXPLAINABLE_PROVIDERS.has(sourceProvider)) return undefined;
   if (mode !== 'auto') return available.has(mode) ? mode : undefined;
 
   const matching = sourceProvider === 'codex' ? 'codex' : 'claude';
