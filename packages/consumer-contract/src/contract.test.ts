@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
@@ -133,21 +133,67 @@ describe('retained fixtures', () => {
    * The additive rule, enforced. Once a minor version is published its schemas are copied, never
    * edited, into `schema/v1/released/<major.minor>/` (docs/releasing.md). Every document the
    * current code describes must still validate against each of them, which is what "an older
-   * consumer keeps working" means. Before the first publication there is nothing released to hold
-   * the code to, and this says so rather than passing silently.
+   * consumer keeps working" means. Wire 1.0 is frozen, so there is always at least one.
    */
   const releasedRoot = new URL('released/', schemaDir);
-  const released = existsSync(fileURLToPath(releasedRoot))
-    ? readdirSync(releasedRoot).map((version) => new URL(`${version}/`, releasedRoot))
-    : [];
-  it.skipIf(released.length === 0)(
-    'current fixtures validate against every released minor version of major 1',
-    () => {
-      for (const dir of released)
-        for (const { value } of fixtures) {
-          const validator = z.fromJSONSchema(committedSchema(documentName(value), dir));
-          expect(validator.safeParse(value).success).toBe(true);
-        }
+  const released = readdirSync(releasedRoot)
+    .sort()
+    .map((version) => ({ version, dir: new URL(`${version}/`, releasedRoot) }));
+
+  it('holds a complete released copy of every published minor version, starting with 1.0', () => {
+    expect(released.map(({ version }) => version)).toContain('1.0');
+    for (const { version, dir } of released) {
+      expect(version).toMatch(new RegExp(`^${CONSUMER_CONTRACT.major}\\.\\d+$`));
+      // A copy missing a document would let that document drift unchecked.
+      expect(readdirSync(dir).sort()).toEqual(names.map((name) => `${name}.schema.json`).sort());
+    }
+  });
+
+  it.each(released)(
+    'current fixtures validate against the released $version schemas',
+    ({ dir }) => {
+      for (const { file, value } of fixtures) {
+        const validator = z.fromJSONSchema(committedSchema(documentName(value), dir));
+        expect(validator.safeParse(value).success, file).toBe(true);
+      }
+    },
+  );
+
+  /*
+   * Fixtures are write-once from publication: they testify about what a released version served,
+   * so a fixture edited afterwards would testify about nothing. These are the bytes published in
+   * `@salidium/consumer-contract@1.0.0` (identical to `1.0.0-rc.0`). Changing one of them, or this
+   * list, is a change to released evidence and needs a reason a reviewer can see.
+   */
+  const RELEASED_FIXTURES_1_0: Record<string, string> = {
+    'consumer-discovery.json': '819bd55330bb1eef552d2c4a5d876271356fb74ea559f8bdc135d1152f847d5e',
+    'consumer-error-session-not-observed.json':
+      'f31c050a650e111e847271fe1af272231787a5c39d9ae5ed3a7cdd9957cbe0a8',
+    'consumer-error-unauthorized.json':
+      '8f747fcd5f9e3ffcd720c10f016165b481dcc994f30bf19bbcf7650d7d4750d6',
+    'session-feed-closing.json': '7ab6b205e72b574b37c822b46fec4358844ded74db855f54b2e2825d45915f0f',
+    'session-feed-heartbeat.json':
+      'd65965476e3184a8057e7ad5b86a6b86dffb49b2c43400e52d74fa0f6d24062e',
+    'session-feed-resync.json': '35bd6e7b681099e196653e5c2866452b678d1aee8606412ea13a588f86e54022',
+    'session-feed-session-changed.json':
+      '4d46bfe4c2a3c9ee75ad994d1c4339ccaf235fe73e44f01514327deb6d17f56c',
+    'session-feed-session-removed.json':
+      '9ee2d78035aadff1daae449e3fff24eb6907e9b1dab761d5007b1fb32f593eba',
+    'session-list.json': 'a4145ee4bec10d2df9ea4cd19f247be367c81843c9f055c5eeb9f657dd0d98e3',
+    'session-lookup.json': '96f1855126726de0f54c1a92eb46faf39fefc4ee0db10c04a8eec401c2bf11fc',
+    'session-report-failing.json':
+      '22c33d668a3b09694e72107ec22810b560470aee96d6e1bb1be7eb614334a193',
+    'session-report-verified.json':
+      '1de7741f6789640b12345190caff6d8d2fc57aaee9bf836c2fd4ec9dcfa4042a',
+    'session-report-working.json':
+      '93da7ff2d8a40defc952e650ea29d59fcfda1779bf54740f8d43f4ad0630c1ef',
+  };
+
+  it.each(Object.entries(RELEASED_FIXTURES_1_0))(
+    '%s is still the fixture published with 1.0',
+    (file, sha256) => {
+      const bytes = readFileSync(new URL(file, fixtureDir));
+      expect(createHash('sha256').update(bytes).digest('hex')).toBe(sha256);
     },
   );
 });

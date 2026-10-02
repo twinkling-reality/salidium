@@ -8,8 +8,7 @@ This package holds the contract, not a client: TypeScript types, zod runtime sch
 truth), JSON Schema files generated from them, and retained example documents. It has no I/O and no
 network code, and it does not expose Salidium's internal events or state.
 
-Status: `1.0.0-rc.0`, a release candidate for wire version 1. Releases are published under the
-`next` distribution tag until `1.0.0`.
+Status: `1.0.0`, wire version 1.0, frozen unchanged from the `1.0.0-rc.0` release candidate.
 
 ## Consent first
 
@@ -136,6 +135,8 @@ installs hooks; only first-run `salidium` and `salidium install-hooks` do.
 
 - `schema/v1/*.schema.json`: JSON Schema (draft 2020-12), importable as
   `@salidium/consumer-contract/schema/v1/<name>.schema.json`.
+- `schema/v1/released/<major.minor>/*.schema.json`: each published minor version's schemas, copied
+  unchanged. Every later document validates against all of them.
 - `fixtures/v1/*.json`: real documents captured from a daemon serving synthetic sessions, to test a
   consumer against.
 - Runtime exports: every schema (`SessionReportSchema`, `SessionListSchema`, and so on), their

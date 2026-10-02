@@ -1,7 +1,9 @@
 name: Release consumer contract
 
 # A consumer contract release fixes what local tools may depend on for a whole major version. It is
-# manual-only and publishes an existing, reviewed tag after a protected environment approval.
+# manual-only and stages an existing, reviewed tag after a protected environment approval. The
+# trusted publisher is staged-only, so nothing is public until a maintainer approves the staged
+# version with 2FA under Staged Packages on npmjs.com.
 on:
   workflow_dispatch:
     inputs:
@@ -15,14 +17,8 @@ on:
         default: next
         type: choice
         options: [next, latest]
-      authentication:
-        description: OIDC normally; token only for the first package version
-        required: true
-        default: trusted-publisher
-        type: choice
-        options: [trusted-publisher, bootstrap-token]
       confirm:
-        description: Type publish @salidium/consumer-contract@VERSION, or bootstrap for first publish
+        description: Type publish @salidium/consumer-contract@VERSION
         required: true
         type: string
 
@@ -55,14 +51,12 @@ jobs:
         env:
           CONFIRM: ${{ inputs.confirm }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-          AUTHENTICATION: ${{ inputs.authentication }}
         run: |
           node <<'NODE'
           const { execFileSync } = require('node:child_process');
           const pkg = require('./packages/consumer-contract/package.json');
           const expectedTag = `consumer-contract-v${pkg.version}`;
-          const verb = process.env.AUTHENTICATION === 'bootstrap-token' ? 'bootstrap' : 'publish';
-          const expectedConfirmation = `${verb} @salidium/consumer-contract@${pkg.version}`;
+          const expectedConfirmation = `publish @salidium/consumer-contract@${pkg.version}`;
           if (process.env.RELEASE_TAG !== expectedTag) throw new Error(`release tag must be ${expectedTag}`);
           if (process.env.CONFIRM !== expectedConfirmation)
             throw new Error(`confirmation must be exactly: ${expectedConfirmation}`);
@@ -137,17 +131,11 @@ jobs:
         run: |
           package=$(find "$RUNNER_TEMP/release" -name 'salidium-consumer-contract-*.tgz' -type f -print -quit)
           test "$(sha256sum "$package" | cut -d ' ' -f 1)" = "$EXPECTED_SHA256"
-      - name: Publish through the trusted publisher
-        if: inputs.authentication == 'trusted-publisher'
-        run: npm publish "$RUNNER_TEMP"/release/salidium-consumer-contract-*.tgz --access public --provenance --tag "${{ inputs.npm_tag }}"
-      - name: Bootstrap the first npm version
-        if: inputs.authentication == 'bootstrap-token'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
+      - name: Use an npm that can stage a publish
+        # `npm stage publish` first shipped in npm 12.0.0. Pinned to the version this workflow was
+        # checked against, which needs Node ^24.15.0.
         run: |
-          test -n "$NODE_AUTH_TOKEN"
-          if npm view @salidium/consumer-contract version >/dev/null 2>&1; then
-            echo "@salidium/consumer-contract already exists; use trusted publishing"
-            exit 1
-          fi
-          npm publish "$RUNNER_TEMP"/release/salidium-consumer-contract-*.tgz --access public --provenance --tag "${{ inputs.npm_tag }}"
+          npm install --global npm@12.2.0
+          test "$(npm --version)" = 12.2.0
+      - name: Stage through the trusted publisher
+        run: npm stage publish "$RUNNER_TEMP"/release/salidium-consumer-contract-*.tgz --access public --provenance --tag "${{ inputs.npm_tag }}"
