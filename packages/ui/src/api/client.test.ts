@@ -93,3 +93,42 @@ describe('ApiClient.stream', () => {
     stop();
   });
 });
+
+describe('ApiClient.sessionLinks', () => {
+  const links = {
+    format: 'salidium.execution-links',
+    version: 0,
+    experimental: true,
+    generatedAt: '2026-10-02T12:00:00.000Z',
+    sessionId: 'codex:s1',
+    anchors: { repository: null, atStart: null, atLatestTurnEnd: null },
+    repositories: [],
+    files: [],
+    filesTotal: 0,
+    filesOmitted: 0,
+    modules: [],
+    modulesTruncated: false,
+  };
+
+  it('reads the owner route with the owner token and an encoded session id', async () => {
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (path: string | URL | Request, init?: RequestInit) => {
+        calls.push([String(path), init]);
+        return new Response(JSON.stringify(links), { status: 200 });
+      }),
+    );
+    expect(await new ApiClient('token').sessionLinks('codex:s1')).toEqual(links);
+    expect(calls[0]?.[0]).toBe('/api/sessions/codex%3As1/links');
+    expect(calls[0]?.[1]?.headers).toEqual({ Authorization: 'Bearer token' });
+  });
+
+  it('refuses a document of another shape rather than half-reading it', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ ...links, version: 1 }), { status: 200 })),
+    );
+    await expect(new ApiClient('token').sessionLinks('codex:s1')).rejects.toThrow();
+  });
+});

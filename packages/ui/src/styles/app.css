@@ -4745,6 +4745,193 @@
   overflow: auto;
 }
 
+/* -------------------------------------------------------- where it sits */
+
+/*
+ * The changed files placed in the codebase. Observed paths are monospace, as everywhere else on
+ * the report; the rule that resolved each edge sits quiet beside it, because it is how we know
+ * rather than what we know. The one inference, a test role, takes the dashed `derived` mark.
+ */
+.where {
+  display: grid;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.where-empty {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-3);
+}
+
+.where-repo {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.where-at {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-1);
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.where-quiet,
+.where-rule {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.where-module {
+  min-width: 0;
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--border);
+}
+
+.where-module-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.where-files,
+.where-plain {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.where-file + .where-file {
+  margin-top: var(--space-3);
+}
+
+.where-file-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.where-file-path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.where-mark {
+  flex-shrink: 0;
+  width: 1em;
+  font-size: var(--text-xs);
+  color: var(--accent);
+  text-align: center;
+}
+
+.where-ring1,
+.where-ring2 {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0 calc(1em + var(--space-2));
+}
+
+.where-neighbours .where-plain li,
+.where-ring2 .where-plain li,
+.where-unlinked .where-plain li,
+.where-unmapped .where-plain li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-2);
+  padding: 1px 0;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.where-label {
+  margin: 0 0 2px;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.where-packages {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.where-changed {
+  font-size: var(--text-xs);
+  color: var(--accent);
+}
+
+.where-none {
+  margin: var(--space-1) 0 0 calc(1em + var(--space-2));
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.where-widen {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.where-why {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.where-unlinked {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.where-optin {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 64ch;
+  font-size: var(--text-sm);
+}
+
+.where-optin p {
+  margin: 0;
+}
+
+.where-command {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.where-foot {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
 /* ------------------------------------------------------- personalization */
 
 .ex-personalize {

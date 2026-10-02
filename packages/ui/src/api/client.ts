@@ -1,3 +1,4 @@
+import { type ExecutionLinks, ExecutionLinksSchema } from '@salidium/project-map';
 import type {
   CollectionControlRequest,
   CollectionStatus,
@@ -268,6 +269,16 @@ export class ApiClient {
     if (q) params.set('q', q);
     if (opts.limit !== undefined) params.set('limit', String(opts.limit));
     return this.get(`/api/sessions/search?${params}`, opts.signal);
+  }
+
+  /**
+   * Where the session's changed files sit in the codebase. Parsed, because the panel draws status
+   * words from its enumerations and a document of another shape must not reach it half-understood.
+   */
+  sessionLinks(sessionId: string, signal?: AbortSignal): Promise<ExecutionLinks> {
+    return this.get(`/api/sessions/${encodeURIComponent(sessionId)}/links`, signal).then((value) =>
+      ExecutionLinksSchema.parse(value),
+    );
   }
 
   snapshot(sessionId: string): Promise<SessionSnapshot> {

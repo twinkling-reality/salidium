@@ -12,5 +12,5 @@
   },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"],
-  "references": [{ "path": "../protocol" }, { "path": "../core" }]
+  "references": [{ "path": "../protocol" }, { "path": "../core" }, { "path": "../project-map" }]
 }
