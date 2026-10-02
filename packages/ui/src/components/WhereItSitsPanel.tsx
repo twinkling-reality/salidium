@@ -1,9 +1,9 @@
 import type { ExecutionLinks } from '@salidium/project-map';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../store/appStore.ts';
 import { Loading } from './Loading.tsx';
 import { Panel } from './Panel.tsx';
-import { WhereItSits } from './WhereItSits.tsx';
+import { refetchDelay, WhereItSits } from './WhereItSits.tsx';
 
 /**
  * Where this session's changed files sit in the codebase: each file placed in its module, with
@@ -36,12 +36,43 @@ export function WhereItSitsPanel({
   const [widened, setWidened] = useState(false);
   const retry = useCallback(() => setAttempt((a) => a + 1), []);
 
-  // Fetched when opened, and again when the session has moved on while it stays open: a map is
-  // built on request, so nothing is read for a panel nobody has asked to see.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` and `changedKey` are refetch triggers.
+  /*
+   * Fetched when opened or retried, at once. When the session moves on while the panel stays open,
+   * one refetch is scheduled, no sooner than `refetchDelay` allows, and every change before it fires
+   * joins it: a live session can change its files many times a minute, and each document costs the
+   * daemon work it should not have to repeat that often.
+   */
+  const [refetches, setRefetches] = useState(0);
+  const lastFetch = useRef(0);
+  const pending = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const seenKey = useRef(changedKey);
+
+  useEffect(() => {
+    if (changedKey === seenKey.current) return;
+    seenKey.current = changedKey;
+    if (!open || pending.current !== undefined) return;
+    pending.current = setTimeout(
+      () => {
+        pending.current = undefined;
+        setRefetches((n) => n + 1);
+      },
+      refetchDelay(lastFetch.current, Date.now()),
+    );
+  }, [changedKey, open]);
+
+  useEffect(
+    () => () => {
+      if (pending.current !== undefined) clearTimeout(pending.current);
+      pending.current = undefined;
+    },
+    [],
+  );
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` and `refetches` are fetch triggers.
   useEffect(() => {
     if (!open || !api) return;
     const controller = new AbortController();
+    lastFetch.current = Date.now();
     setState((current) => (current.kind === 'ready' ? current : { kind: 'loading' }));
     api
       .sessionLinks(sessionId, controller.signal)
@@ -50,7 +81,7 @@ export function WhereItSitsPanel({
         if (!controller.signal.aborted) setState({ kind: 'error' });
       });
     return () => controller.abort();
-  }, [open, api, sessionId, attempt, changedKey]);
+  }, [open, api, sessionId, attempt, refetches]);
 
   return (
     <Panel id="where" title="Where it sits">

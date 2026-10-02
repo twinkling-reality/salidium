@@ -1,7 +1,13 @@
 import { type ExecutionLinks, ExecutionLinksSchema, type FileLink } from '@salidium/project-map';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { shellWord, WhereItSits } from './WhereItSits.tsx';
+import {
+  REFETCH_INTERVAL_MS,
+  REFETCH_SETTLE_MS,
+  refetchDelay,
+  shellWord,
+  WhereItSits,
+} from './WhereItSits.tsx';
 
 const REPO = '/work/acme';
 const OTHER = '/work/other repo';
@@ -269,5 +275,16 @@ describe('WhereItSits', () => {
     const out = text(render(sample(), true)).toLowerCase();
     for (const word of ['component', 'responsib', 'data flow', 'calls '])
       expect(out).not.toContain(word);
+  });
+});
+
+describe('refetchDelay', () => {
+  it('waits for a burst of changes to settle', () => {
+    expect(refetchDelay(0, 1_000_000)).toBe(REFETCH_SETTLE_MS);
+  });
+
+  it('never refetches sooner than the interval after the last fetch', () => {
+    expect(refetchDelay(1_000_000, 1_000_500)).toBe(REFETCH_INTERVAL_MS - 500);
+    expect(refetchDelay(1_000_000, 1_000_000 + REFETCH_INTERVAL_MS)).toBe(REFETCH_SETTLE_MS);
   });
 });

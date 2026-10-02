@@ -12,6 +12,16 @@ import { shortHome } from '../lib/format.ts';
  * Kept free of the store so it renders the same for a test as for the daemon.
  */
 
+/** A refetch waits this long after the change that prompted it, so a burst arrives as one. */
+export const REFETCH_SETTLE_MS = 2_000;
+/** And never follows the previous fetch sooner than this. */
+export const REFETCH_INTERVAL_MS = 15_000;
+
+/** How long to wait before refetching for a change, given when the last fetch started. */
+export function refetchDelay(lastFetchAt: number, now: number): number {
+  return Math.max(REFETCH_SETTLE_MS, lastFetchAt + REFETCH_INTERVAL_MS - now);
+}
+
 const SHORT = 7;
 
 /** A path as one shell word, so the command can be pasted as shown. */
