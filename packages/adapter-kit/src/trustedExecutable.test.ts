@@ -71,6 +71,33 @@ describe('trusted executable resolution', () => {
     ).toBeUndefined();
   });
 
+  it.skipIf(process.platform === 'win32')(
+    'still resolves a private git when the filesystem root is an untrusted root',
+    () => {
+      const root = temporaryDirectory();
+      const bin = join(root, 'bin');
+      const project = join(root, 'project');
+      mkdirSync(bin, { recursive: true });
+      mkdirSync(project, { recursive: true });
+      executable(join(bin, 'git'));
+      executable(join(project, 'git'));
+
+      const resolved = join(realpathSync(bin), 'git');
+      expect(
+        resolveTrustedExecutable('git', {
+          environment: { PATH: bin },
+          untrustedRoots: ['/'],
+        }),
+      ).toBe(resolved);
+      expect(
+        resolveTrustedExecutable('git', {
+          environment: { PATH: [project, bin].join(delimiter) },
+          untrustedRoots: ['/', project],
+        }),
+      ).toBe(resolved);
+    },
+  );
+
   it('rejects project-owned PATH directories and symlink targets outside node_modules', () => {
     const root = temporaryDirectory();
     const project = join(root, 'project');

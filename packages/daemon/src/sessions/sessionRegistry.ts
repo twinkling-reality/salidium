@@ -20,6 +20,7 @@ import {
   type StoredEvent,
 } from '@salidium/protocol';
 import type { ExplanationAttempt } from '../enrich/explainer.ts';
+import { hostedExplanationRefused } from '../enrich/explainerBackends.ts';
 import type { RetentionPreview, SalidiumStore } from '../storage/salidiumStore.ts';
 import {
   type CoordinatorListener,
@@ -203,12 +204,27 @@ export class SessionRegistry {
     summary.explanationStatus = explanationIsCurrent(state.latestSeq, state.explained?.basedOnSeq)
       ? 'generated'
       : stored.explanationStatus;
-    return { state, summary };
+    return { state, summary: this.withRefusedExplanation(summary) };
+  }
+
+  /**
+   * A hosted explainer will not run for OpenCode. Say so on every read, including a session whose
+   * stored row never recorded an attempt.
+   */
+  private withRefusedExplanation(summary: SessionSummary): SessionSummary {
+    if (summary.explanationStatus || this.explainerCadence === 'off' || !this.explainerChoice)
+      return summary;
+    return hostedExplanationRefused(summary.provider, this.explainerChoice())
+      ? { ...summary, explanationStatus: 'unavailable' }
+      : summary;
   }
 
   /** A session's list summary without loading it: the live one if loaded, else the stored row. */
   summaryOf(sessionId: string): SessionSummary | undefined {
-    return this.live.get(sessionId)?.summary ?? this.store.getSession(sessionId);
+    const live = this.live.get(sessionId)?.summary;
+    if (live) return live;
+    const stored = this.store.getSession(sessionId);
+    return stored ? this.withRefusedExplanation(stored) : undefined;
   }
 
   peek(sessionId: string): SessionCoordinator | undefined {
@@ -242,6 +258,7 @@ export class SessionRegistry {
         // Title as well as the flag: a summary persisted before the first turn arrived has no
         // flag yet, but its title is the marker-prefixed prompt.
         .filter(isUserSession)
+        .map((summary) => this.withRefusedExplanation(summary))
         .sort(byRecency)
     );
   }
@@ -268,7 +285,10 @@ export class SessionRegistry {
     const byId = new Map(sessions.map((s) => [s.id, s]));
     for (const [id, c] of this.live) if (byId.has(id)) byId.set(id, c.summary);
     return {
-      sessions: [...byId.values()].filter(isUserSession).sort(byRecency),
+      sessions: [...byId.values()]
+        .filter(isUserSession)
+        .map((summary) => this.withRefusedExplanation(summary))
+        .sort(byRecency),
       matched,
       total,
       query,

@@ -27,9 +27,12 @@ import {
  * them. Tool call ids come from the model provider and are short (Ollama's are eight characters),
  * so a call is identified as `<message id>/<call id>`, unique across the session and its lanes.
  *
- * Finality. A step's row is written as soon as it starts and updated while it streams. Only a
- * final row is mapped: an assistant step once `time.completed` or `finish` is set, a shell or
- * compaction row once it leaves `running`. Everything else is final when written.
+ * Finality. A step's row is written as soon as it starts and updated while it streams. Text,
+ * reasoning and usage wait until the row is final, so a partial message is not frozen under its
+ * id. Tool parts that are already running or finished are mapped as they appear; the row is mapped
+ * again when it finishes, and the same event ids dedupe. An assistant step is final once
+ * `time.completed` or `finish` is set, a shell or compaction row once it leaves `running`.
+ * Everything else is final when written.
  */
 
 export const OPENCODE_PROVIDER_ID: ProviderId = 'salidium/opencode';
@@ -133,6 +136,48 @@ export function isCopiedForkRow(session: SessionRow, row: Pick<MessageRow, 'id' 
   if (!session.forkSessionId) return false;
   const m = /_(\d+)$/.exec(row.id);
   return m !== null && Number(m[1]) === row.seq;
+}
+
+/**
+ * Tool parts already running or finished inside a step OpenCode has not closed.
+ * Text, reasoning and usage stay out: their ids are reused when the step finishes, so emitting
+ * them early would freeze a partial message.
+ */
+export function mapInProgressTools(
+  ctx: SessionContext,
+  row: MessageRow,
+  data: Record<string, unknown>,
+  turn: TurnState,
+): CanonicalEvent[] {
+  const created = canonicalTime(num(asObject(data.time)?.created) ?? row.timeCreated);
+  if (!created) return [];
+  const turnId = ctx.agentId ? undefined : turn.turnId;
+  const content = Array.isArray(data.content) ? data.content : [];
+  const events: CanonicalEvent[] = [];
+  content.forEach((rawPart, index) => {
+    const part = asObject(rawPart);
+    if (part?.type !== 'tool') return;
+    const status = asString(asObject(part.state)?.status);
+    if (status !== 'running' && status !== 'completed' && status !== 'error') return;
+    events.push(
+      ...mapToolPart(
+        ctx,
+        row,
+        part,
+        index,
+        turnId,
+        {
+          sessionId: ctx.sessionId,
+          tsSource: 'provider',
+          agentId: ctx.agentId,
+          source: messageSource(ctx, row, index),
+        },
+        created,
+        created,
+      ),
+    );
+  });
+  return events;
 }
 
 /** Whether OpenCode has finished writing the row. */

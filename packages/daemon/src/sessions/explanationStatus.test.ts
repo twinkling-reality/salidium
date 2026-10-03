@@ -114,6 +114,90 @@ describe('explanation runtime status', () => {
     store.close();
   });
 
+  it('keeps an outcome that arrives after its events were already flushed', async () => {
+    const path = mkdtempSync(join(tmpdir(), 'salidium-explanation-persist-'));
+    temporaryDirectories.push(path);
+    const store = new SqliteStore(join(path, 'test.db'));
+    const sessionId = 'claude-code:persist';
+    const coordinator = SessionCoordinator.load({
+      sessionId,
+      provider: 'claude-code',
+      providerSessionId: 'persist',
+      store,
+      listener: { onEvents: () => {}, onSummary: () => {} },
+      options: {
+        explain: true,
+        cadence: 'turn',
+        flushDelayMs: 10_000,
+        explainSession: async () => ({ status: 'unavailable' }),
+      },
+    });
+    coordinator.ingest([turnStarted(sessionId)]);
+    coordinator.flush();
+    expect(store.getSession(sessionId)?.explanationStatus).toBeUndefined();
+    coordinator.requestExplanation();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(coordinator.summary.explanationStatus).toBe('unavailable');
+    coordinator.flush();
+    expect(store.getSession(sessionId)?.explanationStatus).toBe('unavailable');
+    coordinator.close();
+    store.close();
+  });
+
+  it('reports a hosted explainer as unavailable for OpenCode before any attempt', () => {
+    const path = mkdtempSync(join(tmpdir(), 'salidium-explanation-opencode-'));
+    temporaryDirectories.push(path);
+    const store = new SqliteStore(join(path, 'test.db'));
+    const sessionId = 'salidium/opencode:live';
+    let calls = 0;
+    const coordinator = SessionCoordinator.load({
+      sessionId,
+      provider: 'salidium/opencode',
+      providerSessionId: 'live',
+      store,
+      listener: { onEvents: () => {}, onSummary: () => {} },
+      options: {
+        cadence: 'session',
+        flushDelayMs: 10_000,
+        explainerChoice: () => ({ backend: 'codex', model: null }),
+        explainSession: async () => {
+          calls += 1;
+          return { status: 'failed' };
+        },
+      },
+    });
+    coordinator.ingest([turnStarted(sessionId)]);
+    expect(calls).toBe(0);
+    expect(coordinator.summary.explanationStatus).toBe('unavailable');
+    coordinator.flush();
+    expect(store.getSession(sessionId)?.explanationStatus).toBeUndefined();
+    coordinator.close();
+    store.close();
+  });
+
+  it('does not treat a local explainer as a refusal for OpenCode', () => {
+    const path = mkdtempSync(join(tmpdir(), 'salidium-explanation-ollama-'));
+    temporaryDirectories.push(path);
+    const store = new SqliteStore(join(path, 'test.db'));
+    const sessionId = 'salidium/opencode:local';
+    const coordinator = SessionCoordinator.load({
+      sessionId,
+      provider: 'salidium/opencode',
+      providerSessionId: 'local',
+      store,
+      listener: { onEvents: () => {}, onSummary: () => {} },
+      options: {
+        cadence: 'session',
+        flushDelayMs: 10_000,
+        explainerChoice: () => ({ backend: 'ollama', model: 'local:1b' }),
+      },
+    });
+    coordinator.ingest([turnStarted(sessionId)]);
+    expect(coordinator.summary.explanationStatus).toBeUndefined();
+    coordinator.close();
+    store.close();
+  });
+
   it('reports generated after accepting the validated explanation event', async () => {
     const path = mkdtempSync(join(tmpdir(), 'salidium-explanation-generated-'));
     temporaryDirectories.push(path);

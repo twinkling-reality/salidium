@@ -345,7 +345,7 @@ describe('OpenCode store source', () => {
     expect(new Set(pieces.map((e) => e.id))).toEqual(new Set(whole.map((e) => e.id)));
   });
 
-  it('emits a step only once it is final, and its tools once', () => {
+  it('emits a running tool before its step is final, and the result once', () => {
     const id = store.session({ directory: PROJECT });
     store.message(id, 'user', userData('run it', T0 + 1));
     const running = store.message(
@@ -358,7 +358,9 @@ describe('OpenCode store source', () => {
     const h = harness();
     const before = h.poll();
     expect(of(before, 'turn.started')).toHaveLength(1);
-    expect(of(before, 'tool.called')).toHaveLength(0);
+    expect(of(before, 'tool.called')).toHaveLength(1);
+    expect(of(before, 'tool.completed')).toHaveLength(0);
+    expect(of(before, 'agent.message')).toHaveLength(0);
     expect(h.cursors.get(cursorKey(path, id))?.position).toBe(1);
 
     // OpenCode updates the same row in place when the step completes.
@@ -370,8 +372,47 @@ describe('OpenCode store source', () => {
       }),
     );
     const after = h.poll();
-    expect(of(after, 'tool.called')).toHaveLength(1);
+    expect(of(after, 'tool.called')).toHaveLength(0);
     expect(of(after, 'tool.completed')).toHaveLength(1);
+    expect(h.poll()).toEqual([]);
+  });
+
+  it('emits a finished read while its step is still running, without spinning', () => {
+    const id = store.session({ directory: PROJECT });
+    store.message(id, 'user', userData('read it', T0 + 1));
+    store.message(
+      id,
+      'assistant',
+      stepData(
+        T0 + 2,
+        [
+          { type: 'reasoning', text: 'Look at math.js first.' },
+          { type: 'text', text: 'Reading the file.' },
+          tools.read('call_r', T0 + 3, `${PROJECT}/math.js`),
+          tools.running('call_s', T0 + 4, 'shell', { command: 'node --test' }),
+        ],
+        { running: true },
+      ),
+    );
+    const source = createOpenCodeStoreSource();
+    const result = source.poll({
+      path,
+      activeSinceMs: 0,
+      cursors: new Map(),
+      observedAt: '2026-10-02T13:00:00.000Z',
+      maxRecordBytes: 8 * 1024 * 1024,
+      rowBudget: 20,
+    });
+    const events = result.batches.flatMap((batch) => batch.events);
+    expect(result.more).toBe(false);
+    expect(result.batches[0]?.cursor.position).toBe(1);
+    expect(of(events, 'tool.called').map((event) => event.toolName)).toEqual(['read', 'shell']);
+    expect(of(events, 'tool.completed').map((event) => event.toolName)).toEqual(['read']);
+    expect(of(events, 'agent.message')).toHaveLength(0);
+    expect(of(events, 'agent.thinking')).toHaveLength(0);
+
+    const h = harness();
+    h.poll();
     expect(h.poll()).toEqual([]);
   });
 

@@ -19,6 +19,7 @@ import {
   assistantText,
   isCopiedForkRow,
   isFinalRow,
+  mapInProgressTools,
   mapMessage,
   mapSession,
   OPENCODE_PROVIDER_ID,
@@ -449,8 +450,12 @@ export function createOpenCodeStoreSource(): StoreSource {
               if (!isFinalRow(row, data)) {
                 // A row OpenCode is still writing waits for a later poll, unless a later turn has
                 // already begun or ended, in which case OpenCode abandoned it (it stopped mid-step)
-                // and waiting would hold back every row after it for good.
+                // and waiting would hold back every row after it for good. Tools already running or
+                // finished are emitted now; the cursor stays on the previous row so the step is
+                // mapped again when it finishes, and the same event ids dedupe.
                 if (!turnBoundaryAfter(store, session.id, row.seq)) {
+                  if (row.type === 'assistant' && data)
+                    events.push(...mapInProgressTools(ctx, row, data, turn));
                   blocked = rows.slice(index);
                   break;
                 }

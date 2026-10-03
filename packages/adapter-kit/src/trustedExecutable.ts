@@ -11,8 +11,15 @@ export interface TrustedPathOptions {
 }
 
 function normalized(path: string, platform: NodeJS.Platform): string {
-  const value = path.replaceAll('\\', '/').replace(/\/+$/, '');
-  return platform === 'win32' ? value.toLowerCase() : value;
+  const stripped = path.replaceAll('\\', '/').replace(/\/+$/, '');
+  // A root made only of slashes must stay `/`. Stripping it leaves `''`, and `inside` then
+  // treats every absolute path as inside that root. The launchd daemon's working directory is `/`,
+  // which was hiding `/usr/bin/git` and every other trusted executable.
+  const rooted = stripped === '' ? '/' : stripped;
+  const value = platform === 'win32' ? rooted.toLowerCase() : rooted;
+  // `C:\` strips to `c:`. A prefix of `c:/` would match every path on that drive.
+  if (platform === 'win32' && /^[a-z]:$/.test(value)) return `${value}/`;
+  return value;
 }
 
 function inside(path: string, root: string, platform: NodeJS.Platform): boolean {

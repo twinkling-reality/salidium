@@ -11,6 +11,7 @@ import {
   type ExplainerBackendRequest,
   effectiveExplainerMode,
   effectiveExplainerModel,
+  hostedExplanationRefused,
   MAX_EXPLAINER_PROCESSES,
   resolveExplainerBackend,
 } from './explainerBackends.ts';
@@ -39,6 +40,13 @@ describe('explainer backend selection', () => {
     for (const mode of ['auto', 'claude', 'codex'] as const)
       expect(chooseExplainerBackendId('salidium/opencode', mode, available)).toBeUndefined();
     expect(chooseExplainerBackendId('salidium/opencode', 'ollama', available)).toBe('ollama');
+    expect(hostedExplanationRefused('salidium/opencode', { backend: 'codex', model: null })).toBe(
+      true,
+    );
+    expect(
+      hostedExplanationRefused('salidium/opencode', { backend: 'ollama', model: 'local:1b' }),
+    ).toBe(false);
+    expect(hostedExplanationRefused('claude-code', { backend: 'codex', model: null })).toBe(false);
   });
 
   it('does not substitute another provider when one is explicitly configured', () => {

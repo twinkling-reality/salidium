@@ -25,7 +25,11 @@ import {
   type ToolInput,
 } from '@salidium/protocol';
 import { type ExplanationAttempt, explainWithStatus } from '../enrich/explainer.ts';
-import { configuredExplainerMode, explainedConfiguration } from '../enrich/explainerBackends.ts';
+import {
+  configuredExplainerMode,
+  explainedConfiguration,
+  hostedExplanationRefused,
+} from '../enrich/explainerBackends.ts';
 import type { SalidiumStore } from '../storage/salidiumStore.ts';
 
 export interface CoordinatorListener {
@@ -179,6 +183,10 @@ export class SessionCoordinator {
   private closed = false;
   private flushFailures = 0;
   private explanationStatus: ExplanationStatus | undefined;
+  /** The status last written on the session row, so a later outcome is not dropped. */
+  private persistedExplanationStatus: ExplanationStatus | undefined;
+  /** The stored helper choice, read when a summary is built so a change applies without a restart. */
+  private readonly explainerChoice: (() => StoredExplainerChoice) | undefined;
   /** Owns the one provider call this coordinator may have in flight. */
   private explanationAbort: AbortController | undefined;
   /** The stop in force for this session; the registry pushes a change to every live coordinator. */
@@ -194,6 +202,7 @@ export class SessionCoordinator {
     listener: CoordinatorListener,
     seen: Set<string>,
     opts: ResolvedCoordinatorOptions,
+    explainerChoice?: () => StoredExplainerChoice,
   ) {
     this.sessionId = sessionId;
     this.state = state;
@@ -201,6 +210,7 @@ export class SessionCoordinator {
     this.listener = listener;
     this.seen = seen;
     this.opts = opts;
+    this.explainerChoice = explainerChoice;
     this.nextSeq = state.latestSeq + 1;
     this.lastCheckpointSeq = state.latestSeq;
     this.eventsSinceCheckpoint = 0;
@@ -273,7 +283,16 @@ export class SessionCoordinator {
     // Persistent dedupe is looked up against each bounded input chunk. Preloading every historical
     // id here made reopening one large active session an archive-sized, main-thread query.
     const seen = new Set<string>();
-    const coord = new SessionCoordinator(sessionId, state, store, listener, seen, opts);
+    const coord = new SessionCoordinator(
+      sessionId,
+      state,
+      store,
+      listener,
+      seen,
+      opts,
+      args.options?.explainerChoice,
+    );
+    coord.persistedExplanationStatus = store.getSession(sessionId)?.explanationStatus;
     // The constructor cannot infer whether `state` came from a durable checkpoint or a replay.
     // After a migration invalidates caches, a replayed state is current but still needs a new
     // checkpoint; treating its latest event as already checkpointed would force every cold load to
@@ -284,9 +303,41 @@ export class SessionCoordinator {
   }
 
   get summary(): SessionSummary {
-    const s = summarizeSession(this.state, this.opts.now());
-    s.explanationStatus = this.explanationIsCurrent() ? 'generated' : this.explanationStatus;
+    const s = this.summaryForStore();
+    if (!s.explanationStatus) {
+      const refused = this.refusedExplanation();
+      if (refused) s.explanationStatus = refused;
+    }
     return s;
+  }
+
+  /** The summary written to the store. A hosted refusal is reported on read, not baked in here. */
+  private summaryForStore(): SessionSummary {
+    const s = summarizeSession(this.state, this.opts.now());
+    s.explanationStatus = this.explanationStatusForStore();
+    return s;
+  }
+
+  private explanationStatusForStore(): ExplanationStatus | undefined {
+    return this.explanationIsCurrent() ? 'generated' : this.explanationStatus;
+  }
+
+  /**
+   * OpenCode with a hosted explainer is a refusal, not a wait. Reporting it as soon as the choice
+   * is known keeps a live session from saying there has been no attempt.
+   */
+  private refusedExplanation(): ExplanationStatus | undefined {
+    if (this.cadence === 'off' || !this.explainerChoice) return undefined;
+    return hostedExplanationRefused(this.state.provider, this.explainerChoice())
+      ? 'unavailable'
+      : undefined;
+  }
+
+  /** `unavailable` and `failed` ingest no event, so they have to be written on their own. */
+  private explanationNeedsPersist(): boolean {
+    const status = this.explanationStatusForStore();
+    if (status !== 'unavailable' && status !== 'failed') return false;
+    return status !== this.persistedExplanationStatus;
   }
 
   /** Ingests events; returns the number accepted (not duplicates). Synchronous and fast. */
@@ -537,6 +588,7 @@ export class SessionCoordinator {
       .finally(() => {
         if (this.explanationAbort === controller) this.explanationAbort = undefined;
         this.scheduleSummary();
+        if (this.explanationNeedsPersist()) this.scheduleFlush();
       });
   }
 
@@ -574,17 +626,20 @@ export class SessionCoordinator {
       clearTimeout(this.flushTimer);
       this.flushTimer = undefined;
     }
-    if (this.pendingEvents.length === 0 && this.pendingChanges.length === 0) return true;
+    const statusOnly = this.pendingEvents.length === 0 && this.pendingChanges.length === 0;
+    if (statusOnly && !this.explanationNeedsPersist()) return true;
+    if (statusOnly && this.state.latestSeq < 0) return true;
     const events = this.pendingEvents;
     const changes = this.pendingChanges;
     this.pendingEvents = [];
     this.pendingChanges = [];
     try {
       this.store.transaction(() => {
-        this.store.insertEvents(events);
-        this.store.insertChanges(changes, REDUCER_VERSION);
-        this.store.upsertSession(this.summary);
+        if (events.length > 0) this.store.insertEvents(events);
+        if (changes.length > 0) this.store.insertChanges(changes, REDUCER_VERSION);
+        this.store.upsertSession(this.summaryForStore());
       });
+      this.persistedExplanationStatus = this.explanationStatusForStore();
       this.flushFailures = 0;
       return true;
     } catch (err) {

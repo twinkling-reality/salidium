@@ -352,6 +352,21 @@ export function effectiveExplainerModel(
 /** Providers whose sessions an agent CLI may explain: the agents those CLIs belong to. */
 const HOSTED_EXPLAINABLE_PROVIDERS: ReadonlySet<ProviderId> = new Set(['claude-code', 'codex']);
 
+/**
+ * A hosted writer never explains a session it does not belong to. OpenCode is the usual case:
+ * it is often run on a local model, so Claude and Codex are refused before any attempt. The local
+ * Ollama writer, when that is the stored choice, is not a refusal.
+ */
+export function hostedExplanationRefused(
+  provider: ProviderId,
+  choice: { backend: ExplainerBackendSelection; model: string | null },
+  environment: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const mode = effectiveExplainerMode(choice.backend, environment);
+  if (mode === 'off' || mode === 'invalid' || mode === 'ollama') return false;
+  return !HOSTED_EXPLAINABLE_PROVIDERS.has(provider);
+}
+
 export function chooseExplainerBackendId(
   sourceProvider: ProviderId,
   mode: ExplainerMode | 'invalid',
