@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.8.3 - 2026-10-08
+
+- Find `git` and the other programs Salidium runs when the daemon runs as the macOS service. The
+  service's working directory is `/`, and the check that keeps a project's own binaries away from
+  the daemon read that directory as containing every path, so `/usr/bin/git` and every other
+  executable were refused. Under the service, sessions recorded no git snapshots, so reports and
+  the "Where it sits" panel had no commit to anchor work to, the project map could not read a
+  repository, and the explainer could not find `claude` or `codex`. A Windows drive root such as
+  `C:\` no longer matches every path on that drive either.
+- Show an OpenCode tool call as soon as it is running or finished, rather than once the whole step
+  finishes. A read, edit or command now appears while the model is still working through the step.
+  Its text, reasoning and usage still wait for the step to finish, so a partial message is never
+  stored, and reading the finished step again does not duplicate what was already shown.
+- An OpenCode session with a hosted explainer (Claude or Codex) now says its explanation is
+  unavailable instead of that none has been attempted, since a hosted explainer never explains an
+  OpenCode session. The local Ollama explainer still can. This is reported on every read,
+  including for sessions stored earlier, and a changed explainer choice applies without a restart.
+  An explanation that failed or was unavailable is now saved even when the session has no new
+  event to store.
+
 ## 0.8.2 - 2026-10-02
 
 - Read a session's activities, files and subagents by own entry only, so a call id or path named
