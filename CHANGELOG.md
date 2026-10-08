@@ -2,6 +2,13 @@
 
 ## 0.8.3 - 2026-10-08
 
+- Rewind is a tray revealed beneath the report instead of a scrubber at its foot. One horizontal
+  rail shows each turn as a pastel band that keeps its color, and badges with icons for activity,
+  checks and commits; a badge with a count groups nearby events, and a failed check takes priority
+  in its icon. Choose a turn or badge to jump there, or drag the playhead or use the arrow keys to
+  step through changes. **Now** returns to the current report and follows live work, a finished run
+  offers **Whole session**, and choosing Rewind again or pressing Escape hides the tray and keeps
+  the selected moment.
 - Find `git` and the other programs Salidium runs when the daemon runs as the macOS service. The
   service's working directory is `/`, and the check that keeps a project's own binaries away from
   the daemon read that directory as containing every path, so `/usr/bin/git` and every other
