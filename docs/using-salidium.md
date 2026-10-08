@@ -152,8 +152,16 @@ It also cancels an explanation already generating. `salidium explanations when-d
 - **Left** contains unfinished, failing, or unknown work.
 - **Review** calls out claims and actions that still need a person.
 
-Evidence opens coverage, checks, changes, activity, and the original local record. Rewind
-reconstructs the report at an earlier moment. **Models & Usage** holds explanation timing, model
+Evidence opens coverage, checks, changes, activity, and the original local record. Rewind lifts the
+report to reveal one horizontal rail beneath it. Stable pastel bands distinguish recorded turns,
+not outcomes. Badges keep the color of their representative event’s turn; their icons identify
+recorded activity, checks, and commits. A small count marks grouped events, which can span turns.
+The hover label summarizes the group; failures take priority in its icon. Choose a turn or badge
+to jump, or drag the playhead or use the arrow keys to step through changes, not minutes. Scrolling
+reveals more of the rail without changing the selected moment. **Now** restores the current report
+and follows live work; a finished run offers **Whole session**. Choose **Rewind** again or press
+Escape while using the tray to hide it without changing the selected moment.
+**Models & Usage** holds explanation timing, model
 choices, and provider-reported tokens. **Ingest & Storage** shares that inspector slot and accounts
 for local collection cost. **Personalize** appears in the toolbar when a generated
 explanation is available and adapts that explanation in place; History shows how the session unfolded.

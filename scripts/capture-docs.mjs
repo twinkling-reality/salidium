@@ -75,15 +75,12 @@ const SHOTS = [
     /* The scrubber's own legend depends on whether the session is following live, so wait on the
      * element rather than on a word that is only one of three it might print. */
     waitFor: ".rewind input[type='range']",
-    /*
-     * `.timeline`, not `.rewind`. The outer element is transparent and floats over the report, so
-     * a capture of it caught half-sentences of the session showing through from behind and read as
-     * a broken picture.
-     */
-    clip: '.timeline',
+    /* Include the foreground's lower edge to show how Rewind sits beneath the report. */
+    clip: '.session-foot',
+    contextAbove: 32,
     pad: 0,
     viewport: NARROW,
-    /* The long run, so the track has a failure to draw red and marks close enough to merge. */
+    /* The long run, so the track has a failed-check flag and events close enough to group. */
     session: 'claude-code:demo-timeline',
     sessionReady: 'Move invoice numbering off the sequence',
     /*
@@ -261,7 +258,7 @@ try {
           steps: 12,
         });
         await page.mouse.up();
-        await page.getByText('back to now').first().waitFor({ timeout: 10_000 });
+        await page.locator('.scrub-note').waitFor({ timeout: 10_000 });
         await page.waitForTimeout(400);
       }
 
@@ -293,9 +290,12 @@ try {
 
       const clip = {
         x: Math.max(0, box.x - shot.pad),
-        y: Math.max(0, box.y - shot.pad),
+        y: Math.max(0, box.y - shot.pad - (shot.contextAbove ?? 0)),
         width: Math.min((shot.viewport ?? { width: 1400 }).width, box.width + shot.pad * 2),
-        height: Math.min(shot.maxHeight ?? 1000, box.height + shot.pad * 2),
+        height: Math.min(
+          shot.maxHeight ?? 1000,
+          box.height + shot.pad * 2 + (shot.contextAbove ?? 0),
+        ),
       };
       await record(shot.name, theme, await steady(page, clip));
       written += 1;

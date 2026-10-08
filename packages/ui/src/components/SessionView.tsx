@@ -19,7 +19,6 @@ import { BrandMark } from './Brand.tsx';
 import { ConnectionBadge, DOCS, ThemeToggle, ToolButton, ToolLink } from './Controls.tsx';
 import { HistoryRail } from './HistoryRail.tsx';
 import { HistoryTable } from './HistoryTable.tsx';
-import { Icon } from './Icon.tsx';
 import { IngestStorageRail } from './IngestStorage.tsx';
 import { Loading } from './Loading.tsx';
 import { Panel, type PanelSection } from './Panel.tsx';
@@ -34,7 +33,7 @@ import {
 } from './Report.tsx';
 import { statusGlyph } from './SessionList.tsx';
 import { ExplanationSettings } from './Settings.tsx';
-import { Timeline, TimelineKey } from './Timeline.tsx';
+import { Timeline } from './Timeline.tsx';
 import { WhereItSitsPanel } from './WhereItSitsPanel.tsx';
 
 /**
@@ -86,15 +85,16 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
   );
   const [personalizerOpen, setPersonalizerOpen] = useState(false);
   const ingestTriggerRef = useRef<HTMLButtonElement>(null);
+  const rewindTriggerRef = useRef<HTMLButtonElement>(null);
   const contentRef = useScrollState<HTMLDivElement>();
-  /*
-   * The floating scrubber costs the layout no height, so the document has to keep its own last
-   * line clear of it. Its height changes with width, so it is measured rather than written down;
-   * see `useFootSpace`.
-   */
+  // The foreground report gives the revealed tray its measured height, including wrapped labels.
   const [paneRef, footRef] = useFootSpace<HTMLDivElement, HTMLDivElement>(`${rewindOpen}`);
   /* It leaves by retracing its arrival, so it has to still be there while it does. */
   const rewindMounted = useStaysMounted(rewindOpen);
+  const closeRewind = () => {
+    toggleRewind();
+    rewindTriggerRef.current?.focus();
+  };
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: every new overlay/profile/base explanation starts on the personalized version.
   useEffect(() => {
@@ -295,280 +295,288 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
     <div
       className={`session ${statsOpen || ingestOpen || historyMode === 'rail' ? 'has-inspector' : ''} ${statsOpen ? 'has-models' : ''}`}
     >
-      <div className="session-main" ref={paneRef}>
-        <div className="session-actions">
-          {/* Only shown while the list is folded: with the list on screen its own header carries
+      <div className={`session-main ${rewindOpen ? 'has-rewind' : ''}`} ref={paneRef}>
+        <div className="session-surface">
+          <div className="session-actions">
+            {/* Only shown while the list is folded: with the list on screen its own header carries
               the control, and two of them competing would be one too many. */}
-          {!sidebarOpen && (
-            <ToolButton icon="panel" title="Show the session list ([)" onClick={toggleSidebar} />
-          )}
-          {/*
-           * There is no table of contents any more, because there is no longer a document to
-           * navigate: the page is the diagram, and every other section is opened from the badge
-           * that states its headline. Two links pointing at two sections already on screen is
-           * furniture.
-           */}
-          <div className="toolbar session-actions-end">
-            {/*
-             * A count on its own is a notice with nothing to do about it: the page is already
-             * live, so there is nothing to refresh, and the changes are scattered through it. It
-             * is a button, and it takes you to them — History, filtered to what you have not seen.
-             *
-             * It leads the group because it is the only thing in it that comes and goes: the run of
-             * settings behind it then keeps the same distance from the window's edge whether it is
-             * on screen or not, and none of them move under the pointer when it clears.
-             */}
-            {scrubSeq === undefined && freshCount > 0 && (
-              <button
-                type="button"
-                className="fresh"
-                onClick={showNew}
-                title="Changes since you last had this session open. Opens History filtered to them."
-              >
-                Show {freshCount} new
-              </button>
+            {!sidebarOpen && (
+              <ToolButton icon="panel" title="Show the session list ([)" onClick={toggleSidebar} />
             )}
             {/*
-             * The depth control is gone. Its whole job was deciding which sections were present,
-             * and sections are no longer present: each is opened by the badge that summarises it,
-             * so presence is per-section and there is nothing left for one control to set.
+             * There is no table of contents any more, because there is no longer a document to
+             * navigate: the page is the diagram, and every other section is opened from the badge
+             * that states its headline. Two links pointing at two sections already on screen is
+             * furniture.
              */}
-            {hasEvidence && (
-              <ToolButton
-                icon="table"
-                label="Evidence"
-                title="Coverage, checks over time, what changed, what happened when"
-                onClick={() => openPanel('evidence')}
-              />
-            )}
-            {liveView.changes.files.length > 0 && (
-              <ToolButton
-                icon="where"
-                label="Where it sits"
-                title="Place the changed files in the codebase: their modules, what they import and what imports them"
-                onClick={() => openPanel('where')}
-              />
-            )}
-            <ToolButton
-              icon="save"
-              label="Export"
-              title="Save this report as JSON without raw provider records"
-              onClick={() =>
-                downloadSessionExport(
-                  {
-                    id: sessionId,
-                    provider: liveState.provider,
-                    title: liveState.title || summary?.title || liveState.cwd,
-                    cwd: liveState.cwd,
-                    ...(liveState.model ? { model: liveState.model } : {}),
-                  },
-                  liveView,
-                )
-              }
-            />
-            <ToolButton
-              icon="latest"
-              label="Rewind"
-              on={rewindOpen}
-              title="Show the session as it stood at a moment in time"
-              onClick={toggleRewind}
-            />
-            <ToolButton
-              icon="stats"
-              label="Models & Usage"
-              on={statsOpen}
-              title={`Show explanation timing, models and usage${explanationMode ? `. ${explanationMode.label}: ${explanationMode.detail}.` : ''}`}
-              onClick={toggleModels}
-            />
-            <ToolButton
-              icon="storage"
-              label="Ingest & Storage"
-              on={ingestOpen}
-              controls="ingest-storage-inspector"
-              expanded={ingestOpen}
-              buttonRef={ingestTriggerRef}
-              title="Show collection state, queued observations, storage, and loss history"
-              onClick={toggleCollection}
-            />
-            {ex && (
-              <ToolButton
-                icon={personalized ? 'check' : 'sliders'}
-                label={personalized ? 'Personalized' : 'Personalize'}
-                on={personalizerOpen}
-                controls="personalization-composer"
-                expanded={personalizerOpen}
-                disabled={scrubSeq !== undefined}
-                title={
-                  scrubSeq !== undefined
-                    ? 'Return to live before personalizing this report'
-                    : personalized
-                      ? 'Edit the saved terms applied to this report'
-                      : 'Explain the generated report using terms and examples you know'
-                }
-                onClick={() => setPersonalizerOpen((open) => !open)}
-              />
-            )}
-            <ToolButton
-              icon="history"
-              label="History"
-              on={historyMode !== 'off'}
-              title="Toggle history (h)"
-              onClick={toggleHistory}
-            />
-            {/*
-             * The product's route to its own documentation, and for most of a session's life the
-             * only one there is: the first screen carries the same link, but the first screen is
-             * shown when no session has ever existed, so once one has the reader never sees it
-             * again. The words that need a definition — observed, derived, partial, needs you —
-             * are all on the report, which was the one surface with nothing to press.
-             *
-             * Here rather than in the list's head, which was measured and cannot take it: at
-             * 288px that head has 68px of room, a seventh control leaves 32px, and with the
-             * connection badge showing "disconnected" it reaches zero and truncates the product's
-             * own name, at the moment a reader most needs to read it. This row has the room
-             * because it wraps.
-             *
-             * Beside the theme rather than among Evidence and the rest, because those four are
-             * the session and these two are not.
-             */}
-            <ToolLink
-              icon="outbound"
-              label="Docs"
-              href={DOCS}
-              title="Open the Salidium documentation in a new tab"
-            />
-            <ThemeToggle />
-            {/* The separator belongs to the badge: with a healthy connection neither is drawn,
-                and a rule with nothing after it is just a mark at the end of the bar. */}
-            {live.connection !== 'open' && live.connection !== 'connecting' && (
-              <>
-                <span className="toolbar-sep" aria-hidden="true" />
-                <ConnectionBadge status={live.connection} />
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* The table takes the pane: at 320 px a four-hundred-entry log is unreadable, and the
-            session it belongs to is one click away on the toolbar. */}
-        {historyMode === 'table' ? (
-          <HistoryTable
-            changes={live.changes}
-            scrubTs={live.scrub?.ts}
-            onScrub={onScrub}
-            onLive={onLive}
-            onRef={onRef}
-          />
-        ) : (
-          <div className="session-content scroll-fade" ref={contentRef}>
-            <article className="page">
-              <header className="masthead">
-                <BrandMark size={16} className="masthead-mark" />
-                <h1 className="masthead-title">{state.title || summary?.title || state.cwd}</h1>
-                {/*
-                 * The run's identity. Each tag names the fact it carries: `main` on its own is legible
-                 * only to someone who already knows the shape of the data, and the same went for the
-                 * path, the agent and the model.
-                 */}
-                <p className="masthead-meta">
-                  <span className="tag is-status">
-                    <span className={`status-dot ${st.cls}`} aria-hidden="true">
-                      {st.glyph}
-                    </span>
-                    {st.label}
-                    {view.strip.statusSince && ` ${relativeTime(view.strip.statusSince, now)}`}
-                  </span>
-                  <span className="tag masthead-path" title={state.cwd}>
-                    <span className="tag-key">in</span>
-                    <span className="mono">{shortHome(shortPath(state.cwd))}</span>
-                  </span>
-                  {state.gitBranch && (
-                    <span className="tag">
-                      <span className="tag-key">branch</span>
-                      <span className="mono">{state.gitBranch}</span>
-                    </span>
-                  )}
-                  <span className={`tag is-${state.provider}`}>
-                    <span className="tag-key">agent</span>
-                    {providerLabel(state.provider)}
-                  </span>
-                  {state.model && (
-                    <span className="tag">
-                      <span className="tag-key">model</span>
-                      <span className="mono">{state.model}</span>
-                    </span>
-                  )}
-                </p>
-                <VerdictBadge verdict={view.verdict} strip={view.strip} onOpen={openPanel} />
-              </header>
-
-              {scrubSeq !== undefined && (
-                <p className="scrub-note" role="status">
-                  Showing this session as it stood at <strong>{timeOfDay(live.scrub?.ts)}</strong>.
-                  Anything later is hidden. {live.scrub?.loading && <Loading label="replaying" />}
-                </p>
-              )}
-
-              {displayedExplanation ? (
-                <Explained
-                  ex={displayedExplanation}
-                  sessionId={sessionId}
-                  personalized={showingPersonalized}
-                  analogies={showingPersonalized ? personalizedPresentation?.analogies : undefined}
-                  hasAlternate={personalized}
-                  onToggleVersion={
-                    personalized
-                      ? () => setExplanationVersion(showOriginalTerms ? 'personalized' : 'original')
-                      : undefined
-                  }
-                  personalizerOpen={personalizerOpen}
-                  onClosePersonalizer={() => setPersonalizerOpen(false)}
-                  personalizationNote={personalization?.profile.guidance}
-                  hasCurrentPresentation={personalized}
-                />
-              ) : (
-                <ExplanationPending
-                  turns={view.turns.length}
-                  status={summary?.explanationStatus}
-                  cadence={explanationCadence}
-                />
-              )}
-
+            <div className="toolbar session-actions-end">
               {/*
-               * Nothing else lives in the page. The report and the timeline are opened from the
-               * badges and the toolbar; see `Panel`.
+               * A count on its own is a notice with nothing to do about it: the page is already
+               * live, so there is nothing to refresh, and the changes are scattered through it. It
+               * is a button, and it takes you to them — History, filtered to what you have not seen.
+               *
+               * It leads the group because it is the only thing in it that comes and goes: the run of
+               * settings behind it then keeps the same distance from the window's edge whether it is
+               * on screen or not, and none of them move under the pointer when it clears.
                */}
-            </article>
+              {scrubSeq === undefined && freshCount > 0 && (
+                <button
+                  type="button"
+                  className="fresh"
+                  onClick={showNew}
+                  title="Changes since you last had this session open. Opens History filtered to them."
+                >
+                  Show {freshCount} new
+                </button>
+              )}
+              {/*
+               * The depth control is gone. Its whole job was deciding which sections were present,
+               * and sections are no longer present: each is opened by the badge that summarises it,
+               * so presence is per-section and there is nothing left for one control to set.
+               */}
+              {hasEvidence && (
+                <ToolButton
+                  icon="table"
+                  label="Evidence"
+                  title="Coverage, checks over time, what changed, what happened when"
+                  onClick={() => openPanel('evidence')}
+                />
+              )}
+              {liveView.changes.files.length > 0 && (
+                <ToolButton
+                  icon="where"
+                  label="Where it sits"
+                  title="Place the changed files in the codebase: their modules, what they import and what imports them"
+                  onClick={() => openPanel('where')}
+                />
+              )}
+              <ToolButton
+                icon="save"
+                label="Export"
+                title="Save this report as JSON without raw provider records"
+                onClick={() =>
+                  downloadSessionExport(
+                    {
+                      id: sessionId,
+                      provider: liveState.provider,
+                      title: liveState.title || summary?.title || liveState.cwd,
+                      cwd: liveState.cwd,
+                      ...(liveState.model ? { model: liveState.model } : {}),
+                    },
+                    liveView,
+                  )
+                }
+              />
+              <ToolButton
+                icon="latest"
+                label="Rewind"
+                on={rewindOpen}
+                controls="rewind-tray"
+                expanded={rewindOpen}
+                buttonRef={rewindTriggerRef}
+                title="Show the session as it stood at a moment in time"
+                onClick={toggleRewind}
+              />
+              <ToolButton
+                icon="stats"
+                label="Models & Usage"
+                on={statsOpen}
+                title={`Show explanation timing, models and usage${explanationMode ? `. ${explanationMode.label}: ${explanationMode.detail}.` : ''}`}
+                onClick={toggleModels}
+              />
+              <ToolButton
+                icon="storage"
+                label="Ingest & Storage"
+                on={ingestOpen}
+                controls="ingest-storage-inspector"
+                expanded={ingestOpen}
+                buttonRef={ingestTriggerRef}
+                title="Show collection state, queued observations, storage, and loss history"
+                onClick={toggleCollection}
+              />
+              {ex && (
+                <ToolButton
+                  icon={personalized ? 'check' : 'sliders'}
+                  label={personalized ? 'Personalized' : 'Personalize'}
+                  on={personalizerOpen}
+                  controls="personalization-composer"
+                  expanded={personalizerOpen}
+                  disabled={scrubSeq !== undefined}
+                  title={
+                    scrubSeq !== undefined
+                      ? 'Return to live before personalizing this report'
+                      : personalized
+                        ? 'Edit the saved terms applied to this report'
+                        : 'Explain the generated report using terms and examples you know'
+                  }
+                  onClick={() => setPersonalizerOpen((open) => !open)}
+                />
+              )}
+              <ToolButton
+                icon="history"
+                label="History"
+                on={historyMode !== 'off'}
+                title="Toggle history (h)"
+                onClick={toggleHistory}
+              />
+              {/*
+               * The product's route to its own documentation, and for most of a session's life the
+               * only one there is: the first screen carries the same link, but the first screen is
+               * shown when no session has ever existed, so once one has the reader never sees it
+               * again. The words that need a definition — observed, derived, partial, needs you —
+               * are all on the report, which was the one surface with nothing to press.
+               *
+               * Here rather than in the list's head, which was measured and cannot take it: at
+               * 288px that head has 68px of room, a seventh control leaves 32px, and with the
+               * connection badge showing "disconnected" it reaches zero and truncates the product's
+               * own name, at the moment a reader most needs to read it. This row has the room
+               * because it wraps.
+               *
+               * Beside the theme rather than among Evidence and the rest, because those four are
+               * the session and these two are not.
+               */}
+              <ToolLink
+                icon="outbound"
+                label="Docs"
+                href={DOCS}
+                title="Open the Salidium documentation in a new tab"
+              />
+              <ThemeToggle />
+              {/* The separator belongs to the badge: with a healthy connection neither is drawn,
+                and a rule with nothing after it is just a mark at the end of the bar. */}
+              {live.connection !== 'open' && live.connection !== 'connecting' && (
+                <>
+                  <span className="toolbar-sep" aria-hidden="true" />
+                  <ConnectionBadge status={live.connection} />
+                </>
+              )}
+            </div>
           </div>
-        )}
-        {/* The scrubber stays at the foot because it controls the document across its full width.
-            It was once inside a panel, where dragging changed a page the reader could no longer
-            see. Here the document moves above it and the handle stays under the pointer. */}
+
+          {/* The table takes the pane: at 320 px a four-hundred-entry log is unreadable, and the
+            session it belongs to is one click away on the toolbar. */}
+          {historyMode === 'table' ? (
+            <HistoryTable
+              changes={live.changes}
+              scrubTs={live.scrub?.ts}
+              onScrub={onScrub}
+              onLive={onLive}
+              onRef={onRef}
+            />
+          ) : (
+            <div className="session-content scroll-fade" ref={contentRef}>
+              <article className="page">
+                <header className="masthead">
+                  <BrandMark size={16} className="masthead-mark" />
+                  <h1 className="masthead-title">{state.title || summary?.title || state.cwd}</h1>
+                  {/*
+                   * The run's identity. Each tag names the fact it carries: `main` on its own is legible
+                   * only to someone who already knows the shape of the data, and the same went for the
+                   * path, the agent and the model.
+                   */}
+                  <p className="masthead-meta">
+                    <span className="tag is-status">
+                      <span className={`status-dot ${st.cls}`} aria-hidden="true">
+                        {st.glyph}
+                      </span>
+                      {st.label}
+                      {view.strip.statusSince && ` ${relativeTime(view.strip.statusSince, now)}`}
+                    </span>
+                    <span className="tag masthead-path" title={state.cwd}>
+                      <span className="tag-key">in</span>
+                      <span className="mono">{shortHome(shortPath(state.cwd))}</span>
+                    </span>
+                    {state.gitBranch && (
+                      <span className="tag">
+                        <span className="tag-key">branch</span>
+                        <span className="mono">{state.gitBranch}</span>
+                      </span>
+                    )}
+                    <span className={`tag is-${state.provider}`}>
+                      <span className="tag-key">agent</span>
+                      {providerLabel(state.provider)}
+                    </span>
+                    {state.model && (
+                      <span className="tag">
+                        <span className="tag-key">model</span>
+                        <span className="mono">{state.model}</span>
+                      </span>
+                    )}
+                  </p>
+                  <VerdictBadge verdict={view.verdict} strip={view.strip} onOpen={openPanel} />
+                </header>
+
+                {scrubSeq !== undefined && (
+                  <p className="scrub-note" role="status">
+                    Showing this session as it stood at <strong>{timeOfDay(live.scrub?.ts)}</strong>
+                    . Anything later is hidden.{' '}
+                    {live.scrub?.loading && <Loading label="replaying" />}
+                  </p>
+                )}
+
+                {displayedExplanation ? (
+                  <Explained
+                    ex={displayedExplanation}
+                    sessionId={sessionId}
+                    personalized={showingPersonalized}
+                    analogies={
+                      showingPersonalized ? personalizedPresentation?.analogies : undefined
+                    }
+                    hasAlternate={personalized}
+                    onToggleVersion={
+                      personalized
+                        ? () =>
+                            setExplanationVersion(showOriginalTerms ? 'personalized' : 'original')
+                        : undefined
+                    }
+                    personalizerOpen={personalizerOpen}
+                    onClosePersonalizer={() => setPersonalizerOpen(false)}
+                    personalizationNote={personalization?.profile.guidance}
+                    hasCurrentPresentation={personalized}
+                  />
+                ) : (
+                  <ExplanationPending
+                    turns={view.turns.length}
+                    status={summary?.explanationStatus}
+                    cadence={explanationCadence}
+                  />
+                )}
+
+                {/*
+                 * Nothing else lives in the page. The report and the timeline are opened from the
+                 * badges and the toolbar; see `Panel`.
+                 */}
+              </article>
+            </div>
+          )}
+        </div>
+        {/* The report's lower edge reveals its time control. Panels remain outside the clipped
+            foreground surface so their fixed positioning and focus behavior are unaffected. */}
         <div className="session-foot" ref={footRef}>
           {rewindMounted && (
-            <div className={`rewind arrives ${rewindOpen ? 'is-open' : ''}`}>
-              <button
-                type="button"
-                className="btn btn-float"
-                onClick={toggleRewind}
-                title="Close the scrubber"
-              >
-                <Icon name="close" />
-                <span className="sr-only">Close the scrubber</span>
-              </button>
+            <fieldset
+              id="rewind-tray"
+              aria-label="Rewind controls"
+              className={`rewind arrives ${rewindOpen ? 'is-open' : ''}`}
+              inert={!rewindOpen}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape' && !event.defaultPrevented) {
+                  event.stopPropagation();
+                  closeRewind();
+                }
+              }}
+            >
               <Timeline
-                startedAt={liveState.startedAt}
                 endedAt={ended}
-                now={now}
                 changes={live.changes}
+                turns={liveView.turns}
                 checks={liveView.verified.runs}
                 commits={liveView.changes.commits}
                 scrubTs={live.scrub?.ts}
                 onScrub={onScrub}
                 onLive={onLive}
               />
-              <TimelineKey />
-            </div>
+            </fieldset>
           )}
         </div>
         <Panel id="checks" title="Verified">

@@ -1,28 +1,9 @@
 import { useLayoutEffect, useState } from 'react';
 
 /**
- * How much room the pane's floating foot is taking, published to the pane as `--foot-space` so the
- * document can reserve exactly that much beneath itself and no more.
- *
- * It is measured because there is no number to write down: the scrubber is whatever its track,
- * labels and legend come to at the current width. The fixed reservation this replaced was too
- * small at some widths and too large at others.
- *
- * CSS cannot do it: the foot is out of flow, and a custom property set on it would only reach its
- * own descendants, never the scroller beside it. So the pane is written to directly rather than
- * held in state — the value is only ever read by the stylesheet, and a window drag that re-rendered
- * the whole session page on every frame to move a padding would be a poor trade.
- *
- * The two elements arrive as callback refs rather than `useRef`, because they arrive late. The
- * session page renders a placeholder until its snapshot lands, so on the first pass there is no
- * pane and no foot to measure; with `useRef` the effect ran once against two nulls, and — nothing
- * it depended on having changed — never ran again. Reloaded with the scrubber remembered, the page
- * came up with the foot drawn, `--foot-space` unset and the end of the document behind it. As a
- * callback ref the node itself is the dependency,
- * so the measurement happens when there is something to measure.
- *
- * Measured in a layout effect and then observed, for the reason `Timeline` gives: the mount-time
- * answer has to be right on the frame it mounts rather than whenever the first frame is painted.
+ * Publish the tray's measured height to its pane. The foreground surface reserves this space
+ * while Rewind is open. Callback refs also handle a session that mounts after its snapshot loads.
+ * Observe the untransformed foot, not its animated contents, to avoid animation feedback.
  */
 export function useFootSpace<P extends HTMLElement, F extends HTMLElement>(
   contents: string,

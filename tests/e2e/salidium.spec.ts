@@ -1157,6 +1157,252 @@ test('narrow session navigation is a contained modal across resize', async ({
   await expect(close).toBeFocused();
 });
 
+test('rewind reveals a separate control area and preserves the selected report', async ({
+  page,
+  daemon,
+}) => {
+  await openSalidium(page, daemon);
+  if ((page.viewportSize()?.width ?? 0) <= 900) {
+    await page.getByRole('button', { name: 'Hide the session list' }).click();
+  }
+  const report = page.getByRole('region', { name: 'Generated explanation' });
+  await expect(report).toBeVisible();
+  const surface = page.locator('.session-surface');
+  const closed = await surface.boundingBox();
+  expect(closed).not.toBeNull();
+
+  const rewind = page.getByRole('button', { name: 'Rewind', exact: true });
+  await rewind.click();
+  await expect(page.locator('.tl-segment').first()).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const surface = document.querySelector('.session-surface')?.getBoundingClientRect();
+        const foot = document.querySelector('.session-foot')?.getBoundingClientRect();
+        return surface && foot ? surface.bottom - foot.top : Infinity;
+      }),
+    )
+    .toBeLessThanOrEqual(1);
+  const opened = await surface.boundingBox();
+  expect(opened?.y, 'revealing controls keeps the report header in place').toBe(closed?.y);
+  expect(opened?.width, 'revealing controls does not rescale or rewrap the report').toBe(
+    closed?.width,
+  );
+  expect(opened?.height ?? Infinity).toBeLessThan(closed?.height ?? 0);
+
+  // This is a real point-in-time reconstruction: the first recorded turn precedes the
+  // generated explanation, so it must disappear rather than merely select a turn control.
+  const segments = page.locator('.tl-segment');
+  const toolbarHeight = await rewind.evaluate((button) => button.getBoundingClientRect().height);
+  const segmentHeights = await segments.evaluateAll((buttons) =>
+    buttons.map((button) => button.getBoundingClientRect().height),
+  );
+  expect(segmentHeights.every((height) => height === toolbarHeight)).toBe(true);
+  await expect(segments.first()).toHaveClass(/\bbtn\b/);
+  await expect(page.locator('.rewind .tl-header')).toHaveCount(0);
+  await expect(page.locator('.tl-band')).toHaveCount(await segments.count());
+  const firstBand = await page
+    .locator('.tl-band')
+    .first()
+    .evaluate((band) => {
+      const track = band.closest('.tl-track') as HTMLElement;
+      const turn = track.querySelector('.tl-segment') as HTMLElement;
+      const bandBox = band.getBoundingClientRect();
+      const turnBox = turn.getBoundingClientRect();
+      return {
+        width: bandBox.width,
+        offset: Math.abs(bandBox.left - turnBox.left),
+        painted:
+          getComputedStyle(band).backgroundColor !== 'rgba(0, 0, 0, 0)' ||
+          getComputedStyle(band).backgroundImage !== 'none',
+      };
+    });
+  expect(firstBand.width, 'the recorded turn has a visible span on the rail').toBeGreaterThan(0);
+  expect(firstBand.offset, 'the turn selector begins at its recorded span').toBeLessThanOrEqual(1);
+  expect(firstBand.painted, 'the recorded turn span is painted').toBe(true);
+  await segments.first().click();
+  await expect(page.locator('.scrub-note')).toContainText('Anything later is hidden');
+  await expect(report).toBeHidden();
+  const slider = page.getByRole('slider', {
+    name: 'Show the session as it stood at a moment in time',
+  });
+  const turnStart = Number(await slider.inputValue());
+  const nextChange = String(turnStart + 1);
+  await expect(segments.first()).toHaveClass(/is-on/);
+  await slider.focus();
+  await slider.press('ArrowRight');
+  await expect(slider).toHaveValue(nextChange);
+  await expect(segments.first()).toHaveClass(/is-on/);
+
+  await slider.press('ArrowLeft');
+  await expect(slider).toHaveValue(String(turnStart));
+  await slider.press('ArrowRight');
+  await expect(slider).toHaveValue(nextChange);
+  await expect(slider).toHaveAttribute('aria-valuetext', /later events hidden/);
+  await expect(page.locator('.rewind')).not.toContainText(/Moment \d+ of \d+/);
+
+  await rewind.click();
+  await expect(rewind).toBeFocused();
+  await expect(page.locator('.rewind')).toBeHidden();
+  await expect(page.locator('.scrub-note')).toBeVisible();
+  await expect(report).toBeHidden();
+  await rewind.click();
+  await expect(slider).toHaveValue(nextChange);
+  await expect(segments.first()).toHaveClass(/is-on/);
+
+  const now = page.locator('.rewind').getByRole('button', { name: 'Now', exact: true });
+  await now.click();
+  await expect(page.locator('.scrub-note')).toBeHidden();
+  await expect(report).toBeVisible();
+  await expect(slider).toHaveAttribute('aria-valuetext', 'now, following live');
+
+  // The fixture's passing check happened before its explanation. A badge must replay that
+  // event, not just decorate the rail or select the beginning of its containing turn.
+  const markerAppearance = await page.locator('.tl-badge').evaluateAll((badges) =>
+    badges.map((badge) => ({
+      tone: badge.getAttribute('data-tone'),
+      palette: badge.getAttribute('data-palette'),
+      gradient: getComputedStyle(badge).backgroundImage,
+      label: badge.getAttribute('aria-label') ?? '',
+      title: badge.getAttribute('title'),
+      count: badge.querySelector('.btn-marker-count')?.textContent ?? null,
+    })),
+  );
+  const workMarker = markerAppearance.find((marker) => marker.tone === 'work');
+  const passMarker = markerAppearance.find((marker) => marker.tone === 'pass');
+  expect(workMarker, 'the fixture records a file edit').toBeDefined();
+  expect(passMarker, 'the fixture records a passing check').toBeDefined();
+  expect(passMarker?.palette, 'both events belong to the same recorded turn').toBe(
+    workMarker?.palette,
+  );
+  expect(passMarker?.gradient, 'outcomes do not change the owning turn color').toBe(
+    workMarker?.gradient,
+  );
+  expect(passMarker?.gradient).not.toBe('none');
+  for (const marker of markerAppearance) {
+    const count = Number(marker.label.match(/^(\d+) recorded events:/)?.[1] ?? 1);
+    expect(marker.count, 'a grouped badge exposes its count without opening its label').toBe(
+      count > 1 ? (count > 99 ? '99+' : String(count)) : null,
+    );
+    expect(marker.title).toBe(marker.label);
+  }
+  const checkBadge = page.locator('.tl-badge[data-tone="pass"]').first();
+  await expect(checkBadge).toHaveAttribute('aria-label', /check|pass|pnpm/i);
+  await checkBadge.click();
+  await expect(page.locator('.scrub-note')).toBeVisible();
+  await expect(report).toBeHidden();
+  expect(Number(await slider.inputValue())).toBeGreaterThan(turnStart);
+  const markerAlignment = await checkBadge.evaluate((badge) => {
+    const playhead = badge.closest('.tl-track')?.querySelector('.tl-playhead');
+    if (!playhead) return Infinity;
+    const badgeBox = badge.getBoundingClientRect();
+    const playheadBox = playhead.getBoundingClientRect();
+    return Math.abs(badgeBox.left + badgeBox.width / 2 - playheadBox.left - playheadBox.width / 2);
+  });
+  expect(markerAlignment, 'the playhead lands on the selected event badge').toBeLessThanOrEqual(1);
+  await now.click();
+  await expect(page.locator('.scrub-note')).toBeHidden();
+  await expect(report).toBeVisible();
+
+  await slider.focus();
+  await slider.press('Home');
+  await expect(slider).toHaveValue('0');
+  await expect(page.locator('.scrub-note')).toBeVisible();
+  await slider.press('End');
+  await expect(slider).toHaveValue((await slider.getAttribute('max')) ?? '');
+  await expect(page.locator('.scrub-note')).toBeHidden();
+  await expectNoA11yViolations(page);
+
+  const theme = page.getByRole('button', { name: /Theme:/ });
+  await theme.click();
+  await theme.click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expectNoA11yViolations(page);
+
+  await slider.focus();
+  await slider.press('Escape');
+  await expect(page.locator('.rewind')).toBeHidden();
+  await expect(rewind).toBeFocused();
+});
+
+test('rewind stays usable beside narrow history with reduced motion', async ({
+  page,
+  daemon,
+}, testInfo) => {
+  test.skip(!testInfo.project.name.includes('narrow'), 'short narrow viewport');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setViewportSize({ width: 320, height: 568 });
+  await openSalidium(page, daemon);
+  await page.getByRole('button', { name: 'Hide the session list' }).click();
+  await page.getByRole('button', { name: 'History', exact: true }).click();
+  await page.getByRole('button', { name: 'Rewind', exact: true }).click();
+  await expect(page.locator('.tl-segment').first()).toBeVisible();
+
+  const geometry = await page.evaluate(() => {
+    const pane = document.querySelector('.session-main') as HTMLElement;
+    const surface = document.querySelector('.session-surface') as HTMLElement;
+    const content = document.querySelector('.session-content') as HTMLElement;
+    const foot = document.querySelector('.session-foot') as HTMLElement;
+    const strip = document.querySelector('.tl-segments') as HTMLElement;
+    const surfaceBox = surface.getBoundingClientRect();
+    const footBox = foot.getBoundingClientRect();
+    const paneBox = pane.getBoundingClientRect();
+    const stripBox = strip.getBoundingClientRect();
+    return {
+      documentOverflow: document.documentElement.scrollWidth - innerWidth,
+      contentHeight: content.clientHeight,
+      contentBottom: content.getBoundingClientRect().bottom,
+      surfaceBottom: surfaceBox.bottom,
+      footTop: footBox.top,
+      footBottom: footBox.bottom,
+      paneBottom: paneBox.bottom,
+      stripLeft: stripBox.left,
+      stripRight: stripBox.right,
+      motion: surface.getAnimations().length + foot.getAnimations({ subtree: true }).length,
+    };
+  });
+  expect(geometry.documentOverflow).toBe(0);
+  expect(
+    geometry.contentHeight,
+    'history and replay leave a scrollable report visible',
+  ).toBeGreaterThan(40);
+  expect(geometry.contentBottom).toBeLessThanOrEqual(geometry.surfaceBottom + 1);
+  expect(geometry.surfaceBottom).toBeLessThanOrEqual(geometry.footTop + 1);
+  expect(geometry.footBottom).toBeLessThanOrEqual(geometry.paneBottom + 1);
+  expect(geometry.stripLeft).toBeGreaterThanOrEqual(0);
+  expect(geometry.stripRight).toBeLessThanOrEqual(320);
+  expect(geometry.motion).toBe(0);
+
+  const first = page.locator('.tl-segment').first();
+  await first.focus();
+  await first.press('Enter');
+  await expect(page.locator('.scrub-note')).toBeVisible();
+  await expect(first).toHaveClass(/is-on/);
+  await page.getByRole('slider').focus();
+  await page.getByRole('slider').press('End');
+  await expect(page.locator('.scrub-note')).toBeHidden();
+
+  const lastContentVisible = await page.locator('.session-content').evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    const article = element.querySelector('article');
+    return article
+      ? article.getBoundingClientRect().bottom <= element.getBoundingClientRect().bottom + 1
+      : false;
+  });
+  expect(lastContentVisible, 'the end of the report can be read above the replay controls').toBe(
+    true,
+  );
+  await expectNoA11yViolations(page);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('button', { name: 'Models & Usage', exact: true }).click();
+  await expect(page.locator('.inspector.models-usage')).toBeVisible();
+  await expect(page.locator('.rewind')).toBeVisible();
+  await expect
+    .poll(() => page.locator('.session-content').evaluate((element) => element.clientHeight))
+    .toBeGreaterThan(150);
+});
+
 /*
  * Everything that arrives with motion leaves the same way, which is a rule no unit test can hold:
  * it is a claim about what the stylesheet does across two frames of a real compositor.
@@ -1195,10 +1441,10 @@ test('a surface that arrives with motion also leaves with it', async ({
   expect(panelSettled.focusable, 'a closed panel holds nothing focusable').toBe(0);
 
   // The scrubber at the pane's foot, whose height the document reserves.
-  await page.getByRole('button', { name: 'Rewind' }).click();
+  await page.getByRole('button', { name: 'Rewind', exact: true }).click();
   await expect(page.locator('.rewind')).toBeVisible();
   await watchExit(page, '.rewind');
-  await page.getByRole('button', { name: 'Rewind' }).click();
+  await page.getByRole('button', { name: 'Rewind', exact: true }).click();
   const footLeaving = await recordedExit(page);
   expect(footLeaving.found, 'the scrubber is still in the document while it leaves').toBe(true);
   expect(footLeaving.running, 'the scrubber leaves over time').toContain('opacity');
@@ -1206,36 +1452,23 @@ test('a surface that arrives with motion also leaves with it', async ({
   expect(footLeaving.display, 'and still holds a box while it leaves').not.toBe('none');
   const footSettled = await settled(page, '.rewind');
   expect(footSettled.visibility).toBe('hidden');
+  expect(footSettled.focusable, 'closed replay controls leave the keyboard order').toBe(0);
 
   /*
-   * The clearance the document keeps under the foot is measured from the foot's own box by
-   * `useFootSpace`, so a surface that lingers to fade has to give that room back when it finally
-   * goes. Left behind, it is a band of empty page below the last thing written on it.
+   * The foreground reserves the measured tray height while it is open. After the tray leaves,
+   * the foreground must fill the pane again rather than leave an empty band underneath it.
    */
   await expect
     .poll(() =>
       page.evaluate(() => {
         const pane = document.querySelector('.session-main') as HTMLElement;
-        const foot = document.querySelector('.session-foot') as HTMLElement;
-        return {
-          reserved: pane.style.getPropertyValue('--foot-space'),
-          actual: `${foot.getBoundingClientRect().height}px`,
-        };
+        const surface = document.querySelector('.session-surface') as HTMLElement;
+        return Math.abs(
+          pane.getBoundingClientRect().bottom - surface.getBoundingClientRect().bottom,
+        );
       }),
     )
-    .toEqual({ reserved: expect.anything(), actual: expect.anything() });
-
-  const space = await page.evaluate(() => {
-    const pane = document.querySelector('.session-main') as HTMLElement;
-    const foot = document.querySelector('.session-foot') as HTMLElement;
-    return {
-      reserved: parseFloat(pane.style.getPropertyValue('--foot-space')),
-      actual: foot.getBoundingClientRect().height,
-    };
-  });
-  expect(space.reserved, 'the document stops reserving room the scrubber no longer needs').toBe(
-    space.actual,
-  );
+    .toBeLessThanOrEqual(1);
 });
 
 /*

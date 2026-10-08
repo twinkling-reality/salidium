@@ -314,11 +314,14 @@ const RAW: Array<Omit<Page, "n">> = [
       ),
       h("Rewind"),
       p(
-        "Rewind puts a scrubber at the foot of the session. Until you move it, it sits at the live end and follows the run as it happens. Drag it and the page becomes the session as it stood at that moment, with everything later hidden.",
+        "Rewind lifts the report to reveal a contrasting tray beneath it. Choose a turn or event badge, or drag the playhead, and the page becomes the session as it stood at that moment, with everything later hidden. Now returns to the current report and follows live work; for a finished run, choose Whole session.",
       ),
-      shot("rewind", "The Salidium rewind scrubber under a report, with marks for checks and commits along the track."),
+      shot("rewind", "Rewind revealed beneath the report, with pastel turn bands and event badges along one track."),
       p(
-        "The track is one step per change, not per minute. A mark is a check or a commit, red where a check failed, and marks too close to draw apart are merged into one that takes the worst outcome in it.",
+        "Pastel bands and badges identify turns, keeping the same color as you move through the run; color does not indicate success. Icons identify recorded activity, checks, and commits. A small count marks grouped events, which can span turns. The badge keeps its representative event’s turn color, and its hover label summarizes the group. Failed checks take priority in the icon; a checkmark represents a passing check, not a verdict on the whole group.",
+      ),
+      p(
+        "The rail scrolls horizontally without changing the selected moment. Drag the playhead or use the arrow keys to step through changes, not minutes. Choose Rewind again, or press Escape while using the tray, to hide it and keep the selected moment.",
       ),
       h("History"),
       p(

@@ -547,16 +547,70 @@
   grid-template-columns: minmax(0, 1fr) 320px;
 }
 
-/*
- * The scrubber floats across the document's foot rather than becoming a permanent band. It sits
- * inside `.session-main`, so it follows the page when the list or inspector opens, but outside the
- * scroller so it stays under the pointer while the document itself rewinds above it.
- */
+/* Rewind is the ground beneath the report. Its measured height determines how far the
+   foreground's lower edge rises; the toolbar and reading position stay anchored. */
+.session-main {
+  --page-gutter: var(--space-6);
+  --foot-space: 0px;
+  --rewind-ground: #283239;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--rewind-ground);
+}
+
+:root[data-theme="dark"] .session-main {
+  --rewind-ground: #0e1215;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .session-main {
+    --rewind-ground: #0e1215;
+  }
+}
+
+.session-surface {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+  border-radius: 0;
+  margin-bottom: 0;
+  transition:
+    margin-bottom var(--motion-base) var(--ease),
+    border-radius var(--motion-base) var(--ease);
+}
+
+.has-rewind > .session-surface {
+  margin-bottom: var(--foot-space);
+  border-radius: 0 0 28px 28px;
+  box-shadow: 0 6px 16px #00000020;
+}
+
 .session-foot {
-  /*
-   * The direction the scrubber arrives from, declared by the surface the way `--hover-row` is.
-   */
   --rise: var(--space-2);
+  /* Local material tokens keep the tray legible in either report theme. */
+  --bg: var(--rewind-ground);
+  --text: #f5f4ef;
+  --text-secondary: #d0d5d7;
+  --text-tertiary: #b8c1c5;
+  --border: #58656c;
+  --border-strong: #7e8c93;
+  --bg-muted: color-mix(in srgb, var(--text) 10%, var(--rewind-ground));
+  --bg-subtle: color-mix(in srgb, var(--text) 5%, var(--rewind-ground));
+  --scroll-thumb: var(--border);
+  --scroll-thumb-hover: var(--border-strong);
+  --accent: #c5ddec;
+  --accent-soft: #40515c;
+  --ok: #85d6a4;
+  --danger: #ffaaa4;
   position: absolute;
   right: 0;
   bottom: 0;
@@ -564,21 +618,9 @@
   z-index: var(--z-float);
   display: flex;
   align-items: center;
-  /*
-   * Centred, because the scrubber is the document's control and the document is centred.
-   *
-   * It was flex-start, which is the same thing until the window is wider than the reading column
-   * and then is not: measured at a 1990 px viewport, the page's column and the scrubber are both
-   * 1000 px wide — the same max-width, so they were plainly meant to line up — and the scrubber sat
-   * 327 px to the left of it, reading as a widget dropped on the page rather than part of it.
-   */
   justify-content: center;
-  /*
-   * The clearance from the window's edge is the foot's own padding rather than an offset on each
-   * scrubber, so the foot's box is the whole of the space it occupies and the page can reserve room
-   * against one measurement. With nothing open there is no foot and there is nothing to clear.
-   */
-  padding: 0 var(--page-gutter) var(--space-4);
+  padding: var(--space-3) var(--page-gutter);
+  color: var(--text);
   pointer-events: none;
 }
 
@@ -586,41 +628,12 @@
   padding: 0;
 }
 
-/*
- * The pane: chrome on top, one scrolling body beneath it. The toolbar used to live inside the
- * scroller as a sticky child, which meant working around it twice — masking around it for the
- * scroll fade, and nesting a second scroller inside it for the history table.
- *
- * It owns the page gutter, rather than the scroller inside it, because the floating scrubber is
- * positioned against this box and has to inset by the same amount the document does.
- */
-.session-main {
-  --page-gutter: var(--space-6);
-  /*
-   * How much of the pane's bottom edge the floating foot is standing in. Measured from the foot
-   * itself and written here by `useFootSpace`, because nothing in CSS can read the height of an
-   * out-of-flow box back into the box beside it — and the alternatives all mean writing a number
-   * down: the scrubber's height is whatever its track and legend come to at this width. Zero when
-   * it is closed.
-   */
-  --foot-space: 0px;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-}
-
 .session-content {
   flex: 1;
   min-width: 0;
   min-height: 0;
-  /*
-   * The floating foot costs the layout no height, so the page makes room for it itself —
-   * otherwise the last thing on the page can only ever be read from behind it. The reservation was
-   * a fixed token, which reserved too little for the scrubber at some widths and too much at others.
-   */
-  padding: 0 var(--page-gutter) calc(var(--space-10) + var(--foot-space));
+  /* The foreground already reserves the tray, so the document needs only its reading margin. */
+  padding: 0 var(--page-gutter) var(--space-10);
   overflow-y: auto;
   /*
    * Both edges, so the column is centred on the pane whether or not the page overflows. A scrollbar
@@ -791,213 +804,197 @@
 }
 
 /* ------------------------------------------------------------ timeline */
-
-/*
- * The session's shape and the scrubber are one control. The track is one step per change, and the
- * marks on it are the steps that decide trust. Everything past the handle is dimmed rather than
- * removed, so you can see how much session you are choosing not to look at.
- *
- * There were density bars along it until the axis stopped being the wall clock. On a step axis
- * "how much was happening" is constant by construction, so they had no job left; on the clock they
- * spent much of the track drawing empty time. Every position on the track is now a
- * mark, a handle or the ground under them.
- */
+/* One rail: turn identity underneath, observed activity above, exact selection through both. */
 .timeline {
-  /* How deep the mark lane under the axis is; the tallest mark fills it. */
-  --tl-lane: 9px;
-  max-width: var(--measure);
-  margin-bottom: var(--space-8);
+  min-width: 0;
 }
-
-/*
- * Nothing in the track is in flow any more — marks, dim, stem and input are all absolute — so this
- * height is the whole box rather than a floor under the bars.
- *
- * It stayed at 32 px for one release after the bars were deleted, which is the height they had
- * filled. With them gone that leaves empty ground above a 1 px rule. The box is now the handle's height,
- * because the handle is the tallest thing in it.
- */
+.tl-navigation {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+.tl-segments {
+  --fade-left: 0px;
+  --fade-right: 0px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  padding: 3px 14px;
+  margin: -3px -14px;
+  scroll-padding-inline: 16px;
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 var(--fade-left),
+    #000 calc(100% - var(--fade-right)),
+    transparent
+  );
+}
+.tl-segments[data-fade="left"],
+.tl-segments[data-fade="both"] {
+  --fade-left: 16px;
+}
+.tl-segments[data-fade="right"],
+.tl-segments[data-fade="both"] {
+  --fade-right: 16px;
+}
+/* A small, repeatable identity palette. Outcome is conveyed by the glyph, never by turn color. */
+.timeline [data-palette="0"] {
+  --rail-light: #ead4c6;
+  --rail-deep: #bc947f;
+}
+.timeline [data-palette="1"] {
+  --rail-light: #ccdaf2;
+  --rail-deep: #839fc7;
+}
+.timeline [data-palette="2"] {
+  --rail-light: #c2dfdb;
+  --rail-deep: #7ca9a7;
+}
+.timeline [data-palette="3"] {
+  --rail-light: #dcd2ec;
+  --rail-deep: #a38dbb;
+}
+.timeline [data-palette="4"] {
+  --rail-light: #e6dfbd;
+  --rail-deep: #aea578;
+}
 .tl-track {
   position: relative;
-  height: 18px;
-  /* The lane the marks hang in, below the axis. Reserved here so the legend cannot sit on them. */
-  margin-bottom: var(--tl-lane);
-  border-bottom: 1px solid var(--border);
+  height: 72px;
 }
-
-.tl-marks {
+.tl-bands {
   position: absolute;
-  inset: 0;
+  inset: 24px 0 auto;
+  height: 6px;
 }
-
-/*
- * The marks hang off the axis rather than floating across it, and every one of them is described
- * here — all three tones, in one place, because they were in two and that is how this went wrong.
- *
- * They were 7 px shapes at `bottom: -4px`, which straddles the 1 px rule, so they sat on top of the
- * line they were meant to be annotating and touched neither the track above nor anything below.
- * Docked under the axis in a lane of their own they read as what they are: marks on the axis.
- *
- * Pass and fail also differ in shape now, not only in hue. They were two circles of identical size
- * separated by red against green and nothing else — the one pair about 8% of men cannot separate,
- * and one that vanishes entirely in a greyscale screenshot, which is the medium this app is most
- * often looked at in. A failure is now the tallest and widest thing in the lane whether or not you
- * can see that it is red. The commit was never a circle: it has been a rotated square since it was
- * drawn, and it stays one, because a shape that already reads as "not a verdict" is doing its job.
- */
-.tl-mark {
+.tl-bands::before {
+  content: "";
   position: absolute;
-  top: 100%;
-  width: 2px;
-  height: 5px;
-  margin-left: -1px;
-  border-radius: 0 0 1px 1px;
-  background: var(--text-tertiary);
+  left: 8px;
+  width: var(--lead-width);
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
 }
-
-/* One mark per column, so a mark is always a thing you can see rather than a stack of them. */
-.tl-mark.tl-pass {
-  height: 5px;
-  background: var(--ok);
-}
-
-.tl-mark.tl-fail {
-  width: 3px;
-  height: var(--tl-lane);
-  margin-left: -1.5px;
-  background: var(--danger);
-}
-
-/*
- * A commit is not a verdict, so it is not a tick: it is the square, turned, that it always was.
- * Only its footing changed — `bottom: -3px` centred it on the axis rule, and it now hangs in the
- * lane with the others so all three sit on one line.
- */
-.tl-mark.tl-commit {
-  top: calc(100% + 1px);
-  width: 5px;
-  height: 5px;
-  margin-left: -2.5px;
-  border-radius: 0;
-  background: var(--text-secondary);
-  transform: rotate(45deg);
-}
-
-.tl-future {
+.tl-band {
   position: absolute;
   top: 0;
-  right: 0;
-  bottom: 0;
-  background: var(--bg);
-  opacity: 0.66;
-  pointer-events: none;
+  height: 6px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--rail-deep), var(--rail-light));
 }
-
-/* The handle is the only visible part of the input; the track is drawn behind it. */
+.tl-segment {
+  position: absolute;
+  top: 44px;
+  justify-content: flex-start;
+  min-width: 0;
+  padding-inline: 5px;
+  overflow: hidden;
+}
+.tl-segment-number {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+.tl-segment-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tl-end {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  padding-top: 13px;
+  gap: 9px;
+}
+.tl-readout {
+  min-height: 16px;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+.tl-empty {
+  position: absolute;
+  top: 18px;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
 .tl-range {
   position: absolute;
-  inset: 0;
+  inset: 5px 0 auto;
   width: 100%;
-  height: 100%;
+  height: 42px;
   margin: 0;
   background: transparent;
   appearance: none;
   cursor: ew-resize;
 }
-
-/*
- * A handle you can see is a handle. This was a 3px line the colour of the accent, which at the
- * right-hand end of a track reads as the track's edge rather than as something to take hold of —
- * the control was not discoverable as a control at all. It is a grip now: a round knob on a stem,
- * the shape every scrubber uses, and it grows under the pointer.
- */
 .tl-range::-webkit-slider-thumb {
   width: 16px;
-  height: 16px;
-  border: 3px solid var(--bg);
-  border-radius: 50%;
-  background: var(--text);
-  box-shadow: var(--shadow-float-sm);
+  height: 40px;
+  border: 0;
+  background: transparent;
   appearance: none;
   cursor: grab;
 }
-
 .tl-range::-moz-range-thumb {
   width: 16px;
-  height: 16px;
-  border: 3px solid var(--bg);
-  border-radius: 50%;
-  background: var(--text);
-  box-shadow: var(--shadow-float-sm);
+  height: 40px;
+  border: 0;
+  background: transparent;
   cursor: grab;
 }
-
+.tl-range::-moz-range-track {
+  background: transparent;
+}
 .tl-range:active::-webkit-slider-thumb {
   cursor: grabbing;
 }
-
-/*
- * The ring belongs on the grip, not on the box. `.tl-range` is `inset: 0`, so the browser's own
- * focus ring drew a rectangle around the whole track — which after the bars went was a rectangle
- * around nothing, and read as a container the control had been put inside. The thumb ring below is
- * the visible focus indicator; the outline is moved off the input rather than simply removed.
- */
 .tl-range:focus-visible {
   outline: none;
 }
-
-/*
- * The ring the global rule would have drawn, restated because it cannot reach a pseudo-element and
- * the input itself has had its outline moved off. Same colour and same width as everywhere else;
- * these two were the only focus rings in the application set in `--text` rather than the accent.
- * The offset stays at 2px because the thumb is a small circle riding a track, and at 1px the ring
- * touched it.
- */
-.tl-range:focus-visible::-webkit-slider-thumb {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.tl-range:focus-visible::-moz-range-thumb {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-/*
- * The stem, so the knob reads against the track rather than floating over it.
- *
- * Greyscale, like the knob. Both were the accent until the bars were deleted, and rule 4 reserves
- * colour for verdicts: with the bars gone the only saturated things left on the track were a check
- * that failed, a check that passed, and the handle — so the handle read as a third verdict.
- */
-.tl-stem {
+.tl-badge {
+  --marker-light: var(--rail-light);
+  --marker-deep: var(--rail-deep);
   position: absolute;
-  top: 0;
-  bottom: 0;
+  top: 11px;
+  z-index: 1;
+  margin-left: -15px;
+}
+.tl-playhead {
+  position: absolute;
+  top: 4px;
+  z-index: 0;
   width: 2px;
-  background: var(--text-tertiary);
+  height: 43px;
+  margin-left: -1px;
+  border-radius: 2px;
+  background: var(--text);
+  box-shadow: 0 0 0 2px #10171940;
   pointer-events: none;
 }
-
-.tl-legend {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-3);
-  margin-top: var(--space-2);
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
+.tl-playhead::before,
+.tl-playhead::after {
+  content: "";
+  position: absolute;
+  left: -2px;
+  width: 6px;
+  height: 3px;
+  border-radius: 2px;
+  background: inherit;
 }
-
-.tl-legend-mid {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
+.tl-playhead::before {
+  top: 0;
 }
-
-.tl-legend-mid strong {
-  font-weight: 400;
-  color: var(--text-secondary);
+.tl-playhead::after {
+  bottom: 0;
+}
+.tl-range:focus-visible ~ .tl-playhead {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 
 /* -------------------------------------------------------------- visuals */
@@ -1555,8 +1552,7 @@
   flex: 1;
   flex-direction: column;
   min-height: 0;
-  /* The table is in the same pane, under the same foot, and clears it the same way. */
-  padding: 0 var(--space-6) calc(var(--space-4) + var(--foot-space));
+  padding: 0 var(--space-6) var(--space-4);
 }
 
 .htab-head {
@@ -5399,57 +5395,37 @@ button.cov-cell:hover {
   white-space: nowrap;
 }
 
-/*
- * The track names what it draws; without this the marks are shapes and a guess, and the axis is a
- * clock a reader would be wrong to read as one. It used to be hidden inside the scrubber bar,
- * which is the only place the track appears — so the one line naming the track was never on
- * screen. It is two clauses at `--text-xs` now, which is one line at the bar's width.
- */
-/* ---------------------------------------------------------------------------
- * The scrubber, at the foot of the document it scrubs.
- *
- * Floating over the pane rather than banding across it, given the document's full column, and asked
- * for rather than always present. `.session-foot` owns its position at the foot of the pane.
- * ------------------------------------------------------------------------ */
+/* The exposed tray shares the report column; its controls form one surface. */
 .rewind {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
   width: 100%;
   max-width: var(--page-w);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
   pointer-events: auto;
-  /* `--rise` comes from `.session-foot`: this stands at the pane's foot, so it comes up into
-     place and goes back down out of it. `.arrives` (scale.css) carries both directions. */
 }
 
-/*
- * Out of the foot's flow once it has finished leaving. The pane reserves exactly the height of
- * `.session-foot` (`useFootSpace`), so a scrubber that keeps its box keeps 70px of empty document
- * under the last line written on it. `.arrives` delays the flip by the length of the fade, so the
- * room is given back at the end of the gesture rather than at the start of it.
- */
 .rewind:not(.is-open) {
   position: absolute;
 }
 
-.rewind .timeline {
-  flex: 1;
-  min-width: 0;
-  /*
-   * Two of the chart's page manners are wrong for a bar and both were measured rather than
-   * spotted: the section's `margin-bottom` put 32 px of nothing below the card, which is invisible
-   * on the page and is a third of the foot when the foot is measured; and the prose measure held
-   * the track to 599.6 px inside a 944 px bar, so `flex: 1` above never took effect and the
-   * scrubber neither filled nor centred on the column it scrubs.
-   */
-  max-width: none;
-  margin: 0;
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg);
-  box-shadow: var(--shadow-float);
-  backdrop-filter: var(--float-blur);
+@media (max-width: 600px) {
+  .session-foot {
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .has-rewind > .session-surface {
+    border-radius: 0 0 22px 22px;
+  }
+}
+
+/* On a stacked layout the report, time control and inspector must all remain usable.
+   Give the inspector a smaller scrollable share while the time control is exposed. */
+@media (max-width: 900px) {
+  .session.has-inspector:has(.session-main.has-rewind) {
+    grid-template-rows: minmax(0, 1fr) minmax(0, min(220px, 25%));
+  }
 }
 
 /* ---------------------------------------------------------------------------
