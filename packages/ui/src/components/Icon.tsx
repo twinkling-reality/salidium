@@ -9,6 +9,10 @@
  */
 
 export type IconName =
+  | 'commit'
+  | 'terminal'
+  | 'delegate'
+  | 'plan'
   | 'panel'
   | 'history'
   | 'sliders'
@@ -37,6 +41,30 @@ export type IconName =
   | 'where';
 
 const PATHS: Record<IconName, React.ReactNode> = {
+  commit: (
+    <>
+      <path d="M1.5 8h3M11.5 8h3" />
+      <circle cx="8" cy="8" r="3.5" />
+    </>
+  ),
+  terminal: (
+    <>
+      <path d="m3 4.5 3.5 3.5L3 11.5M8.5 11.5H13" />
+    </>
+  ),
+  delegate: (
+    <>
+      <circle cx="8" cy="3.5" r="1.5" />
+      <circle cx="3.5" cy="12" r="1.5" />
+      <circle cx="12.5" cy="12" r="1.5" />
+      <path d="M8 5v3H3.5v2.5M8 8h4.5v2.5" />
+    </>
+  ),
+  plan: (
+    <>
+      <path d="M6.5 4H13M6.5 8H13M6.5 12H13M3 4h.5M3 8h.5M3 12h.5" />
+    </>
+  ),
   /* One sheet laid over another: take this text. */
   copy: (
     <>
