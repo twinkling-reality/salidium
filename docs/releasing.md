@@ -12,8 +12,10 @@ The website is separate and neither release workflow deploys it.
    `pnpm lint`, `pnpm typecheck`, `pnpm build`, and `pnpm test`.
 3. Run `pnpm test:e2e:full`. This must exercise the real daemon in Chromium, Firefox, and WebKit;
    an ordinary push run that covers Chromium alone is not equivalent release evidence.
-4. From `apps/site`, run `npm ci`, `npm audit --audit-level=high`, `npm run lint`, `npm test`, and
+4. From `apps/site`, run `npm ci`, `node scripts/audit.mjs`, `npm run lint`, `npm test`, and
    `npx wrangler deploy --dry-run`. This validates the release documentation without deploying it.
+   The audit script is `npm audit --audit-level=high` with named exceptions, each for one advisory
+   that has no patched version and a date to review it again.
 5. Inspect `npm pack --dry-run` from `packages/cli`, then create the actual tarball once and record
    its SHA-256. Install that exact file outside the monorepo with scripts disabled and fresh
    temporary Salidium and provider homes. Exercise `salidium --version`, first run, authenticated
