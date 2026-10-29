@@ -206,7 +206,11 @@ export function createHttpServer(deps: HttpServerDeps): Server {
         : projectMap
           ? projectMap.refuse(res, 'origin-not-allowed', 'cross-origin requests are refused')
           : json(res, 403, { error: 'origin not allowed' });
-    if (req.headers['sec-fetch-site'] === 'cross-site')
+    // One cross-site request is admitted: a top-level navigation to the interface shell, so a link
+    // on another site can open Salidium. The shell holds no session data, cannot be framed, and
+    // severs its opener; what it then shows still needs the owner token. Every data route, every
+    // asset, and every other cross-site request is refused here, before routing.
+    if (req.headers['sec-fetch-site'] === 'cross-site' && !isShellNavigation(req, url))
       return consumer
         ? consumer.refuse(res, 403, 'origin-not-allowed', 'cross-site requests are refused')
         : projectMap
@@ -778,6 +782,8 @@ export function createHttpServer(deps: HttpServerDeps): Server {
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
       );
       res.setHeader('X-Frame-Options', 'DENY');
+      // A page on another site that opened this one keeps no handle on it.
+      res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
       res.end(readFileSync(file));
       return;
     }
@@ -786,6 +792,21 @@ export function createHttpServer(deps: HttpServerDeps): Server {
   }
 
   return server;
+}
+
+/**
+ * A browser's top-level navigation to the interface shell document: `GET /` with no query, marked
+ * as a navigation to a document. Browsers set these headers themselves and set them truthfully, so
+ * a page on another site cannot dress a fetch, a frame, or an asset request as one.
+ */
+function isShellNavigation(req: IncomingMessage, url: URL): boolean {
+  return (
+    req.method === 'GET' &&
+    url.pathname === '/' &&
+    url.search === '' &&
+    req.headers['sec-fetch-mode'] === 'navigate' &&
+    req.headers['sec-fetch-dest'] === 'document'
+  );
 }
 
 /**

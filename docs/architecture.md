@@ -365,6 +365,15 @@ and nothing else, and the owner token does not open those routes. The consumer r
 dispatched before the owner check with their own authentication, so the default for a consumer
 credential anywhere else is deny. See [Consumer contract](#consumer-contract).
 
+Requests a browser marks `Sec-Fetch-Site: cross-site` are refused before routing, with one
+exception: a top-level navigation to the interface shell, `GET /` with no query, marked
+`Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest: document`. It lets a link on another site open
+Salidium's own interface. The shell document holds no session data, cannot be framed
+(`frame-ancestors 'none'`), and severs the page that opened it (`Cross-Origin-Opener-Policy:
+same-origin`); what it then shows still needs the owner token. Every API, hook, consumer, and
+project-map route, every asset, and every other cross-site request is still refused, and the Host
+and Origin rules run first as before.
+
 This protects the local service from ordinary cross-origin access and accidental disclosure. It is
 not a sandbox against another process already running with the same operating-system user account.
 
