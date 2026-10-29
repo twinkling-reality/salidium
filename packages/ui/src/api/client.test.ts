@@ -1,6 +1,6 @@
 import type { StreamResnapshotRequired } from '@salidium/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiClient } from './client.ts';
+import { ApiClient, clearToken, rememberToken, resolveToken } from './client.ts';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -131,5 +131,66 @@ describe('ApiClient.sessionLinks', () => {
       vi.fn(async () => new Response(JSON.stringify({ ...links, version: 1 }), { status: 200 })),
     );
     await expect(new ApiClient('token').sessionLinks('codex:s1')).rejects.toThrow();
+  });
+});
+
+/** A Storage stand-in: one per origin for localStorage, one per tab for sessionStorage. */
+function memoryStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() {
+      return values.size;
+    },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => [...values.keys()][index] ?? null,
+    removeItem: (key) => {
+      values.delete(key);
+    },
+    setItem: (key, value) => {
+      values.set(key, String(value));
+    },
+  };
+}
+
+/** One browser tab on the interface's origin: its own sessionStorage, the origin's localStorage. */
+function openTab(origin: Storage, hash: string) {
+  const location = { hash, pathname: '/' };
+  const replaceState = vi.fn((_state: unknown, _title: string, url: string) => {
+    location.hash = url.slice(location.pathname.length);
+  });
+  vi.stubGlobal('window', { location });
+  vi.stubGlobal('history', { replaceState });
+  vi.stubGlobal('localStorage', origin);
+  vi.stubGlobal('sessionStorage', memoryStorage());
+  return location;
+}
+
+describe('owner token storage', () => {
+  const TOKEN = 'a1b2c3d4e5f60718';
+
+  it('signs in every tab of this interface once, so a link can open a session directly', () => {
+    const origin = memoryStorage();
+    const first = openTab(origin, `#token=${TOKEN}`);
+    expect(resolveToken()).toBe(TOKEN);
+    // The token leaves the address bar as soon as it is read.
+    expect(first.hash).toBe('');
+
+    // A second tab, opened by a link that names a session and carries no token.
+    const second = openTab(origin, '#/s/claude-code%3Aabc');
+    expect(resolveToken()).toBe(TOKEN);
+    expect(second.hash).toBe('#/s/claude-code%3Aabc');
+  });
+
+  it('keeps a pasted token for the other tabs too, and forgets it everywhere at once', () => {
+    const origin = memoryStorage();
+    openTab(origin, '');
+    expect(resolveToken()).toBeUndefined();
+    rememberToken(TOKEN);
+    openTab(origin, '#/s/codex%3As1');
+    expect(resolveToken()).toBe(TOKEN);
+    clearToken();
+    openTab(origin, '');
+    expect(resolveToken()).toBeUndefined();
   });
 });

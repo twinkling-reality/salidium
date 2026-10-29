@@ -374,6 +374,14 @@ same-origin`); what it then shows still needs the owner token. Every API, hook, 
 project-map route, every asset, and every other cross-site request is still refused, and the Host
 and Origin rules run first as before.
 
+The interface keeps the owner token in the browser's `localStorage` for its own origin, port
+included, so every tab shares one sign-in while the daemon runs and a link that names a session,
+`#/s/<id>`, opens that session without a terminal step. The token still travels only as a bearer
+header, never in a cookie, so no request carries it unless the interface's own script sends it.
+The daemon rotates the token on every start; a stored one from an earlier run is refused once and
+forgotten in every tab, and the gate asks again. A link opened before signing in keeps its session
+through the gate.
+
 This protects the local service from ordinary cross-origin access and accidental disclosure. It is
 not a sandbox against another process already running with the same operating-system user account.
 

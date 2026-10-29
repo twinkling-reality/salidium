@@ -35,7 +35,7 @@ import {
 
 /**
  * Thin client for the daemon's loopback API. The token arrives in the URL fragment when the CLI
- * opens the UI and is kept in sessionStorage; every request sends it as a bearer header (so it
+ * opens the UI and is kept in localStorage; every request sends it as a bearer header (so it
  * never appears in server logs or referrers) and streams are consumed with fetch, not
  * EventSource, so the same header applies.
  */
@@ -514,17 +514,24 @@ export class ApiError extends Error {
 
 const TOKEN_KEY = 'salidium.token';
 
-/** Reads the token from the URL fragment (once) or sessionStorage; strips it from the URL. */
+/*
+ * The token lives in localStorage, so every tab of this interface shares one sign-in and a link
+ * that names a session opens it in a new tab without a trip to the terminal. localStorage belongs
+ * to this exact origin, port included, and the daemon rotates the token on every start, so a stale
+ * one fails once, is forgotten, and the gate asks again.
+ */
+
+/** Reads the token from the URL fragment (once) or localStorage; strips it from the URL. */
 export function resolveToken(): string | undefined {
   const hash = window.location.hash;
   const m = /token=([0-9a-f]+)/.exec(hash);
   if (m?.[1]) {
-    sessionStorage.setItem(TOKEN_KEY, m[1]);
+    localStorage.setItem(TOKEN_KEY, m[1]);
     const cleaned = hash.replace(/[#&]?token=[0-9a-f]+/, '').replace(/^#&/, '#');
     history.replaceState(null, '', `${window.location.pathname}${cleaned === '#' ? '' : cleaned}`);
     return m[1];
   }
-  return sessionStorage.getItem(TOKEN_KEY) ?? undefined;
+  return localStorage.getItem(TOKEN_KEY) ?? undefined;
 }
 
 /**
@@ -533,7 +540,7 @@ export function resolveToken(): string | undefined {
  * the other door.
  */
 export function rememberToken(token: string): void {
-  sessionStorage.setItem(TOKEN_KEY, token);
+  localStorage.setItem(TOKEN_KEY, token);
 }
 
 /**
@@ -548,7 +555,9 @@ export function readToken(input: string): string | undefined {
   return /^[0-9a-f]{16,}$/.test(text) ? text : undefined;
 }
 
-/** Forgets a token the daemon rejected, so the gate asks for a fresh `salidium open`. */
+/** Forgets a token the daemon rejected, in every tab, so the gate asks for a fresh `salidium open`. */
 export function clearToken(): void {
+  localStorage.removeItem(TOKEN_KEY);
+  // A tab from a build that kept the token per tab still holds a copy; drop it with the rest.
   sessionStorage.removeItem(TOKEN_KEY);
 }
