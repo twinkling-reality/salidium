@@ -1,187 +1,229 @@
-import type { ReviewGroup, SessionView, StripView, VerdictView } from '@salidium/core';
+import type {
+  FileRow,
+  ReviewGroup,
+  SessionView,
+  StripView,
+  VerdictView,
+  VerificationRow,
+} from '@salidium/core';
 import { useState } from 'react';
-import { shortHome } from '../lib/format.ts';
-import { isAutomaticModel } from '../lib/modelName.ts';
+import { basename, commonDir, dirname, shortHome, shortPath, timeOfDay } from '../lib/format.ts';
 import { outcomeGlyph } from '../lib/outcome.ts';
 import { useClamped } from '../lib/useClamped.ts';
 import type { Detail, PanelId } from '../store/appStore.ts';
 import { Disclosure } from './Controls.tsx';
-import {
-  BeforeAfter,
-  Converge,
-  Chain as FlowChain,
-  Legend,
-  type Marks,
-  Tree,
-} from './FlowDiagram.tsx';
-import { Icon } from './Icon.tsx';
-import { PersonalizationSettings } from './Personalization.tsx';
 import { SessionFlow } from './SessionFlow.tsx';
-import { CheckLanes, Coverage, FileChurn } from './Visuals.tsx';
 
-/**
- * The generated explanation, and the only canvas on the page.
- *
- * It is also the only content in the app written rather than observed, so it is held apart: one
- * region, one attribution at its foot, and nothing observed mixed into it. It never contributes to
- * Verified, Left or Review — those stay deterministic, below, and are not reachable from here.
- *
- * Each facet gets the shape that fits it. Why is a chain unless the agent found concurrent causes,
- * in which case it is lanes converging on a trunk. How is the component the change centres on with
- * its operations fanning out beneath. An abandoned approach is drawn above its replacement so the
- * two paths can be read step against step.
- */
-export function Explained({
-  ex,
-  sessionId,
-  personalized = false,
-  analogies,
-  hasAlternate = false,
-  onToggleVersion,
-  personalizerOpen,
-  onClosePersonalizer,
-  personalizationNote,
-  hasCurrentPresentation = false,
+export { Explained } from './canvas/NarrativeLens.tsx';
+
+/** Files ranked by how much of them moved, so the biggest edit is obvious without reading paths. */
+export function FileChurn({
+  files,
+  cwd,
+  limit = 10,
+  onOpen,
 }: {
-  ex: NonNullable<SessionView['explained']>;
-  sessionId: string;
-  personalized?: boolean;
-  analogies?: { why: string | null; how: string | null };
-  hasAlternate?: boolean;
-  onToggleVersion?: () => void;
-  personalizerOpen?: boolean;
-  onClosePersonalizer?: () => void;
-  personalizationNote?: string;
-  hasCurrentPresentation?: boolean;
+  files: FileRow[];
+  cwd: string;
+  limit?: number;
+  onOpen: (f: FileRow) => void;
 }) {
-  const ac = ex.approachChange;
-  const converging = ex.why.lanes.length > 1;
-  const hasWhy = ex.why.chain.length > 0 || ex.why.lanes.length > 0;
-  const marks: Marks = {
-    junction: converging,
-    outcome: Boolean(ac),
-  };
+  if (files.length === 0) return null;
+  const ranked = [...files]
+    .sort((a, b) => b.linesAdded + b.linesRemoved - (a.linesAdded + a.linesRemoved))
+    .slice(0, limit);
+  const peak = Math.max(1, ...ranked.map((f) => f.linesAdded + f.linesRemoved));
+  const hidden = files.length - ranked.length;
+  const root = commonDir(ranked.map((f) => f.path));
   return (
-    <section className="ex" aria-label="Generated explanation">
-      <p className="ex-what">{ex.what.summary}</p>
-      {ex.what.currently && (
-        <p className="ex-now">
-          <span className="ex-now-key">Now</span>
-          {ex.what.currently}
+    <section className="viz" aria-label={`Churn for ${files.length} changed files`}>
+      <h3 className="viz-title">
+        Changed <span className="viz-count num">{files.length}</span>
+      </h3>
+      {root && (
+        <p className="viz-root mono" title={root}>
+          <bdi>{shortHome(root)}</bdi>
         </p>
       )}
-
-      {hasAlternate && onToggleVersion && (
-        <div className="ex-version-row">
-          {personalizationNote && (
-            <span className="ex-version-note" title={personalizationNote}>
-              <Icon name="sliders" />
-              <span>Saved:</span>
-              {personalizationNote}
-            </span>
-          )}
-          <fieldset className="ex-version-switch">
-            <legend className="sr-only">Explanation version</legend>
-            <button
-              type="button"
-              className={`btn ex-version-button ${personalized ? '' : 'is-on'}`}
-              aria-pressed={!personalized}
-              onClick={personalized ? onToggleVersion : undefined}
-            >
-              <Icon name="record" />
-              Original
-            </button>
-            <button
-              type="button"
-              className={`btn ex-version-button ${personalized ? 'is-on' : ''}`}
-              aria-pressed={personalized}
-              onClick={personalized ? undefined : onToggleVersion}
-            >
-              <Icon name="check" />
-              Personalized
-            </button>
-          </fieldset>
-        </div>
-      )}
-
-      {personalizerOpen && (
-        <PersonalizationSettings
-          sessionId={sessionId}
-          hasCurrentPresentation={hasCurrentPresentation}
-          onDone={onClosePersonalizer}
-        />
-      )}
-
-      {hasWhy && (
-        <section className="ex-block" id="sec-why" data-diagram-tone="why">
-          <ExHead title="Why" summary={ex.why.summary} />
-          {analogies?.why && <Analogy>{analogies.why}</Analogy>}
-          {converging ? (
-            <Converge lanes={ex.why.lanes} trunk={ex.why.chain} />
-          ) : (
-            <FlowChain steps={ex.why.chain} />
-          )}
-        </section>
-      )}
-
-      {ex.how.steps.length > 0 && (
-        <section className="ex-block" id="sec-how" data-diagram-tone="how">
-          <ExHead title="How" summary={ex.how.summary} />
-          {analogies?.how && <Analogy>{analogies.how}</Analogy>}
-          <Tree root={ex.how.root} steps={ex.how.steps} />
-        </section>
-      )}
-
-      {ac && (
-        <section className="ex-block" id="sec-approach" data-diagram-tone="approach">
-          <ExHead title="Approach changed" />
-          <BeforeAfter
-            from={ac.from}
-            fromSteps={ac.fromSteps}
-            to={ac.to}
-            toSteps={ac.toSteps}
-            why={ac.why}
-          />
-        </section>
-      )}
-
-      <footer className="ex-foot">
-        <Legend marks={marks} />
-        {/*
-         * The protocol requires this block to say it is `explained` rather than observed, and one
-         * word does it. It read "Written by <model> from the evidence below, not observed": the
-         * middle clause describes method rather than provenance, and the evidence is literally
-         * below it; "generated" is the term the README and the architecture doc already use for
-         * this block, and it carries "not observed" without spending a sentence on it. The model
-         * id names its own vendor, so there is no separate Claude-or-Codex label to print.
-         */}
-        <div className="ex-attribution">
-          <p className="ex-mark">
-            {personalized ? 'Personalized' : 'Generated'} by{' '}
-            {isAutomaticModel(ex.model) ? 'Codex' : ex.model}
-          </p>
-        </div>
-      </footer>
+      <ul className="churn">
+        {ranked.map((f) => {
+          const total = f.linesAdded + f.linesRemoved;
+          return (
+            <li key={f.path} className="churn-row">
+              <button type="button" className="churn-main" onClick={() => onOpen(f)}>
+                <span className="churn-name mono" title={f.path}>
+                  {basename(f.path)}
+                  <span className="churn-dir">
+                    {dirname(root ? f.path.slice(root.length) : shortPath(f.path, cwd))}
+                  </span>
+                </span>
+                <span className="churn-bar" aria-hidden="true">
+                  <span
+                    className="churn-add"
+                    style={{ width: `${(f.linesAdded / peak) * 100}%` }}
+                  />
+                  <span
+                    className="churn-del"
+                    style={{ width: `${(f.linesRemoved / peak) * 100}%` }}
+                  />
+                </span>
+                <span className="churn-num num">
+                  <span className="add">+{f.linesAdded}</span>
+                  <span className="del">−{f.linesRemoved}</span>
+                </span>
+                {!f.verifiedAfter && (
+                  <span className="churn-flag" title="No passing check ran after this edit">
+                    ?
+                  </span>
+                )}
+              </button>
+              <span className="sr-only">
+                {shortPath(f.path, cwd)}: {total} lines changed
+                {f.verifiedAfter ? '' : ', unchecked since'}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      {hidden > 0 && <p className="viz-foot">{hidden} smaller changes not shown</p>}
     </section>
   );
 }
 
-function Analogy({ children }: { children: string }) {
+/**
+ * Every check that ran, by kind: what it came to last, and the run of outcomes behind it.
+ */
+export function CheckLanes({
+  runs,
+  onOpen,
+}: {
+  runs: VerificationRow[];
+  onOpen: (v: VerificationRow) => void;
+}) {
+  if (runs.length === 0) return null;
+  const methods = [...new Set(runs.map((r) => r.method))];
+  const word = (o: VerificationRow['outcome']) =>
+    o === 'pass' ? 'passing' : o === 'fail' ? 'failing' : o === 'partial' ? 'partial' : 'unknown';
   return (
-    <p className="ex-analogy">
-      <span>In your terms</span>
-      {children}
-    </p>
+    <section
+      className="viz checks"
+      aria-label={`${runs.length} checks across ${methods.length} kinds`}
+    >
+      <ul className="checks-rows">
+        {methods.map((m) => {
+          const mine = runs.filter((r) => r.method === m).sort((a, b) => a.at.localeCompare(b.at));
+          const last = mine[mine.length - 1];
+          if (!last) return null;
+          const failed = mine.filter((r) => r.outcome === 'fail').length;
+          return (
+            <li className="checks-row" key={m}>
+              <span className="checks-method">{m}</span>
+              <span className={`checks-now v-${last.outcome}`}>
+                <span className="checks-now-mark" aria-hidden="true">
+                  {outcomeGlyph(last.outcome)}
+                </span>
+                {word(last.outcome)}
+                {last.counts?.total !== undefined && (
+                  <span className="checks-counts num">
+                    {last.counts.passed ?? 0}/{last.counts.total}
+                  </span>
+                )}
+              </span>
+              <span className="checks-strip">
+                {mine.map((r) => (
+                  <button
+                    type="button"
+                    key={r.id}
+                    className={`checks-tick v-${r.outcome} ${r.epistemic === 'inferred' ? 'is-derived' : ''}`}
+                    onClick={() => onOpen(r)}
+                    title={`${timeOfDay(r.at)}, ${r.label}${r.epistemic === 'inferred' ? ' (worked out, not observed)' : ''}`}
+                  >
+                    <span className="sr-only">
+                      {timeOfDay(r.at)} {r.outcome}
+                    </span>
+                  </button>
+                ))}
+              </span>
+              <span className="checks-runs">
+                {mine.length === 1
+                  ? 'ran once'
+                  : `${mine.length} runs${failed > 0 ? `, ${failed} failed` : ''}`}
+              </span>
+              <span className="checks-when">{timeOfDay(last.at)}</span>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="checks-key">
+        Oldest first. A hollow mark is one Salidium worked out rather than read. Open any run for
+        its record.
+      </p>
+    </section>
   );
 }
 
-/** A section rule with its name, and the one line the model wrote about it. */
-function ExHead({ title, summary }: { title: string; summary?: string }) {
+export function Coverage({
+  files,
+  failing,
+  onOpen,
+}: {
+  files: FileRow[];
+  failing: string[];
+  onOpen?: (f: FileRow) => void;
+}) {
+  if (files.length === 0) return null;
+  const CAP = 120;
+  const shown = files.slice(0, CAP);
+  const covered = files.filter((f) => f.verifiedAfter).length;
+  const stale = files.length - covered;
+  const held = failing.length > 0;
   return (
-    <header className="ex-head">
-      <h2 className="ex-title">{title}</h2>
-      {summary && <p className="ex-summary">{summary}</p>}
-    </header>
+    <section className="viz cov" aria-label="Which changed files a passing check ran after">
+      <p className="cov-lead">
+        <strong className="num">
+          {covered} of {files.length}
+        </strong>{' '}
+        changed {files.length === 1 ? 'file has' : 'files have'} had a passing check since it was
+        last edited.
+      </p>
+      {held && (
+        <p className="cov-held">
+          {failing.join(' and ')} {failing.length === 1 ? 'is' : 'are'} still failing.
+        </p>
+      )}
+      <p className="cov-scope">
+        A filled square is one file, not the project. A full grid does not mean the project is
+        green.
+      </p>
+      <ul className="cov-grid">
+        {shown.map((f) => (
+          <li key={f.path}>
+            <button
+              type="button"
+              className={`cov-cell ${f.verifiedAfter ? 'is-covered' : 'is-stale'}`}
+              onClick={() => onOpen?.(f)}
+              title={`${f.path}: ${f.verifiedAfter ? (f.verifiedBy ?? 'checked after the last edit') : 'changed after the last passing check'}`}
+            >
+              <span className="sr-only">
+                {f.path}:{' '}
+                {f.verifiedAfter ? 'checked since last edit' : 'not checked since last edit'}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      {files.length > CAP && <p className="cov-more">…and {files.length - CAP} more.</p>}
+      <ul className="cov-key">
+        <li>
+          <span className="cov-cell is-covered" aria-hidden="true" /> checked since last edit
+          <span className="num cov-key-n">{covered}</span>
+        </li>
+        <li>
+          <span className="cov-cell is-stale" aria-hidden="true" /> changed since the last check
+          <span className="num cov-key-n">{stale}</span>
+        </li>
+      </ul>
+    </section>
   );
 }
 
@@ -265,11 +307,6 @@ export function StatusColumn({
   return <StatusBlock view={view} detail={2} onRef={onRef} only={which} />;
 }
 
-/*
- * The outcome as a word. The mark it is drawn beside is `outcomeGlyph` in `lib/outcome.ts`, shared
- * with the two other surfaces that draw one. The word exists because the mark is `aria-hidden` and
- * the colour is a class: without it the outcome reached nobody using a screen reader.
- */
 const OUTCOME_WORD: Record<string, string> = {
   pass: 'passed',
   fail: 'failed',
@@ -277,22 +314,11 @@ const OUTCOME_WORD: Record<string, string> = {
   unknown: 'unknown',
 };
 
-/*
- * Caveats are recorded as slugs so the rules stay greppable, but a slug is not a sentence. Scope is
- * left out because it is drawn as its own tag beside the row; anything unmapped falls through as
- * the slug rather than being dropped, because a caveat nobody worded is still a caveat.
- */
 const CAVEAT_TEXT: Record<string, string> = {
   'exit-inferred': 'exit code not reported, read from the output',
   'exit-masked': 'exit code hidden by a pipe',
   'output-truncated': 'output was truncated',
   'no-summary-parsed': 'no summary line found in the output',
-  /*
-   * The caveat that comes with the `partial` outcome, and the reason it is worth wording: until a
-   * fixture produced one, this row fell through to the slug, and a hyphenated identifier printed
-   * beside a check is the panel telling a reader something in a language the rest of it does not
-   * speak. The three still unworded below it are the three no fixture reaches.
-   */
   'exit-summary-mismatch': 'the output says passed and the exit code says failed',
 };
 
@@ -303,11 +329,6 @@ function caveatText(caveats: string[]): string {
     .join(' · ');
 }
 
-/**
- * A long-running session accumulates dozens of flagged commands and unfinished items. Printed in
- * full they turn one column of a three-column row into a wall while the other two end after a
- * line, so Detail shows the head of each list and Source is where the whole of it lives.
- */
 const AT_A_GLANCE = 6;
 
 function StatusBlock({
@@ -319,7 +340,6 @@ function StatusBlock({
   view: SessionView;
   detail: Detail;
   onRef: (ref: string) => void;
-  /** Render one column alone, for the panel that badge opens. */
   only?: 'checks' | 'left' | 'review';
 }) {
   const summary = view.verified.summary;
@@ -352,13 +372,6 @@ function StatusBlock({
                       onClick={() => onRef(v.callId)}
                     >
                       {v.method}
-                      {/*
-                       * The outcome is carried by a glyph that is `aria-hidden`, a colour, and a
-                       * class. All three are invisible to a screen reader, which read "vitest
-                       * 3/12" for a failure and "vitest 12/12" for a pass, in the same words. The
-                       * word goes inside the button so the control that opens the record says
-                       * what it is about.
-                       */}
                       <span className="sr-only">{OUTCOME_WORD[v.outcome] ?? v.outcome}</span>
                       {v.counts?.total !== undefined && (
                         <span className="mono rp-counts">
@@ -366,17 +379,7 @@ function StatusBlock({
                         </span>
                       )}
                     </button>
-                    {/*
-                     * Scope is not outcome. A run narrowed to a path or a filter passed on what it
-                     * ran and says nothing about the rest, and the command it was read from is not
-                     * on this row for a reader to judge that for themselves.
-                     */}
                     {v.scope === 'partial' && <span className="rp-subset">subset</span>}
-                    {/*
-                     * An outcome that is not the newest one has to say so, right beside itself. This
-                     * row exists because a later run said nothing, and a reader who takes it for the
-                     * latest state is worse off than one who was told nothing at all.
-                     */}
                     {v.laterUnreadable > 0 && (
                       <span
                         className="rp-stale"
@@ -385,11 +388,6 @@ function StatusBlock({
                         not the latest run
                       </span>
                     )}
-                    {/*
-                     * Which of the two readings was actually available. A pass read out of a
-                     * summary line and a pass read from an exit code are different facts, and this
-                     * panel printed the same word for both.
-                     */}
                     {caveat && <span className="rp-caveat">{caveat}</span>}
                     {detail > 1 && v.epistemic === 'inferred' && (
                       <span className="rp-derived">derived</span>
@@ -404,7 +402,7 @@ function StatusBlock({
 
       {show('left') && (
         <div className="rp-block" id="sec-left">
-          <h3 className="rp-title">Left</h3>
+          <h3 className="rp-title">Remaining</h3>
           {view.left.items.length === 0 ? (
             <p className="rp-none">Nothing recorded.</p>
           ) : (
@@ -442,24 +440,6 @@ function StatusBlock({
   );
 }
 
-/**
- * What the agents this session delegated to actually came back with.
- *
- * The flow already says "delegated to 3 subagents", which answers how much was handed off and not
- * what came of it — and on a Codex session running a fan-out, the subagents' write-ups are the
- * substance of the work. They were reaching nothing at all until the adapter learned to read them
- * (`rolloutParser.ts`), and a recovered fact that no surface prints is not recovered.
- *
- * A lane with no result is shown saying so rather than omitted: a subagent that ended without
- * reporting is a different thing from one that was never started, and the difference is the whole
- * question of whether its work counted.
- *
- * Each row opens its own record, like everything else on the page. It could not until now, because
- * the projection carried no reference — which made the one section that quotes an agent verbatim
- * the one place a reader had to take the app's word for it. The record is the report where there
- * is one and the record that started the lane where there is not, so the button always opens the
- * thing the row is actually reading from.
- */
 function Delegated({
   subagents,
   onRef,
@@ -483,14 +463,6 @@ function Delegated({
   );
 }
 
-/**
- * One delegated agent: who it was, and what it wrote back.
- *
- * Clamped to four lines with a control, like every other quoted statement on the page, and the
- * control appears only when a measurement says something is actually hidden — a subagent's report
- * runs from one line to several hundred words, and a "more" over text with nothing behind it is
- * worse than none.
- */
 function DelegatedRow({
   agent,
   onRef,
@@ -532,23 +504,9 @@ function DelegatedRow({
   );
 }
 
-/**
- * One rule's worth of Review, as one row.
- *
- * A rule that fired once reads exactly as it always did — a sentence and a link to the record. A
- * rule that fired twenty times says so and stays one line, because twenty rows reading "Recursive
- * force delete" is one fact told twenty times, and a column that grows with the length of the
- * session is a column nobody reads to the end of. The count is the point: "cleared a cache before
- * every test run" and "deleted twenty different things" are the same twenty rows and completely
- * different news, and the reader can tell them apart here without opening anything, because the
- * distinct count is printed beside the total.
- *
- * The occurrences are one click away rather than gone. Nothing is dropped; it is ranked.
- */
 function ReviewGroupRow({ group, onRef }: { group: ReviewGroup; onRef: (ref: string) => void }) {
   const [open, setOpen] = useState(false);
   const one = group.items[0];
-  // A rule that fired once has nothing to summarise and nothing to expand: it is its own detail.
   if (group.occurrences === 1 && one)
     return (
       <li className="is-attn">
@@ -576,8 +534,6 @@ function ReviewGroupRow({ group, onRef }: { group: ReviewGroup; onRef: (ref: str
           aria-expanded={open}
         >
           <span className="rp-group-label">{group.label}</span>
-          {/* Total, then how many of them differ. One number says how loud this is; the pair says
-              whether it is one thing repeated, which is what decides if you have to look. */}
           <span className="rp-group-count num">
             {group.occurrences}
             {group.items.length < group.occurrences && (
@@ -611,28 +567,6 @@ function ReviewGroupRow({ group, onRef }: { group: ReviewGroup; onRef: (ref: str
   );
 }
 
-/**
- * The badges, where a README puts them: did it work, what still needs a human, what is unfinished.
- *
- * The verdict's tone is the answer and its rule style is the epistemics — a long dash whenever
- * Salidium worked the answer out rather than observing it, because an inferred pass and an
- * observed pass are different facts. All three are observed; none of them can be moved by the
- * generated explanation below.
- *
- * Review and Left are here rather than only in their sections because a reader has five seconds
- * and those are two of the questions they arrive with.
- *
- * Each badge now opens the section it summarises. The doc used to say a tag states a fact and a
- * button performs an action, so the two must not share a shape — a row of facts that reads as a
- * row of controls invites clicks that do nothing. The objection was to clicks that do nothing;
- * these do the obvious thing. It also removes a whole row of buttons that would otherwise repeat,
- * in worse words, what the badges already say: the verdict opens the checks it was read from, the
- * review count opens what needs a human, the unfinished count opens what is left.
- *
- * The verdict's own `record` control went with it. A control inside a control is invalid markup,
- * and it had become a duplicate besides: the panel it now opens lists the runs the verdict was
- * read from, each with the record it came from.
- */
 export function VerdictBadge({
   verdict,
   strip,
@@ -642,8 +576,6 @@ export function VerdictBadge({
   strip: StripView;
   onOpen: (panel: PanelId) => void;
 }) {
-  // `because` usually already says how the verdict was reached ("Read from the output; the command
-  // reported no exit code"), so the epistemic phrase is only added when nothing else explains it.
   const note = [
     verdict.because,
     strip.waiting?.summary,
@@ -661,12 +593,6 @@ export function VerdictBadge({
         title="Open the checks this verdict was read from"
       >
         <span className="tag-strong">{verdict.headline}</span>
-        {/*
-         * An inferred pass and an observed pass are different facts, and the tone fill cannot say
-         * which this is. It goes in the caveat, in words. It was a lone "derived" carrying the
-         * app's dashed-underline mark for a derived value, which inside a red tag rendered as a
-         * red dashed underline — indistinguishable from a spellchecker calling the word a mistake.
-         */}
         {note && <span className="tag-note">{note}</span>}
       </button>
       {strip.reviewOpen > 0 && (
@@ -675,9 +601,9 @@ export function VerdictBadge({
           className="tag is-open"
           data-tone="attention"
           onClick={() => onOpen('review')}
-          title="Things Salidium flagged for a human: failing checks, waiting prompts, destructive commands, claims with no evidence"
+          title="Flagged items requiring human review: failing checks, waiting prompts, destructive commands, or unverified claims"
         >
-          <span className="tag-key">to review</span>
+          <span className="tag-key">review</span>
           <span className="num tag-strong">{strip.reviewOpen}</span>
         </button>
       )}
@@ -686,9 +612,9 @@ export function VerdictBadge({
           type="button"
           className="tag is-open"
           onClick={() => onOpen('left')}
-          title="Work the agent recorded as not yet finished"
+          title="Remaining plan steps or unresolved checks"
         >
-          <span className="tag-key">unfinished</span>
+          <span className="tag-key">remaining</span>
           <span className="num tag-strong">{strip.remaining}</span>
         </button>
       )}

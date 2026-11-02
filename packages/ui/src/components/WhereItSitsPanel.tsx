@@ -34,7 +34,26 @@ export function WhereItSitsPanel({
   >({ kind: 'loading' });
   const [attempt, setAttempt] = useState(0);
   const [widened, setWidened] = useState(false);
+  const [allowingRepository, setAllowingRepository] = useState<string>();
+  const [allowError, setAllowError] = useState<string>();
   const retry = useCallback(() => setAttempt((a) => a + 1), []);
+  const allowRepository = useCallback(
+    (root: string) => {
+      if (!api) return;
+      setAllowingRepository(root);
+      setAllowError(undefined);
+      api
+        .allowProjectMapRepository(root)
+        .then(() => {
+          setAllowingRepository(undefined);
+          setAttempt((a) => a + 1);
+        })
+        .catch((err) => {
+          setAllowError(err instanceof Error ? err.message : String(err));
+        });
+    },
+    [api],
+  );
 
   /*
    * Fetched when opened or retried, at once. When the session moves on while the panel stays open,
@@ -84,8 +103,8 @@ export function WhereItSitsPanel({
   }, [open, api, sessionId, attempt, refetches]);
 
   return (
-    <Panel id="where" title="Where it sits">
-      {state.kind === 'loading' && <Loading label="Placing the changed files" size="md" block />}
+    <Panel id="where" title="Project Map">
+      {state.kind === 'loading' && <Loading label="Loading project map" size="md" block />}
       {state.kind === 'error' && (
         <div className="where-empty">
           <p className="rp-none">Salidium could not place these files just now.</p>
@@ -100,6 +119,9 @@ export function WhereItSitsPanel({
           widened={widened}
           onWiden={() => setWidened((w) => !w)}
           onRetry={retry}
+          onAllowRepository={allowRepository}
+          allowingRepository={allowingRepository}
+          allowError={allowError}
         />
       )}
     </Panel>

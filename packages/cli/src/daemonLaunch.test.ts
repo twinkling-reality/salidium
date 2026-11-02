@@ -142,7 +142,7 @@ afterEach(() => {
 });
 
 describe('detached daemon launch failures', () => {
-  it('pauses with a lease and any later CLI command resumes collection', () => {
+  it('pauses with a lease and a later ordinary command resumes collection', () => {
     const home = temporaryHome();
     const paused = run(home, ['pause', '--json'], '0');
     expect(paused.status).toBe(0);
@@ -164,8 +164,14 @@ describe('detached daemon launch failures', () => {
     // must not restart collection the user deliberately paused.
     expect(existsSync(join(home, 'hooks-paused'))).toBe(true);
 
-    const version = run(home, ['--version'], '0');
-    expect(version.status).toBe(0);
+    // Printing help or the version reads nothing of Salidium's state, so it is not recovering it.
+    expect(run(home, ['--version'], '0').status).toBe(0);
+    expect(run(home, ['help'], '0').status).toBe(0);
+    expect(run(home, ['stauts'], '0').status).toBe(2);
+    expect(existsSync(join(home, 'hooks-paused'))).toBe(true);
+
+    // There is no store here, so it reports a failure, but it ran and so it recovered the pause.
+    run(home, ['storage'], '0');
     expect(existsSync(join(home, 'hooks-paused'))).toBe(false);
     expect(JSON.parse(readFileSync(join(home, 'collection-gaps.json'), 'utf8'))).toMatchObject({
       episodes: [{ reason: 'collection-paused', exactCount: null }],
@@ -345,9 +351,31 @@ describe('detached daemon launch failures', () => {
     expect(start(home, '0').status).toBe(0);
     const stopped = run(home, ['stop'], '0');
     expect(stopped.status).toBe(0);
-    expect(stopped.stdout).toMatch(/Collection is paused until/);
+    expect(stopped.stdout).toMatch(/Collection is paused until Salidium starts again/);
     expect(stopped.stdout).toMatch(/Observed queue at pause: 0 files, 0 B/);
     expect(existsSync(join(home, 'hooks-paused'))).toBe(true);
+  }, 30_000);
+
+  /*
+   * The regression this guards. A release check ran `salidium help` against a home whose owner
+   * had stopped Salidium, the command cleared the stop pause, and with no daemon to drain them the
+   * hooks spooled until the pressure markers tripped. A stop pause is not a dead daemon's lease;
+   * it stands in for the daemon until something starts it again.
+   */
+  it('keeps a stop pause through ordinary commands until the daemon starts again', () => {
+    const home = temporaryHome();
+    expect(start(home, '0').status).toBe(0);
+    expect(run(home, ['stop'], '0').status).toBe(0);
+    for (const args of [['help'], ['--version'], ['status'], ['storage']]) {
+      run(home, args, '0');
+      expect(existsSync(join(home, 'hooks-paused'))).toBe(true);
+    }
+    expect(start(home, '0').status).toBe(0);
+    expect(existsSync(join(home, 'hooks-paused'))).toBe(false);
+    expect(JSON.parse(readFileSync(join(home, 'collection-gaps.json'), 'utf8'))).toMatchObject({
+      episodes: [{ reason: 'collection-stopped', exactCount: null }],
+    });
+    run(home, ['stop'], '0');
   }, 30_000);
 
   it('reports the new lossless layout and preserves an existing pause during optimization', () => {
@@ -359,10 +387,7 @@ describe('detached daemon launch failures', () => {
     const status = run(home, ['storage'], '0');
     expect(status.status).toBe(0);
     expect(status.stdout).toMatch(/Layout: Optimized/);
-    // An ordinary status command follows the implicit-resume rule.
-    expect(existsSync(join(home, 'hooks-paused'))).toBe(false);
 
-    writeFileSync(join(home, 'hooks-paused'), pause);
     const optimized = run(home, ['storage', 'optimize'], '0');
     expect(optimized.status).toBe(0);
     expect(optimized.stdout).toMatch(/already optimized/);

@@ -18,6 +18,10 @@ import type {
   SessionList,
   SessionSnapshot,
   SessionSummary,
+  StorageCompactResult,
+  StorageDeletionPreview,
+  StorageDeletionResult,
+  StorageDeletionScope,
   StoredEvent,
   StreamMessage,
 } from '@salidium/protocol';
@@ -29,6 +33,9 @@ import {
   OperationsOverviewSchema,
   PersonalizationSettingsSchema,
   PersonalizedExplanationSchema,
+  StorageCompactResultSchema,
+  StorageDeletionPreviewSchema,
+  StorageDeletionResultSchema,
   StreamMessageSchema,
   StreamResnapshotRequiredSchema,
 } from '@salidium/protocol';
@@ -163,6 +170,101 @@ export class ApiClient {
     }
     if (!res.ok) throw new ApiError(`request failed: ${res.status}`, res.status);
     return CollectionStatusSchema.parse(await res.json());
+  }
+
+  async connectHooks(provider: string): Promise<CollectionStatus> {
+    const res = await fetch(`/api/collection/hooks/${encodeURIComponent(provider)}`, {
+      method: 'POST',
+      headers: this.headers(),
+    });
+    if (res.status === 401) {
+      this.onUnauthorized?.();
+      throw new ApiError('unauthorized', 401);
+    }
+    if (!res.ok) throw new ApiError(`request failed: ${res.status}`, res.status);
+    return CollectionStatusSchema.parse(await res.json());
+  }
+
+  async previewStorageDeletion(scope: StorageDeletionScope): Promise<StorageDeletionPreview> {
+    const res = await fetch('/api/operations/storage/preview', {
+      method: 'POST',
+      headers: { ...this.headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(scope),
+    });
+    if (res.status === 401) {
+      this.onUnauthorized?.();
+      throw new ApiError('unauthorized', 401);
+    }
+    if (!res.ok) throw new ApiError(`request failed: ${res.status}`, res.status);
+    return StorageDeletionPreviewSchema.parse(await res.json());
+  }
+
+  async deleteStorage(
+    scope: StorageDeletionScope,
+    expectedSessions?: number,
+  ): Promise<StorageDeletionResult> {
+    const res = await fetch('/api/operations/storage/delete', {
+      method: 'POST',
+      headers: { ...this.headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scope,
+        ...(expectedSessions !== undefined ? { expectedSessions } : {}),
+      }),
+    });
+    if (res.status === 401) {
+      this.onUnauthorized?.();
+      throw new ApiError('unauthorized', 401);
+    }
+    if (res.status === 409) {
+      const payload = (await res.json().catch(() => undefined)) as
+        | { error?: string; preview?: unknown }
+        | undefined;
+      const preview = payload?.preview
+        ? StorageDeletionPreviewSchema.safeParse(payload.preview)
+        : undefined;
+      throw new ApiError(
+        payload?.error ?? 'session count changed before deletion',
+        409,
+        preview?.success ? preview.data : undefined,
+      );
+    }
+    if (!res.ok) throw new ApiError(`request failed: ${res.status}`, res.status);
+    return StorageDeletionResultSchema.parse(await res.json());
+  }
+
+  async compactStorage(): Promise<StorageCompactResult> {
+    const res = await fetch('/api/operations/storage/compact', {
+      method: 'POST',
+      headers: this.headers(),
+    });
+    if (res.status === 401) {
+      this.onUnauthorized?.();
+      throw new ApiError('unauthorized', 401);
+    }
+    if (!res.ok) {
+      const payload = (await res.json().catch(() => undefined)) as { error?: string } | undefined;
+      throw new ApiError(payload?.error ?? `request failed: ${res.status}`, res.status);
+    }
+    return StorageCompactResultSchema.parse(await res.json());
+  }
+
+  async allowProjectMapRepository(
+    root: string,
+  ): Promise<{ root: string; allowedAt: string; added: boolean }> {
+    const res = await fetch('/api/project-map/repositories', {
+      method: 'POST',
+      headers: { ...this.headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root }),
+    });
+    if (res.status === 401) {
+      this.onUnauthorized?.();
+      throw new ApiError('unauthorized', 401);
+    }
+    if (!res.ok) {
+      const payload = (await res.json().catch(() => undefined)) as { error?: string } | undefined;
+      throw new ApiError(payload?.error ?? `request failed: ${res.status}`, res.status);
+    }
+    return (await res.json()) as { root: string; allowedAt: string; added: boolean };
   }
 
   /**
@@ -324,10 +426,16 @@ export class ApiClient {
   }
 
   async forget(sessionId: string): Promise<void> {
-    await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
       method: 'DELETE',
       headers: this.headers(),
     });
+    if (res.status === 401) {
+      this.onUnauthorized?.();
+      throw new ApiError('unauthorized', 401);
+    }
+    if (!res.ok && res.status !== 404)
+      throw new ApiError(`request failed: ${res.status}`, res.status);
   }
 
   /**
@@ -506,9 +614,11 @@ function xhrStream(
 
 export class ApiError extends Error {
   readonly status: number;
-  constructor(message: string, status: number) {
+  readonly preview: StorageDeletionPreview | undefined;
+  constructor(message: string, status: number, preview?: StorageDeletionPreview) {
     super(message);
     this.status = status;
+    this.preview = preview;
   }
 }
 

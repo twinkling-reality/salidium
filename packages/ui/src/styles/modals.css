@@ -1,0 +1,710 @@
+/* --------------------------------------------------------------- gate */
+
+/*
+ * A page, not a dialog. The card this replaced — charcoal, rounded, drop-shadowed — was pinned
+ * 12vh down a window that was otherwise empty: measured at 1280x800, 200 px of card with 504 px of
+ * nothing under it. A card says it is laid over something, and there is nothing behind this one;
+ * it is the whole application until a token arrives. Rule 1 of this file holds here too — space
+ * and hairlines, not boxes.
+ *
+ * Centred in the height it actually has rather than pinned near the top, and `safe`, so a short
+ * window pushes the block back to the top edge instead of cropping its head. This is the only
+ * thing that can scroll: `html`, `body` and `#root` are all `overflow: hidden`.
+ */
+.gate {
+  display: flex;
+  flex-direction: column;
+  justify-content: safe center;
+  align-items: center;
+  height: 100%;
+  padding: var(--space-8) var(--space-6);
+  overflow-y: auto;
+}
+
+/* Narrower than the document's measure: four short lines and two controls, not prose. */
+.gate-inner {
+  width: 100%;
+  max-width: 46ch;
+}
+
+.gate-mark {
+  margin: 0 0 var(--space-6);
+  font-size: var(--text-xl);
+  font-weight: 300;
+}
+
+/* What happened, in one sentence, at the size the session page states its own. */
+.gate-lede {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-md);
+}
+
+.gate-note {
+  margin: 0 0 var(--space-6);
+  color: var(--text-secondary);
+}
+
+/*
+ * The cure. It is a command, so it is set in the measured face and given a field of its own with
+ * the single control that matters sitting on it — reading a command and retyping it is the step
+ * this screen used to make you take. It scrolls rather than wraps: a broken command line reads as
+ * two commands.
+ */
+.gate-cmd {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  padding-left: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-muted);
+}
+
+.gate-cmd code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  scrollbar-width: none;
+}
+
+.gate-cmd code::-webkit-scrollbar {
+  display: none;
+}
+
+.gate-hint {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+
+/* The second path, behind the hairline this app uses wherever one thing becomes another. */
+.gate-paste {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-6);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--border);
+}
+
+/*
+ * The gate's field is `.field` (primitives.css) plus the two things that make it the gate's: it
+ * fills the row, and a token is a measured value so it is set in the monospace face. Its
+ * placeholder is prose and stays in the prose face, or an empty field reads as though it already
+ * holds something. Everything else — the box, the focus ring, the placeholder colour — is the
+ * primitive's, which is the rule that file states: a component composes, it does not restate.
+ */
+.gate-field {
+  flex: 1;
+  font-family: var(--font-mono);
+}
+
+.gate-field::placeholder {
+  font-family: var(--font-sans);
+}
+
+.gate-bad {
+  margin: var(--space-3) 0 0;
+  color: var(--danger);
+  font-size: var(--text-sm);
+}
+
+.gate-bad code {
+  font-family: var(--font-mono);
+}
+
+.session-error {
+  max-width: 52ch;
+  text-align: left;
+}
+
+.session-error-title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-md);
+}
+
+.session-error-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+/* -------------------------------------------------------------- drawer */
+
+.drawer {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  z-index: var(--z-drawer);
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100vw);
+  max-height: 70vh;
+  border-top: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+  box-shadow: var(--shadow);
+}
+
+/*
+ * Two rows of chrome, and both carry something.
+ *
+ * It was five: a title, a sentence of prose about why the drawer exists, a pane row empty across
+ * two thirds of its width, then the record's kind and a caption restating the pane just pressed.
+ * The kind is the heading now, the record's identity fills the pane row's empty right, and the
+ * reason the drawer exists is carried by the two pane names and their tooltips, which is where a
+ * reader asks the question. Measured at 760 px: 91 px of head above the first fact.
+ */
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.drawer-title {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--text-md);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.drawer-acts {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.drawer-panes {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Which record, and off which channel. It gives way before the pane names at narrow widths. */
+.drawer-id {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.drawer-body {
+  padding: var(--space-4);
+  overflow: auto;
+}
+
+.drawer-sub {
+  margin: var(--space-5) 0 var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+}
+
+/*
+ * The record's facts, named. A label column wide enough for the longest label this drawer prints
+ * and no wider, so the values line up and the eye can run down them — the whole complaint about
+ * the dump this replaced was that finding one value meant reading all of them.
+ */
+.facts {
+  margin: 0;
+}
+
+.fact {
+  display: grid;
+  grid-template-columns: 8.5em minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: 3px 0;
+}
+
+/* Long values — a command, output, a whole message — take the width and sit under their label. */
+.fact.is-block {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+  padding: var(--space-2) 0;
+}
+
+.fact-label {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+/*
+ * The value wraps, and every part of it may. A path, an id and a sha have few break opportunities
+ * and none at all inside `/Users/…`, so without `overflow-wrap` the row simply runs off the edge —
+ * measured at 420 px, where the drawer is the whole window and there is nowhere for it to go.
+ */
+.fact-value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px var(--space-2);
+  min-width: 0;
+  margin: 0;
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.fact.is-block .fact-value {
+  display: block;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * A caveat about the value, never folded into it. "unknown" and "inferred" are first-class in this
+ * protocol, so an exit code that was guessed has to say it was guessed beside the number rather
+ * than instead of it.
+ */
+.fact-note {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.fact.is-block .fact-note {
+  display: block;
+  margin-top: var(--space-1);
+  font-family: var(--font-sans);
+}
+
+/*
+ * The copy control belongs to the row, because what a reader takes out of here is one value. It
+ * is drawn on hover and on focus only: a column of buttons down the side of a list of facts reads
+ * as a column of buttons, and the facts are the point.
+ */
+.fact-copy {
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease);
+}
+
+.fact:hover .fact-copy,
+.fact-copy:focus-visible {
+  opacity: 1;
+}
+
+.fact.is-block .fact-copy {
+  float: right;
+  margin-left: var(--space-2);
+}
+
+/*
+ * Narrow enough that a label column costs more than it aligns: the drawer is the whole window
+ * here, and 8.5 em of it is a third of the room the values have to wrap in. They stack, which is
+ * what a long value does in this drawer already.
+ */
+@media (max-width: 560px) {
+  .fact {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    padding: var(--space-2) 0;
+  }
+}
+
+.drawer-full {
+  margin-top: var(--space-5);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.drawer-full summary {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.drawer-full summary:hover {
+  color: var(--text-secondary);
+}
+
+.drawer-full pre {
+  margin-top: var(--space-3);
+}
+
+.drawer-body pre {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------------------
+ * A section, summoned over the page.
+ *
+ * The page carried every section at once and one control decided how many were present, producing
+ * several screens with much of the space devoted to evidence. Depth was the wrong instrument: a
+ * reader wants one answer and then to put it away.
+ * The document is the diagram; everything else is opened from the badge that states its headline.
+ *
+ * It floats rather than banding across the window, and it uses the same blur the stat bar already
+ * uses, so the page stays legible behind it and the panel reads as held above the document rather
+ * than as a second page replacing it.
+ * ------------------------------------------------------------------------ */
+.panel-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-panel);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+  /*
+   * No `--rise`: a surface this size travelling even a few pixels reads as the page moving under
+   * the reader rather than as a card arriving, so it only fades. `.arrives` (scale.css) carries
+   * both directions.
+   *
+   * It was 120ms in and one frame out. A scrim across the whole window is the definition of
+   * "anything that changes the shape of the page", which the doctrine puts on `base`, and the
+   * shared idiom is on `base`, so taking it fixes the duration as well as the exit.
+   */
+}
+
+/* The dimmed page behind the card, and the control that closes it by clicking away. */
+.panel-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgb(0 0 0 / 32%);
+  cursor: default;
+}
+
+.panel-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(880px, 100%);
+  max-height: min(80vh, 720px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  box-shadow: var(--shadow-float);
+  backdrop-filter: var(--float-blur);
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--border);
+}
+
+/* The panel names itself; the section inside it does not repeat the name. */
+.panel-title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.panel-close {
+  display: grid;
+  place-items: center;
+  width: var(--control-h);
+  height: var(--control-h);
+  border: 0;
+  border-radius: var(--control-radius);
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.panel-close:hover {
+  background: var(--bg-muted);
+  color: var(--text);
+}
+
+.panel-body {
+  padding: var(--space-5);
+  overflow: auto;
+}
+
+/* -------------------------------------------------------- where it sits */
+
+/*
+ * The changed files placed in the codebase. Observed paths are monospace, as everywhere else on
+ * the report; the rule that resolved each edge sits quiet beside it, because it is how we know
+ * rather than what we know. The one inference, a test role, takes the dashed `derived` mark.
+ */
+.where {
+  display: grid;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.where-empty {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-3);
+}
+
+.where-repo {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.where-at {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-1);
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.where-quiet,
+.where-rule {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.where-module {
+  min-width: 0;
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--border);
+}
+
+.where-module-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.where-files,
+.where-plain {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.where-file + .where-file {
+  margin-top: var(--space-3);
+}
+
+.where-file-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.where-file-path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.where-mark {
+  flex-shrink: 0;
+  width: 1em;
+  font-size: var(--text-xs);
+  color: var(--accent);
+  text-align: center;
+}
+
+.where-ring1,
+.where-ring2 {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0 calc(1em + var(--space-2));
+}
+
+.where-neighbours .where-plain li,
+.where-ring2 .where-plain li,
+.where-unlinked .where-plain li,
+.where-unmapped .where-plain li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-2);
+  padding: 1px 0;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.where-label {
+  margin: 0 0 2px;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.where-packages {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.where-changed {
+  font-size: var(--text-xs);
+  color: var(--accent);
+}
+
+.where-none {
+  margin: var(--space-1) 0 0 calc(1em + var(--space-2));
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.where-widen {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.where-why {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.where-unlinked {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.where-optin {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 64ch;
+  font-size: var(--text-sm);
+}
+
+.where-optin p {
+  margin: 0;
+}
+
+.where-command {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.where-foot {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+/*
+ * The rail and the section it chooses. Four unrelated readings used to be one scroll; the rail
+ * shows all four at once with their counts, so picking one is reading rather than hunting, and
+ * the section then has the whole card instead of a quarter of a column.
+ */
+.panel-split {
+  display: grid;
+  grid-template-columns: 168px minmax(0, 1fr);
+  min-height: 0;
+}
+
+.panel-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-3);
+  border-right: 1px solid var(--border);
+  overflow: auto;
+}
+
+.panel-rail-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--control-radius);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.panel-rail-item:hover {
+  background: var(--bg-muted);
+  color: var(--text);
+}
+
+/* The chosen one is a fill and a heavier word, the same way a selected session row reads. */
+.panel-rail-item.is-on {
+  background: var(--bg-muted);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.panel-rail-count {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+/* Inside the panel a section is the whole view, so it drops the heading and the card chrome it
+   wore when it was one of four stacked blocks. */
+.panel-body > .viz > .viz-title,
+.panel-body > .report .viz-title {
+  display: none;
+}
+
+.panel-body > .viz {
+  margin: 0;
+}
+
+@media (max-width: 720px) {
+  .panel-scrim {
+    padding: var(--space-3);
+  }
+
+  .panel-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .panel-rail {
+    flex-direction: row;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+}

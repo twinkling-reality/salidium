@@ -1,6 +1,12 @@
 import type { SessionStatus, SessionSummary } from '@salidium/protocol';
 import { useEffect, useState } from 'react';
 import { basename, relativeTime } from '../lib/format.ts';
+import {
+  entrypointMeta,
+  providerIcon,
+  providerLabel,
+  shortModelLabel,
+} from '../lib/providerLabel.ts';
 import { useScrollState } from '../lib/useScrollState.ts';
 import { NOTHING_RECORDED, useAppStore } from '../store/appStore.ts';
 import { useDismiss } from './Controls.tsx';
@@ -78,7 +84,7 @@ export function MarksKey() {
                 <Icon name="flag" />1
               </span>
             </dt>
-            <dd>to review</dd>
+            <dd>review</dd>
           </div>
         </dl>
       </div>
@@ -249,7 +255,7 @@ export function SessionList({ now }: { now: number }) {
   // The sort already ranked these; naming the boundaries turns an ordering the reader has to infer
   // into three headed groups they can read past. Empty groups are omitted, never headed as "none".
   const groups: Array<[string, SessionSummary[]]> = [
-    ['Needs you', real.filter((s) => needsYou(s, now))],
+    ['Review', real.filter((s) => needsYou(s, now))],
     ['Working', real.filter((s) => !needsYou(s, now) && s.status === 'working')],
     ['Recent', real.filter((s) => !needsYou(s, now) && s.status !== 'working')],
   ];
@@ -449,17 +455,26 @@ function SessionRow({
 }) {
   const st = statusGlyph(s.status);
   const attention = needsYou(s, now);
+  const empty = isEmpty(s);
   const repo = basename(s.repoRoot || s.cwd);
   // Untitled sessions fall back to the repo, so the repo label would repeat it; drop the label.
   // A session with nothing recorded has no repo worth naming either — several dozen of them share
   // the same one — so it is identified by the only thing that distinguishes it, its id.
-  const name = s.title || (isEmpty(s) ? s.providerSessionId.slice(0, 8) : repo) || 'unnamed';
-  const showRepo = name !== repo;
+  const name = s.title || (empty ? s.providerSessionId.slice(0, 8) : repo) || 'unnamed';
+  const showRepo = !empty && Boolean(repo) && name !== repo;
+  const shortModel = !empty ? shortModelLabel(s.model) : undefined;
+  const ep = !empty ? entrypointMeta(s.entrypoint) : undefined;
+  const hasDiff =
+    !empty && s.counts.filesChanged > 0 && (s.counts.linesAdded > 0 || s.counts.linesRemoved > 0);
+  const showSubRow = Boolean(ep || showRepo || shortModel || hasDiff);
+  const verifiedPass =
+    !empty && s.counts.reviewOpen === 0 && s.lastVerification?.outcome === 'pass';
+
   const label = [
     name,
     showRepo && `in ${repo}`,
     st.label,
-    s.counts.reviewOpen > 0 && `${s.counts.reviewOpen} to review`,
+    s.counts.reviewOpen > 0 && `${s.counts.reviewOpen} review`,
   ]
     .filter(Boolean)
     .join(', ');
@@ -467,43 +482,75 @@ function SessionRow({
     <li>
       <button
         type="button"
-        className={`session-row ${selected ? 'is-selected' : ''} ${attention ? 'has-attn' : ''}`}
+        className={`session-row ${selected ? 'is-selected' : ''} ${attention ? 'has-attn' : ''} ${showSubRow ? 'has-sub' : ''}`}
         onClick={onSelect}
         aria-current={selected ? 'true' : undefined}
         aria-label={label}
         title={showRepo ? `${name} (${repo})` : name}
       >
-        <span className={`status-dot ${st.cls}`} aria-hidden="true">
-          {st.glyph}
-        </span>
-        {/*
-         * One line, the way a page row in a well-made sidebar is one line. The repo moved into
-         * the tooltip and the accessible name: it disambiguates two sessions with the same title,
-         * which is worth having, but not worth a second line on every row to get it.
-         */}
-        <span className="session-title">{name}</span>
-        <span className="session-when" title="Last activity">
-          {relativeTime(s.lastEventAt ?? s.startedAt, now)}
-        </span>
-        {/*
-         * One mark, and it carries a flag so the number reads as "things flagged" rather than as
-         * an unread count. A bare ✕ for a failing check used to sit beside it; it was removed for
-         * being two problems at once — at the right-hand edge of a row an ✕ reads as "dismiss",
-         * and a failing check already opens a review item (`reviewRules.ts`), so it was counted
-         * here twice over.
-         */}
-        {s.counts.reviewOpen > 0 && (
-          <span
-            className={`attn-badge num ${attention ? 'is-live' : ''}`}
-            title={
-              attention
-                ? `${s.counts.reviewOpen} to review, needs you now`
-                : `${s.counts.reviewOpen} flagged during this session; it is no longer running`
-            }
-          >
-            <Icon name="flag" />
-            {s.counts.reviewOpen}
+        <div className="session-row-top">
+          <span className={`status-dot ${st.cls}`} aria-hidden="true">
+            {st.glyph}
           </span>
+          <span
+            className="session-provider-ico"
+            title={providerLabel(s.provider)}
+            aria-hidden="true"
+          >
+            <Icon name={providerIcon(s.provider)} />
+          </span>
+          <span className="session-title">{name}</span>
+          <span className="session-when" title="Last activity">
+            {relativeTime(s.lastEventAt ?? s.startedAt, now)}
+          </span>
+          {/*
+           * One mark, and it carries a flag so the number reads as "things flagged" rather than as
+           * an unread count. A bare ✕ for a failing check used to sit beside it; it was removed for
+           * being two problems at once — at the right-hand edge of a row an ✕ reads as "dismiss",
+           * and a failing check already opens a review item (`reviewRules.ts`), so it was counted
+           * here twice over.
+           */}
+          {s.counts.reviewOpen > 0 ? (
+            <span
+              className={`attn-badge num ${attention ? 'is-live' : ''}`}
+              title={
+                attention
+                  ? `${s.counts.reviewOpen} review, actionable now`
+                  : `${s.counts.reviewOpen} flagged during this session`
+              }
+            >
+              <Icon name="flag" />
+              {s.counts.reviewOpen}
+            </span>
+          ) : verifiedPass ? (
+            <span className="session-verified-mark" title="Verified" aria-hidden="true">
+              ✓
+            </span>
+          ) : null}
+        </div>
+        {showSubRow && (
+          <div className="session-row-sub" aria-hidden="true">
+            <span className="session-sub-meta">
+              {ep && (
+                <span className="session-sub-item is-surface" title={`Surface: ${ep.label}`}>
+                  <Icon name={ep.icon} />
+                  <span>{ep.label}</span>
+                </span>
+              )}
+              {showRepo && <span className="session-sub-item is-repo">{repo}</span>}
+              {shortModel && (
+                <span className="session-sub-item mono is-model">
+                  <span className="session-sub-trunc">{shortModel}</span>
+                </span>
+              )}
+            </span>
+            {hasDiff && (
+              <span className="session-sub-diff num">
+                <span className="add">+{s.counts.linesAdded}</span>{' '}
+                <span className="del">-{s.counts.linesRemoved}</span>
+              </span>
+            )}
+          </div>
         )}
       </button>
     </li>

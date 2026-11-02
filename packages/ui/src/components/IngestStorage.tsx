@@ -5,14 +5,16 @@ import type {
   LocalAlert,
   OperationsHealthSnapshot,
   OperationsOverview,
+  StorageDeletionPreview,
 } from '@salidium/protocol';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ApiError } from '../api/client.ts';
 import { relativeTime } from '../lib/format.ts';
 import { providerLabel } from '../lib/providerLabel.ts';
 import { type OperationsAction, useAppStore } from '../store/appStore.ts';
 import { ToolButton } from './Controls.tsx';
 import { Loading } from './Loading.tsx';
-import { StorageCompositionView } from './StorageComposition.tsx';
+import { formatDeletionRange, StorageCompositionView } from './StorageComposition.tsx';
 
 function bytesOrUnavailable(bytes: number | null): string {
   return bytes === null ? 'Unavailable' : formatBytes(bytes);
@@ -116,6 +118,9 @@ function actionLabel(action: OperationsAction): string {
   if (action === 'drain') return 'Draining one batch';
   if (action === 'alert') return 'Acknowledging alert';
   if (action === 'disconnect') return 'Disconnecting provider';
+  if (action === 'connect') return 'Connecting provider';
+  if (action === 'storage-delete') return 'Deleting session history';
+  if (action === 'storage-compact') return 'Compacting storage';
   return 'Updating collection';
 }
 
@@ -318,6 +323,7 @@ function Controls({
   const setCollection = useAppStore((state) => state.setCollection);
   const drainQueue = useAppStore((state) => state.drainQueue);
   const disconnectHooks = useAppStore((state) => state.disconnectHooks);
+  const connectHooks = useAppStore((state) => state.connectHooks);
   const pending = useAppStore((state) => state.operationsPending);
   const [confirmProvider, setConfirmProvider] = useState<string>();
   const { health } = overview;
@@ -383,6 +389,11 @@ function Controls({
         {(info?.providers ?? []).map((provider) => {
           const connected =
             provider.hookStatus === 'configured' || provider.hookStatus === 'partial';
+          const canConnect =
+            (provider.id === 'claude-code' || provider.id === 'codex') &&
+            (provider.hookStatus === 'not-configured' ||
+              provider.hookStatus === 'partial' ||
+              provider.hookStatus === 'invalid');
           const confirming = confirmProvider === provider.id;
           return (
             <div className="is-provider" key={provider.id}>
@@ -391,24 +402,38 @@ function Controls({
                 <span>{hookStatus(provider)}</span>
                 {trustStatus(provider) && <small>{trustStatus(provider)}</small>}
               </div>
-              {connected && (
-                <button
-                  type="button"
-                  className={confirming ? 'btn is-confirm' : 'btn'}
-                  disabled={pending !== undefined}
-                  onBlur={() => setConfirmProvider(undefined)}
-                  onClick={() => {
-                    if (!confirming) {
-                      setConfirmProvider(provider.id);
-                      return;
-                    }
-                    setConfirmProvider(undefined);
-                    void disconnectHooks(provider.id);
-                  }}
-                >
-                  {confirming ? `Disconnect ${provider.displayName ?? provider.id}?` : 'Disconnect'}
-                </button>
-              )}
+              <div className="operations-actions">
+                {canConnect && (
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={pending !== undefined}
+                    onClick={() => void connectHooks(provider.id)}
+                  >
+                    {provider.hookStatus === 'not-configured' ? 'Connect' : 'Repair'}
+                  </button>
+                )}
+                {connected && (
+                  <button
+                    type="button"
+                    className={confirming ? 'btn is-confirm' : 'btn'}
+                    disabled={pending !== undefined}
+                    onBlur={() => setConfirmProvider(undefined)}
+                    onClick={() => {
+                      if (!confirming) {
+                        setConfirmProvider(provider.id);
+                        return;
+                      }
+                      setConfirmProvider(undefined);
+                      void disconnectHooks(provider.id);
+                    }}
+                  >
+                    {confirming
+                      ? `Disconnect ${provider.displayName ?? provider.id}?`
+                      : 'Disconnect'}
+                  </button>
+                )}
+              </div>
             </div>
           );
         })}
@@ -426,8 +451,10 @@ function Source({ source, environment }: { source: string; environment?: string 
 }
 
 function PolicySettings({ config }: { config: EffectiveOperationalConfig }) {
+  const api = useAppStore((state) => state.api);
   const save = useAppStore((state) => state.setOperationalConfig);
   const reset = useAppStore((state) => state.resetOperationalConfig);
+  const deleteStorage = useAppStore((state) => state.deleteStorage);
   const pending = useAppStore((state) => state.operationsPending);
   const [open, setOpen] = useState(config.values.ui.operationsDetail.value === 'expanded');
   const change = (patch: Parameters<typeof save>[0]) => void save(patch).catch(() => {});
@@ -441,6 +468,8 @@ function PolicySettings({ config }: { config: EffectiveOperationalConfig }) {
   // narrowing choice locally and make the person confirm the deletion it causes; widening and
   // `Forever` delete nothing, so they still save immediately.
   const [proposedRetention, setProposedRetention] = useState<typeof retention>();
+  const [retentionPreview, setRetentionPreview] = useState<StorageDeletionPreview>();
+  const [retentionPreviewLoading, setRetentionPreviewLoading] = useState(false);
   const span = (value: typeof retention) =>
     value === 'forever' ? Number.POSITIVE_INFINITY : value;
   const narrows = (value: typeof retention) => span(value) < span(retention);
@@ -449,6 +478,31 @@ function PolicySettings({ config }: { config: EffectiveOperationalConfig }) {
     setOpen(config.values.ui.operationsDetail.value === 'expanded');
   }, [config.values.ui.operationsDetail.value]);
 
+  useEffect(() => {
+    if (!api || proposedRetention === undefined || proposedRetention === 'forever') {
+      setRetentionPreview(undefined);
+      setRetentionPreviewLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setRetentionPreview(undefined);
+    setRetentionPreviewLoading(true);
+    void api
+      .previewStorageDeletion({ kind: 'retention', days: proposedRetention })
+      .then((next) => {
+        if (!cancelled) setRetentionPreview(next);
+      })
+      .catch(() => {
+        if (!cancelled) setRetentionPreview(undefined);
+      })
+      .finally(() => {
+        if (!cancelled) setRetentionPreviewLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, proposedRetention]);
+
   const toggle = () => {
     const next = !open;
     setOpen(next);
@@ -456,6 +510,9 @@ function PolicySettings({ config }: { config: EffectiveOperationalConfig }) {
       setOpen(config.values.ui.operationsDetail.value === 'expanded');
     });
   };
+  const retentionRange = retentionPreview
+    ? formatDeletionRange(retentionPreview.oldestAt, retentionPreview.newestAt)
+    : '';
   return (
     <section className="is-section operations-policy" aria-labelledby="operations-policy-title">
       <button
@@ -500,24 +557,60 @@ function PolicySettings({ config }: { config: EffectiveOperationalConfig }) {
               <option value="365">365 days</option>
             </select>
           </label>
-          {proposedRetention !== undefined && (
+          {proposedRetention !== undefined && proposedRetention !== 'forever' && (
             <div className="operations-retention-confirm" role="alert">
               <p>
-                Keeping {proposedRetention} days permanently deletes every unpinned session with no
-                activity in the last {proposedRetention} days, and all of its events. This cannot be
-                undone.
+                {retentionPreviewLoading ? (
+                  `Counting sessions with no activity in the last ${proposedRetention} days…`
+                ) : retentionPreview ? (
+                  retentionPreview.sessions > 0 ? (
+                    <>
+                      Keeping {proposedRetention} days permanently deletes{' '}
+                      <strong>
+                        {retentionPreview.sessions.toLocaleString()}{' '}
+                        {retentionPreview.sessions === 1 ? 'session' : 'sessions'}
+                      </strong>{' '}
+                      ({retentionPreview.eventCount.toLocaleString()}{' '}
+                      {retentionPreview.eventCount === 1 ? 'event' : 'events'},{' '}
+                      {formatBytes(retentionPreview.bytes)}
+                      {retentionRange ? `, ${retentionRange}` : ''}) with no activity in the last{' '}
+                      {proposedRetention} days. This cannot be undone.
+                    </>
+                  ) : (
+                    `No stored sessions are older than ${proposedRetention} days right now. Future sessions with no activity in the last ${proposedRetention} days will be deleted automatically.`
+                  )
+                ) : (
+                  `Keeping ${proposedRetention} days permanently deletes every unpinned session with no activity in the last ${proposedRetention} days, and all of its events. This cannot be undone.`
+                )}
               </p>
               <button
                 type="button"
                 className="btn is-confirm"
-                disabled={busy}
+                disabled={busy || retentionPreviewLoading}
                 onClick={() => {
                   const days = proposedRetention;
+                  if (retentionPreview) {
+                    void deleteStorage({ kind: 'retention', days }, retentionPreview.sessions)
+                      .then(() => {
+                        setProposedRetention(undefined);
+                        setRetentionPreview(undefined);
+                      })
+                      .catch((error) => {
+                        if (error instanceof ApiError && error.status === 409 && error.preview) {
+                          setRetentionPreview(error.preview);
+                        }
+                      });
+                    return;
+                  }
                   setProposedRetention(undefined);
                   change({ retention: { days } });
                 }}
               >
-                Delete older sessions
+                {retentionPreview
+                  ? retentionPreview.sessions > 0
+                    ? `Delete ${retentionPreview.sessions.toLocaleString()} ${retentionPreview.sessions === 1 ? 'session' : 'sessions'}`
+                    : `Keep ${proposedRetention} days`
+                  : 'Delete older sessions'}
               </button>
               <button
                 type="button"

@@ -1,4 +1,5 @@
 import type {
+  CanvasBlock,
   Epistemic,
   ExitStatus,
   FileChangeKind,
@@ -35,6 +36,7 @@ export interface Explanation {
     to: string;
     toSteps: string[];
   } | null;
+  canvasBlocks?: CanvasBlock[];
 }
 
 export interface RunState {

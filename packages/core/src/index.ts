@@ -4,6 +4,14 @@
  */
 
 export type {
+  CanvasLinksInput,
+  ComposeCanvasSpecOptions,
+} from './canvas/composeCanvasSpec.ts';
+export {
+  collectValidCanvasRefs,
+  composeCanvasSpec,
+} from './canvas/composeCanvasSpec.ts';
+export type {
   Classification,
   Confidence,
   ExtractedClaim,

@@ -17,11 +17,17 @@ import {
   type SessionList,
   type SessionSnapshot,
   type SessionSummary,
+  type StorageDeletionPreview,
+  type StorageDeletionScope,
   type StoredEvent,
 } from '@salidium/protocol';
 import type { ExplanationAttempt } from '../enrich/explainer.ts';
 import { hostedExplanationRefused } from '../enrich/explainerBackends.ts';
-import type { RetentionPreview, SalidiumStore } from '../storage/salidiumStore.ts';
+import type {
+  AppliedStorageDeletion,
+  RetentionPreview,
+  SalidiumStore,
+} from '../storage/salidiumStore.ts';
 import {
   type CoordinatorListener,
   explanationIsCurrent,
@@ -480,12 +486,51 @@ export class SessionRegistry {
 
   forget(sessionId: string): void {
     const c = this.live.get(sessionId);
+    const stored = c?.summary ?? this.store.getSession(sessionId);
+    const userSession = stored ? isUserSession(stored) : true;
     if (c) {
-      c.close();
+      c.discard();
       this.live.delete(sessionId);
     }
     this.lastTouched.delete(sessionId);
-    if (this.store.forgetSession(sessionId)) this.notifyRemoved(sessionId);
+    this.readCache.delete(sessionId);
+    if (this.store.forgetSession(sessionId) && userSession) this.notifyRemoved(sessionId);
+  }
+
+  previewDeletion(scope: StorageDeletionScope, now = new Date()): StorageDeletionPreview {
+    this.flushAll();
+    if (!this.store.previewStorageDeletion) {
+      throw new Error('storage deletion preview is not supported by this store');
+    }
+    const exclude = scope.kind === 'retention' ? [...this.live.keys()] : [];
+    return this.store.previewStorageDeletion(scope, now, exclude);
+  }
+
+  deleteSessions(
+    scope: StorageDeletionScope,
+    expectedSessions?: number,
+    now = new Date(),
+  ): AppliedStorageDeletion {
+    this.flushAll();
+    if (!this.store.applyStorageDeletion) {
+      throw new Error('storage deletion is not supported by this store');
+    }
+    const exclude = scope.kind === 'retention' ? [...this.live.keys()] : [];
+    const applied = this.store.applyStorageDeletion(scope, now, exclude, expectedSessions);
+    if (applied.status === 'deleted') {
+      const userIds = new Set(applied.removedUserSessionIds ?? applied.removedSessionIds);
+      for (const id of applied.removedSessionIds) {
+        const c = this.live.get(id);
+        if (c) {
+          c.discard();
+          this.live.delete(id);
+        }
+        this.lastTouched.delete(id);
+        this.readCache.delete(id);
+        if (userIds.has(id)) this.notifyRemoved(id);
+      }
+    }
+    return applied;
   }
 
   /** Applies the configured policy while treating every loaded coordinator as active. */

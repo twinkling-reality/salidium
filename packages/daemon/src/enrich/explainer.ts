@@ -293,6 +293,7 @@ export async function explainWithStatus(
     why: payload.why,
     how: payload.how,
     approachChange: payload.approachChange,
+    ...(Array.isArray(payload.canvasBlocks) ? { canvasBlocks: payload.canvasBlocks } : {}),
   };
   const validated = ExplanationEventSchema.safeParse(candidate);
   return validated.success

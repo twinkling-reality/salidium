@@ -117,7 +117,7 @@ export class TerminalUi {
     const mark = opened ? '↗' : '→';
     const urlRail = firstRun ? '├─' : '└─';
     const next = firstRun
-      ? `  ${this.rail('└─')} ${this.tone('NEXT', 'muted')} ${this.bold('npx salidium')}\n`
+      ? `  ${this.rail('├─')} ${this.tone('BACKGROUND', 'muted')} Salidium keeps running in the background; see it in the menu bar (salidium service install) or with salidium status, and stop it with salidium stop.\n  ${this.rail('└─')} ${this.tone('NEXT', 'muted')} ${this.bold('npx salidium')}\n`
       : '';
     return `\n  ${this.tone('◆', 'accent')}  ${this.bold(label)}\n  ${this.rail(urlRail)} ${this.tone(mark, 'accent')} ${this.tone(url, 'accent')}\n${next}\n`;
   }

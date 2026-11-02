@@ -494,6 +494,7 @@ export async function buildProjectMap(input: BuildInput): Promise<ProjectMap> {
   }
 
   for (const pkg of workspace.values()) {
+    await pace();
     for (const dependency of pkg.dependencies) {
       const target = workspace.get(dependency);
       if (target)
@@ -510,6 +511,7 @@ export async function buildProjectMap(input: BuildInput): Promise<ProjectMap> {
     }
   }
   for (const assembly of asmdefByName.values()) {
+    await pace();
     for (const reference of assembly.references) {
       const target = asmdefByName.get(reference);
       if (target)
@@ -754,6 +756,7 @@ export async function buildProjectMap(input: BuildInput): Promise<ProjectMap> {
   const languages = new Map<string, Coverage['languages'][number]>();
   let missing = 0;
   for (const entry of entries) {
+    await pace();
     const language = languageOf(entry.path);
     let row = languages.get(language);
     if (!row) {

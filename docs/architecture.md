@@ -47,14 +47,29 @@ or changes OpenCode's configuration.
 - `packages/protocol` owns runtime-validated events, provenance, semantic changes, and wire shapes.
 - `packages/consumer-contract` owns the versioned read-only contract for other local tools. It
   depends on nothing else in the workspace; see [Consumer contract](#consumer-contract).
-- `packages/core` owns pure reduction, projections, verification parsing, review rules, replay, and
+- `packages/core` owns pure reduction (`state/reducer.ts`, `state/fidelity.ts`,
+  `state/fileChanges.ts`, `state/verificationReducer.ts`), adaptive canvas specification composition
+  (`canvas/composeCanvasSpec.ts`), projections, verification parsing, review rules, replay, and
   redaction.
+- `packages/project-map` owns deterministic AST import scanning, module manifest resolution, and
+  Ring 1 / Ring 2 blast-radius link extraction (`ExecutionLinks`).
 - `packages/adapter-kit` defines adapter-facing contracts.
 - `packages/adapters/*` translate provider hooks and session records into canonical events.
-- `packages/daemon` owns discovery, ingestion, persistence, explanation scheduling, and the
-  authenticated loopback server.
-- `packages/ui` renders the report and folds live changes from the daemon.
-- `packages/cli` owns setup, recovery commands, text output, and the single published bundle.
+- `packages/daemon` owns discovery, ingestion (`ingest/relayScript.ts`, `ingest/spool.ts`,
+  `ingest/tailer.ts`, `ingest/storeTailer.ts`), SQLite persistence (`storage/sqliteStore.ts`,
+  `storage/sqliteSchema.ts`, `storage/sqliteEncoding.ts`), paced repository mapping
+  (`projectMap/build.ts`), explanation scheduling, and the authenticated loopback server.
+- `packages/ui` renders the report and folds live changes from the daemon through modular canvas
+  lenses (`components/canvas/SessionCanvas.tsx`, `SystemArchitectureLens.tsx`,
+  `ProjectMapTopologySection.tsx`, `ExecutionSequenceLens.tsx`, `VerificationMatrixLens.tsx`,
+  `NarrativeLens.tsx`, `CanvasDesignInspector.tsx`), store slices (`store/appStore.ts`,
+  `store/storagePreferences.ts`, `store/sessionStoreHelpers.ts`), perceptual contrast guardrails
+  (`lib/visualPresets.ts`), and domain stylesheets (`styles/tokens.css`, `primitives.css`,
+  `app.css`, `canvas.css`, `inspector.css`, `timeline.css`, `modals.css`).
+- `packages/cli` owns setup, recovery commands, text output, and the single published bundle,
+  organized into domain command handlers (`commands/service.ts`, `commands/ingest.ts`,
+  `commands/projectMap.ts`, `commands/status.ts`, `commands/doctor.ts`, `commands/shared.ts`)
+  dispatched from `main.ts`.
 - `apps/site` contains the public website and documentation surface.
 
 Workspace packages are not published independently, apart from the two contract packages
@@ -502,6 +517,29 @@ and bounded evidence; C# at assembly level only. The record behind it is
   Salidium; its time and output are.
 - **Cache.** Built maps are kept owner-only under `project-map/cache`, keyed by the opt-in record
   itself, bounded in entries and bytes, and deleted on revocation.
+
+### Adaptive session canvas and cognitive architecture
+
+`@salidium/core` (`composeCanvasSpec.ts`) composes a `salidium.canvas-spec/v1` specification from
+observed session telemetry, `@salidium/project-map` `ExecutionLinks`, and optional model-generated
+explanations, binding every block reference against `collectValidCanvasRefs` so unverified references
+are stripped before rendering. `@salidium/ui` (`components/canvas/SessionCanvas.tsx` and its lens
+modules) renders the session overview and code map under the cognitive and perceptual invariants
+documented in [ADR 0006](decisions/0006-cognitive-visual-canvas-architecture.md):
+
+- **Strict 1:1 spatial node identity ($U \cap E = \emptyset, E \cap D = \emptyset$)**: Each touched
+  file appears once in `Edited Files`, never cloned into upstream `Imports` or downstream
+  `Dependents & Tests`. Internal edges between edited files are shown inline as linked edits.
+- **Unobstructed left-to-right causal flow**: Curves route from `Imports` -> `Edited Files` ->
+  `Dependents & Tests` with barycenter row ordering and no mid-gutter `L##` import line-number pills.
+- **Data-driven dynamic columns and progressive disclosure**: Column presence and titles (`Imports`,
+  `Imported Files`, `Imported Packages`, `Edited Files`, `Dependents & Tests`, `Related Tests`,
+  `Dependents`) adapt dynamically to the session's observed dependency graph, controlled via two
+  top-level switches (`View: Overview | Steps | Why & How` and `Detail: Summary | Standard | Full`).
+- **Perceptual contrast guardrails (`salidium.canvas-style/v1`)**: `visualPresets.ts`
+  (`canvasStyleToInlineVars`) enforces OKLab lightness separation and WCAG relative luminance
+  contrast across the 3 elevation tiers (Canvas Backdrop, Section Container, and Inner Node Card) so
+  custom user fills, borders, and glass blur settings remain legible.
 
 ### Intelligence sync foundation
 

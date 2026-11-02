@@ -40,11 +40,13 @@ instead of a claim the implementation cannot keep.
    can preview what a byte target would actually delete. Database file size is not treated as an
    exact measure of deletable session content.
 6. An ordinary pause is a 24-hour lease. The running daemon clears it when it expires, and an
-   ordinary CLI command implicitly resumes collection. State-preserving lifecycle and offline
-   maintenance commands do not. The relay keeps the zero-subprocess marker check. If the daemon
-   crashes while paused and no ordinary command is run, automatic wall-clock expiry is not
-   guaranteed; the next ordinary command must preserve the stopped interval in the collection-gap
-   ledger while it resumes collection.
+   ordinary CLI command implicitly resumes an ordinary pause. A pause written by `salidium stop`
+   stays in place across inspection and configuration commands until Salidium is explicitly started,
+   opened, restarted, or resumed. State-preserving lifecycle and offline maintenance commands never
+   implicitly resume collection. The relay keeps the zero-subprocess marker check. If the daemon
+   crashes while paused and no resuming command is run, automatic wall-clock expiry is not
+   guaranteed; the next command that resumes collection must preserve the stopped interval in the
+   collection-gap ledger while it resumes collection.
 
 ## Consequences
 

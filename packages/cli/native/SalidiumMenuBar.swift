@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import WebKit
 
 private struct Configuration {
     let home: String
@@ -22,6 +23,41 @@ private struct Configuration {
               let node = values["--node"],
               let cli = values["--cli"] else { return nil }
         return Configuration(home: home, node: node, cli: cli)
+    }
+}
+
+private enum WindowTarget {
+    case root
+    case storage
+    case operations
+
+    var cliArguments: [String] {
+        switch self {
+        case .root:
+            return ["open", "--no-resume"]
+        case .storage:
+            return ["open", "--storage", "--no-resume"]
+        case .operations:
+            return ["open", "--operations", "--no-resume"]
+        }
+    }
+}
+
+private struct DaemonEndpoint: Equatable {
+    let port: Int
+    let token: String
+
+    func url(for target: WindowTarget) -> URL? {
+        let fragment: String
+        switch target {
+        case .root:
+            fragment = "token=\(token)"
+        case .storage:
+            fragment = "/storage&token=\(token)"
+        case .operations:
+            fragment = "/operations&token=\(token)"
+        }
+        return URL(string: "http://127.0.0.1:\(port)/#\(fragment)")
     }
 }
 
@@ -82,6 +118,7 @@ private struct Alert {
 private struct Snapshot {
     var health: Health = .offline
     var pid: Int?
+    var endpoint: DaemonEndpoint?
     var collectionPaused = false
     var collectionKnown = false
     var pauseExpiresAt: String?
@@ -176,13 +213,22 @@ private final class StorageView: NSView {
     }
 }
 
-private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+private final class AppDelegate: NSObject,
+                                 NSApplicationDelegate,
+                                 NSMenuDelegate,
+                                 NSWindowDelegate,
+                                 WKNavigationDelegate,
+                                 WKUIDelegate {
     private let configuration: Configuration
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
     private var snapshot = Snapshot.offline
     private var refreshInProgress = false
     private var timer: Timer?
+    private var mainWindow: NSWindow?
+    private var webView: WKWebView?
+    private var activeEndpoint: DaemonEndpoint?
+    private var lastWindowTarget: WindowTarget = .root
     /*
      * What a command the reader started is doing, and the pulse that says it is still doing it.
      *
@@ -211,6 +257,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        NSApp.applicationIconImage = Self.applicationIcon()
+        configureApplicationMenu()
         menu.delegate = self
         statusItem.menu = menu
         rebuildMenu()
@@ -223,6 +271,22 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     func applicationWillTerminate(_ notification: Notification) {
         timer?.invalidate()
         pulseTimer?.invalidate()
+        releaseWindow()
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if let window = mainWindow {
+            if window.isMiniaturized {
+                window.deminiaturize(nil)
+            }
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return true
+        }
+        if snapshot.pid != nil {
+            openNativeWindow(target: lastWindowTarget)
+        }
+        return true
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -239,10 +303,30 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
                 guard let self = self else { return }
                 self.snapshot = next
                 if next.pid != nil { self.lastFailure = nil }
+                if let nextEndpoint = next.endpoint,
+                   let currentEndpoint = self.activeEndpoint,
+                   nextEndpoint != currentEndpoint,
+                   let webView = self.webView,
+                   let url = nextEndpoint.url(for: self.lastWindowTarget) {
+                    self.activeEndpoint = nextEndpoint
+                    webView.load(URLRequest(url: url))
+                }
                 self.refreshInProgress = false
                 self.rebuildMenu()
             }
         }
+    }
+
+    private static func readEndpoint(configuration: Configuration) -> DaemonEndpoint? {
+        let daemonPath = URL(fileURLWithPath: configuration.home)
+            .appendingPathComponent("daemon.json")
+        guard let daemonData = try? Data(contentsOf: daemonPath),
+              let daemon = try? JSONSerialization.jsonObject(with: daemonData) as? [String: Any],
+              let port = integer(daemon["port"]),
+              let token = daemon["token"] as? String,
+              !token.isEmpty,
+              (1...65535).contains(port) else { return nil }
+        return DaemonEndpoint(port: port, token: token)
     }
 
     private static func readSnapshot(configuration: Configuration) -> Snapshot {
@@ -284,6 +368,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         var snapshot = Snapshot()
         snapshot.health = Health(rawValue: health["overall"] as? String ?? "") ?? .attention
         snapshot.pid = integer(daemonHealth["pid"])
+        snapshot.endpoint = DaemonEndpoint(port: port, token: token)
         if let collection = health["collection"] as? [String: Any],
            let state = collection["state"] as? String {
             snapshot.collectionKnown = true
@@ -493,6 +578,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
             return Situation(headline: "Collection state unavailable", detail: nil,
                              tone: .attention, explain: true)
         }
+        if let total = snapshot.storeBytes {
+            return Situation(headline: "Recording · \(Self.byteLabel(total)) of session history",
+                             detail: nil, tone: .healthy)
+        }
         return Situation(headline: "Recording your agent work", detail: nil, tone: .healthy)
     }
 
@@ -524,6 +613,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         } else {
             addAction(situation.explain ? "See What Happened" : "Open Salidium",
                       #selector(openSalidium), key: "o")
+            addAction("Open in Browser", #selector(openInBrowser), key: "b")
             if snapshot.collectionPaused {
                 addAction("Resume Recording", #selector(resumeCollection))
             } else {
@@ -548,8 +638,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         if snapshot.pid != nil {
             menu.addItem(.separator())
             addStorage()
+            addAction("Storage…", #selector(openStorage))
             menu.addItem(.separator())
-            addAction("Local Operations…", #selector(openSalidium))
+            addAction("Local Operations…", #selector(openOperations))
             addAction("Stop Salidium", #selector(stopSalidium))
         }
 
@@ -925,17 +1016,272 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     }
 
     /*
+     * Drawn from the same mark geometry so the Dock and Cmd+Tab switcher have a proper app icon
+     * while the window is open, even though the helper compiles to a single binary without a
+     * `.app` bundle on disk.
+     */
+    private static func applicationIcon() -> NSImage {
+        let size = NSSize(width: 256, height: 256)
+        return NSImage(size: size, flipped: true) { rect in
+            let inset = rect.insetBy(dx: 20, dy: 20)
+            let card = NSBezierPath(roundedRect: inset, xRadius: 48, yRadius: 48)
+            NSColor(calibratedRed: 0.09, green: 0.10, blue: 0.12, alpha: 1.0).setFill()
+            card.fill()
+            NSColor.white.withAlphaComponent(0.14).setStroke()
+            card.lineWidth = 2
+            card.stroke()
+
+            let scale: CGFloat = 2.4
+            let markWidth = 64 * scale
+            let markHeight = 44 * scale
+            let offsetX = (rect.width - markWidth) / 2
+            let offsetY = (rect.height - markHeight) / 2
+            let transform = NSAffineTransform()
+            transform.translateX(by: offsetX, yBy: offsetY)
+            transform.scaleX(by: scale, yBy: scale)
+            transform.concat()
+            NSColor(calibratedRed: 0.95, green: 0.96, blue: 0.97, alpha: 1.0).setFill()
+            markPath().fill()
+            return true
+        }
+    }
+
+    /*
+     * Without a main menu bar, a bundle-less binary switched to `.regular` activation policy will
+     * not route standard Edit and Window shortcuts (`Cmd+C`, `Cmd+V`, `Cmd+A`, `Cmd+Z`, `Cmd+W`,
+     * `Cmd+R`) into `WKWebView`. `Cmd+Q` closes the window and returns the helper to `.accessory`
+     * mode rather than terminating the process, so closing the window from the keyboard never kills
+     * the menu-bar item.
+     */
+    private func configureApplicationMenu() {
+        let mainMenu = NSMenu()
+
+        let appMenuItem = NSMenuItem()
+        let appMenu = NSMenu(title: "Salidium")
+        let openItem = NSMenuItem(title: "Open Salidium", action: #selector(openSalidium), keyEquivalent: "1")
+        openItem.target = self
+        appMenu.addItem(openItem)
+        let browserItem = NSMenuItem(title: "Open in Browser", action: #selector(openInBrowser), keyEquivalent: "B")
+        browserItem.target = self
+        appMenu.addItem(browserItem)
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Hide Salidium", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        let hideOthers = NSMenuItem(title: "Hide Others",
+                                    action: #selector(NSApplication.hideOtherApplications(_:)),
+                                    keyEquivalent: "h")
+        hideOthers.keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(hideOthers)
+        appMenu.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
+        appMenu.addItem(.separator())
+        let closeAppWindow = NSMenuItem(title: "Close Salidium Window",
+                                        action: #selector(closeSalidiumWindow),
+                                        keyEquivalent: "q")
+        closeAppWindow.target = self
+        appMenu.addItem(closeAppWindow)
+        appMenuItem.submenu = appMenu
+        mainMenu.addItem(appMenuItem)
+
+        let editMenuItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenuItem.submenu = editMenu
+        mainMenu.addItem(editMenuItem)
+
+        let viewMenuItem = NSMenuItem()
+        let viewMenu = NSMenu(title: "View")
+        let reloadItem = NSMenuItem(title: "Reload Page", action: #selector(reloadWebView), keyEquivalent: "r")
+        reloadItem.target = self
+        viewMenu.addItem(reloadItem)
+        viewMenuItem.submenu = viewMenu
+        mainMenu.addItem(viewMenuItem)
+
+        let windowMenuItem = NSMenuItem()
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        windowMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        windowMenu.addItem(.separator())
+        let windowBrowserItem = NSMenuItem(title: "Open in Browser", action: #selector(openInBrowser), keyEquivalent: "b")
+        windowBrowserItem.target = self
+        windowMenu.addItem(windowBrowserItem)
+        windowMenuItem.submenu = windowMenu
+        mainMenu.addItem(windowMenuItem)
+        NSApp.windowsMenu = windowMenu
+
+        NSApp.mainMenu = mainMenu
+    }
+
+    /*
+     * Opens the native macOS window backed by `WKWebView` and switches activation policy to
+     * `.regular` so Salidium participates in `Cmd+Tab` and the Dock while its window is on screen.
+     * Falls back to the CLI browser launch if `daemon.json` cannot be read.
+     */
+    private func openNativeWindow(target: WindowTarget) {
+        lastWindowTarget = target
+        guard let endpoint = Self.readEndpoint(configuration: configuration) ?? snapshot.endpoint,
+              let url = endpoint.url(for: target) else {
+            runCLI(target.cliArguments)
+            return
+        }
+
+        if NSApp.activationPolicy() != .regular {
+            NSApp.setActivationPolicy(.regular)
+        }
+        NSApp.applicationIconImage = Self.applicationIcon()
+
+        if let existingWindow = mainWindow, let existingWebView = webView {
+            activeEndpoint = endpoint
+            existingWebView.load(URLRequest(url: url))
+            if existingWindow.isMiniaturized {
+                existingWindow.deminiaturize(nil)
+            }
+            existingWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            rebuildMenu()
+            return
+        }
+
+        let webConfiguration = WKWebViewConfiguration()
+        webConfiguration.websiteDataStore = .default()
+        let createdWebView = WKWebView(frame: .zero, configuration: webConfiguration)
+        createdWebView.navigationDelegate = self
+        createdWebView.uiDelegate = self
+        createdWebView.allowsBackForwardNavigationGestures = true
+
+        let defaultFrame = NSRect(x: 0, y: 0, width: 1280, height: 820)
+        let styleMask: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
+        let createdWindow = NSWindow(contentRect: defaultFrame,
+                                     styleMask: styleMask,
+                                     backing: .buffered,
+                                     defer: false)
+        createdWindow.title = "Salidium"
+        createdWindow.minSize = NSSize(width: 760, height: 520)
+        // `isReleasedWhenClosed` must be false when ARC holds a strong reference to `NSWindow`.
+        createdWindow.isReleasedWhenClosed = false
+        createdWindow.collectionBehavior = [.fullScreenPrimary]
+        if !createdWindow.setFrameUsingName("SalidiumMainWindow") {
+            createdWindow.center()
+        }
+        createdWindow.setFrameAutosaveName("SalidiumMainWindow")
+        createdWindow.delegate = self
+        createdWindow.contentView = createdWebView
+
+        mainWindow = createdWindow
+        webView = createdWebView
+        activeEndpoint = endpoint
+
+        createdWebView.load(URLRequest(url: url))
+        createdWindow.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        rebuildMenu()
+    }
+
+    /*
+     * Tears down the `WKWebView` when the window closes so WebKit's helper processes exit and its
+     * memory is returned to the system, then restores `.accessory` activation policy so Salidium
+     * leaves `Cmd+Tab` and the Dock until the window is opened again.
+     */
+    private func releaseWindow() {
+        if let activeWebView = webView {
+            activeWebView.stopLoading()
+            activeWebView.navigationDelegate = nil
+            activeWebView.uiDelegate = nil
+            activeWebView.loadHTMLString("", baseURL: nil)
+            activeWebView.removeFromSuperview()
+        }
+        webView = nil
+        activeEndpoint = nil
+        if let activeWindow = mainWindow {
+            activeWindow.delegate = nil
+            activeWindow.contentView = nil
+            activeWindow.orderOut(nil)
+        }
+        mainWindow = nil
+        if NSApp.activationPolicy() != .accessory {
+            NSApp.setActivationPolicy(.accessory)
+        }
+        rebuildMenu()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        releaseWindow()
+    }
+
+    @objc private func closeSalidiumWindow() {
+        if let window = mainWindow {
+            window.performClose(nil)
+        } else if NSApp.activationPolicy() != .accessory {
+            NSApp.setActivationPolicy(.accessory)
+        }
+    }
+
+    @objc private func reloadWebView() {
+        webView?.reload()
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if let title = webView.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !title.isEmpty {
+            mainWindow?.title = title
+        } else {
+            mainWindow?.title = "Salidium"
+        }
+    }
+
+    func webView(_ webView: WKWebView,
+                 createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction,
+                 windowFeatures: WKWindowFeatures) -> WKWebView? {
+        if navigationAction.targetFrame == nil, let url = navigationAction.request.url {
+            NSWorkspace.shared.open(url)
+        }
+        return nil
+    }
+
+    func webView(_ webView: WKWebView,
+                 decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        guard let url = navigationAction.request.url else {
+            decisionHandler(.cancel)
+            return
+        }
+        if let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+            let host = url.host?.lowercased() ?? ""
+            if host == "127.0.0.1" || host == "localhost" {
+                decisionHandler(.allow)
+            } else {
+                NSWorkspace.shared.open(url)
+                decisionHandler(.cancel)
+            }
+            return
+        }
+        decisionHandler(.allow)
+    }
+
+    /*
      * `--no-resume` because this menu only offers actions after a live health response, so the
      * dead-daemon case implicit resume exists to recover from cannot apply here, and because
      * `runCLI` sends stdout to the null device, so a resume would happen with nothing to show it.
      * Opening the interface is not a request to start recording again.
      */
-    @objc private func openSalidium() { runCLI(["open", "--no-resume"]) }
+    @objc private func openSalidium() { openNativeWindow(target: .root) }
+    @objc private func openStorage() { openNativeWindow(target: .storage) }
+    @objc private func openOperations() { openNativeWindow(target: .operations) }
+    @objc private func openInBrowser() { runCLI(WindowTarget.root.cliArguments) }
     @objc private func startSalidium() { runCLI(["start"], label: "Starting", failed: "start") }
     @objc private func pauseCollection() { runCLI(["pause", "--quiet"], label: "Pausing", failed: "pause recording") }
     @objc private func resumeCollection() { runCLI(["resume", "--quiet"], label: "Resuming", failed: "resume recording") }
     @objc private func drainQueue() { runCLI(["maintenance", "drain", "--quiet"], label: "Storing waiting work", failed: "store the waiting work") }
-    @objc private func stopSalidium() { runCLI(["stop", "--quiet"], label: "Stopping", failed: "stop") }
+    @objc private func stopSalidium() {
+        releaseWindow()
+        runCLI(["stop", "--quiet"], label: "Stopping", failed: "stop")
+    }
 
     @objc private func turnOffAlwaysOn() {
         NSApp.activate(ignoringOtherApps: true)
@@ -946,6 +1292,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         alert.addButton(withTitle: "Turn Off")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        releaseWindow()
         runCLI(["service", "disable"], refreshAfter: false)
     }
 }

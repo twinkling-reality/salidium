@@ -474,4 +474,88 @@ describe('session-granular retention', () => {
       store.close();
     }
   });
+
+  it('previews and deletes project and all scopes with expectedSessions conflict checks, tombstones, and removal notifications', () => {
+    const { store } = temporaryStore();
+    const alpha1 = 'codex:alpha-1';
+    const alpha2 = 'codex:alpha-2';
+    const beta1 = 'codex:beta-1';
+    const internal1 = 'codex:internal-1';
+    for (const [id, cwd, ts, internal] of [
+      [alpha1, '/repo/alpha', '2026-01-01T00:00:00.000Z', false],
+      [alpha2, '/repo/alpha', '2026-01-05T00:00:00.000Z', false],
+      [beta1, '/repo/beta', '2026-02-01T00:00:00.000Z', false],
+      [internal1, '/repo/alpha', '2026-01-06T00:00:00.000Z', true],
+    ] as const) {
+      store.upsertSession({
+        ...summary(id),
+        cwd,
+        internal,
+        startedAt: ts,
+        lastEventAt: ts,
+      });
+      store.insertEvents([{ ...message(id), ts }]);
+      store.upsertSource({
+        path: `/provider/${id}.jsonl`,
+        sessionId: id,
+        provider: 'codex',
+        byteOffset: 42,
+        lineNo: 1,
+      });
+    }
+
+    const registry = new SessionRegistry(store);
+    const removedIds: string[] = [];
+    registry.subscribeRemovals((id) => removedIds.push(id));
+    try {
+      const projectPreview = registry.previewDeletion({ kind: 'project', project: '/repo/alpha' });
+      expect(projectPreview.sessions).toBe(2);
+      expect(projectPreview.eventCount).toBe(2);
+      expect(projectPreview.bytes).toBeGreaterThan(0);
+      expect(projectPreview.oldestAt).toBe('2026-01-01T00:00:00.000Z');
+      expect(projectPreview.newestAt).toBe('2026-01-05T00:00:00.000Z');
+
+      const conflict = registry.deleteSessions({ kind: 'project', project: '/repo/alpha' }, 99);
+      expect(conflict.status).toBe('conflict');
+      expect(store.getSession(alpha1)).toBeDefined();
+
+      const appliedProject = registry.deleteSessions(
+        { kind: 'project', project: '/repo/alpha' },
+        2,
+      );
+      expect(appliedProject.status).toBe('deleted');
+      if (appliedProject.status === 'deleted') {
+        expect(appliedProject.result.removedSessions).toBe(2);
+      }
+      expect(removedIds).toEqual([alpha1, alpha2]);
+      expect(store.getSession(alpha1)).toBeUndefined();
+      expect(store.getSession(alpha2)).toBeUndefined();
+      expect(store.getSession(beta1)).toBeDefined();
+      expect(store.isSessionTombstoned(alpha1)).toBe(true);
+      expect(store.isSessionTombstoned(alpha2)).toBe(true);
+      expect(store.getSource(`/provider/${alpha1}.jsonl`)).toBeDefined();
+
+      const allPreview = registry.previewDeletion({ kind: 'all' });
+      expect(allPreview.sessions).toBe(1);
+      const appliedAll = registry.deleteSessions({ kind: 'all' }, 1);
+      expect(appliedAll.status).toBe('deleted');
+      if (appliedAll.status === 'deleted') {
+        expect(appliedAll.result.removedSessions).toBe(1);
+      }
+      expect(removedIds).toEqual([alpha1, alpha2, beta1]);
+      expect(store.listSessions()).toEqual([]);
+      expect(store.getSession(internal1)).toBeUndefined();
+      expect(store.isSessionTombstoned(beta1)).toBe(true);
+      expect(store.isSessionTombstoned(internal1)).toBe(true);
+      expect(store.getSource(`/provider/${beta1}.jsonl`)).toBeDefined();
+
+      const compacted = store.compact();
+      expect(compacted.beforeBytes).toBeGreaterThan(0);
+      expect(compacted.afterBytes).toBeGreaterThan(0);
+      expect(compacted.afterBytes).toBeLessThanOrEqual(compacted.beforeBytes);
+    } finally {
+      registry.close();
+      store.close();
+    }
+  });
 });

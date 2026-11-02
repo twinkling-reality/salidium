@@ -1,23 +1,43 @@
-import type {
-  FileChange,
-  PlanItem,
-  SemanticChange,
-  StoredEvent,
-  StoredEventOf,
-} from '@salidium/protocol';
+import type { PlanItem, SemanticChange, StoredEvent, StoredEventOf } from '@salidium/protocol';
 import { extractClaims, headlineOf } from '../claims/classifyAgentMessage.ts';
 import { plainText } from '../claims/markdown.ts';
-import { detectGitCommand } from '../verification/classifyCommand.ts';
 import { deriveVerification } from '../verification/deriveVerification.ts';
 import { basename, ChangeLog, clip, shortSha } from './changeLog.ts';
 import { deriveStatus } from './deriveStatus.ts';
+import {
+  absorbed,
+  callFidelity,
+  commandVerdict,
+  completionFidelity,
+  failedEventVerdict,
+  failureFidelity,
+  maxTs,
+  msBetween,
+  rememberEventId,
+  terminalVerdictsConflict,
+} from './fidelity.ts';
+import {
+  applyFileChange,
+  changeVerb,
+  inferKindFromResult,
+  markRemovedUnknown,
+  trimResultForState,
+} from './fileChanges.ts';
 import { ownEntry, setEntry } from './keyedRecord.ts';
 import { applyReviewRulesAfterEvent } from './reviewRules.ts';
-import type { Activity, Claim, FileState, RunState, Turn, Verification } from './runState.ts';
+import type { Activity, Claim, RunState, Turn } from './runState.ts';
+import {
+  markSourceConflict,
+  onCommandCompleted,
+  recordToolFailure,
+  recordVerification,
+} from './verificationReducer.ts';
+
+export { describeVerification } from './verificationReducer.ts';
 
 /**
  * Folds one stored event into the run state, mutating it in place, and returns the semantic
- * changes the event caused. Deterministic: same events in the same order → same state and
+ * changes the event caused. Deterministic: same events in the same order -> same state and
  * same changes. No wall clock, no I/O.
  */
 export function applyEvent(state: RunState, event: StoredEvent): SemanticChange[] {
@@ -85,11 +105,7 @@ export function applyEvent(state: RunState, event: StoredEvent): SemanticChange[
       const s = ownEntry(state.subagents, event.subagentId);
       if (s) {
         s.endedAt = event.ts;
-        // Flattened for the same reason a claim is: a subagent writes markdown, and the section
-        // that shows what it came back with is the one place a reader meets that text. The exact
-        // words, markers and all, stay one `record` away.
         s.lastMessage = event.lastMessage ? clip(plainText(event.lastMessage), 600) : undefined;
-        // The row now reads from this record, so this is the one `record` should open.
         if (s.lastMessage) s.eventId = event.id;
       }
       log.add('how', `Subagent finished: ${s?.description ?? event.subagentId}`, 'observed');
@@ -101,7 +117,6 @@ export function applyEvent(state: RunState, event: StoredEvent): SemanticChange[
     case 'compaction': {
       const last = state.lastCompactionAt ? Date.parse(state.lastCompactionAt) : Number.NaN;
       const now = Date.parse(event.ts);
-      // Hook and transcript both report compaction; treat reports within 60s as one.
       if (!Number.isNaN(last) && !Number.isNaN(now) && Math.abs(now - last) < 60_000) break;
       state.lastCompactionAt = event.ts;
       state.counters.compactions += 1;
@@ -116,7 +131,6 @@ export function applyEvent(state: RunState, event: StoredEvent): SemanticChange[
         seq: event.seq,
         epistemic: 'observed',
       };
-      // The review rules emit the review-facet history entry once.
       break;
     case 'notification':
       if (
@@ -136,16 +150,12 @@ export function applyEvent(state: RunState, event: StoredEvent): SemanticChange[
       onGitSnapshot(state, event, log);
       break;
     case 'file.located':
-      // Defined, not assigned: a path is provider data, and assigning `__proto__` would replace
-      // the record's prototype instead of adding an entry.
       for (const file of event.files) setEntry(state.fileLocations, file.path, file.repository);
       break;
     case 'ingest.warning':
       state.counters.ingestWarnings += 1;
       break;
     case 'salidium.explanation':
-      // Generated content supersedes the previous generation and nothing else; it is filed under
-      // its own facet so it can never be mistaken for an observation.
       state.explained = {
         basedOnSeq: event.basedOnSeq,
         model: event.model,
@@ -160,6 +170,7 @@ export function applyEvent(state: RunState, event: StoredEvent): SemanticChange[
               toSteps: event.approachChange.toSteps ?? [],
             }
           : null,
+        ...(event.canvasBlocks ? { canvasBlocks: event.canvasBlocks } : {}),
       };
       log.add('what', event.what.summary, 'explained', { model: event.model });
       break;
@@ -172,13 +183,6 @@ export function applyEvent(state: RunState, event: StoredEvent): SemanticChange[
   return log.changes;
 }
 
-// ---------------------------------------------------------------------------------------------
-
-/**
- * Salidium's enrichment call is a real agent session and lands in the transcript like any other.
- * It runs in its own directory precisely so it can be recognised here, on the first event, before
- * any summary reaches a client.
- */
 const EXPLAINER_CWD = /\.salidium[/\\]explainer$/;
 
 function onSessionStarted(state: RunState, e: StoredEventOf<'session.started'>, log: ChangeLog) {
@@ -216,11 +220,8 @@ function turnFor(state: RunState, event: StoredEvent): Turn | undefined {
   if (event.turnId) {
     const found = state.turns.find((t) => t.id === event.turnId);
     if (found) return found;
-    // Event references a turn we have not seen a start for yet (channel ordering); create it.
     return openTurn(state, event.turnId, '', event.ts, event.seq);
   }
-  // No turn id (e.g. subagent transcripts, which may be ingested after the main one): attribute
-  // by time, so ingest order across sources cannot misfile work into the wrong turn.
   const byTime = state.turns.find(
     (t) => t.startedAt <= event.ts && (!t.endedAt || event.ts <= t.endedAt),
   );
@@ -230,7 +231,6 @@ function turnFor(state: RunState, event: StoredEvent): Turn | undefined {
 function openTurn(state: RunState, id: string, prompt: string, ts: string, seq: number): Turn {
   const open = currentTurn(state);
   if (open && open.id !== id && open.activityIds.length === 0 && open.prompt === '') {
-    // Placeholder from an out-of-order event; adopt it.
     open.id = id;
     open.prompt = prompt;
     return open;
@@ -266,15 +266,11 @@ function closeTurn(
 }
 
 function onTurnStarted(state: RunState, e: StoredEventOf<'turn.started'>, log: ChangeLog) {
-  // Backstop for explainer transcripts written before it moved to its own directory.
   if (e.prompt?.includes('[salidium-explainer]')) state.internal = true;
   const id = e.turnId ?? `turn-${state.turns.length + 1}`;
   const existing = state.turns.find((t) => t.id === id);
   if (existing) {
     if (existing.prompt) return;
-    // An end/tool event can be ingested before the transcript record that starts its turn. Fill
-    // that placeholder without reopening a turn which has already ended, and emit the same ask
-    // history a normally ordered start would have produced.
     existing.prompt = e.prompt;
     existing.startedAt = e.ts;
     existing.startSeq = e.seq;
@@ -298,13 +294,10 @@ function onTurnStarted(state: RunState, e: StoredEventOf<'turn.started'>, log: C
 function onTurnEnded(state: RunState, e: StoredEventOf<'turn.ended'>, log: ChangeLog) {
   let turn = e.turnId ? state.turns.find((t) => t.id === e.turnId) : currentTurn(state);
   if (!turn && e.turnId) {
-    // Keep an explicit end as a closed placeholder until its earlier start record arrives. Dropping
-    // it made spool-before-backfill ordering leave completed sessions "working" forever.
     turn = openTurn(state, e.turnId, '', e.ts, e.seq);
   }
   if (!turn) return;
   if (turn.endedAt && !turn.endInferred) {
-    // Already ended (e.g. hook Stop or an earlier end_turn record); merge the final text if new.
     if (e.lastMessage && !turn.lastMessage) {
       turn.lastMessage = e.lastMessage;
       recordClaim(state, e, e.lastMessage, 'final', log, turn);
@@ -318,7 +311,6 @@ function onTurnEnded(state: RunState, e: StoredEventOf<'turn.ended'>, log: Chang
   turn.lastMessage = e.lastMessage;
   turn.error = e.error;
   state.waiting = undefined;
-  // Tools still marked running at turn end are unknown (interrupted or lost result).
   for (const id of state.running) {
     const a = ownEntry(state.activities, id);
     if (a && a.turnId === turn.id) {
@@ -398,16 +390,8 @@ function recordClaim(
     };
     if (state.claims.some((c) => c.text === claim.text && c.turnId === claim.turnId)) continue;
     state.claims.push(claim);
-    if (e.agentId) continue; // subagent narration stays out of the headline history
+    if (e.agentId) continue;
 
-    /*
-     * The change log is where a claim becomes a statement the app makes in its own voice, filed
-     * under a facet, so it is gated on the same threshold as every other surface. Below it the
-     * claim is `other` and falls to the default branch: the agent said something at the top of the
-     * turn, which is true and is all that is asserted. It used to be 4,097 `how` and 3,069 `why`
-     * entries across the store, the majority of them decided by a trailing colon or a stray
-     * negation, and the rail is a first-class surface at every depth.
-     */
     switch (claim.kind) {
       case 'discovery':
         log.add('why', claim.text, 'reported', { claim: claim.kind, rule: claim.rule });
@@ -449,17 +433,6 @@ function recordClaim(
   }
 }
 
-/**
- * Sums what the agent consumed. The event arrives more than once per API response — the provider
- * stamps one response's usage onto every transcript record it split that response across — so a
- * repeat of a message id REPLACES what that lane last contributed instead of adding to it.
- *
- * Adding would count one response once per content block. Replacing is exact because the figures
- * within one response do not fall and the last record carries the complete snapshot.
- *
- * No `log.add`: consumption is not one of the history facets, and a row per API response would
- * overwhelm a log meant to be read.
- */
 function onAgentUsage(state: RunState, e: StoredEventOf<'agent.usage'>) {
   const u = state.usage;
   const lane = e.agentId ?? 'main';
@@ -483,109 +456,6 @@ function onAgentUsage(state: RunState, e: StoredEventOf<'agent.usage'>) {
     cacheReadTokens: e.cacheReadTokens,
     cacheWriteTokens: e.cacheWriteTokens,
   });
-}
-
-function sourceFidelity(e: StoredEvent): number {
-  switch (e.source.channel) {
-    case 'transcript':
-    case 'rollout':
-      return 3;
-    case 'app-server':
-      return 2;
-    case 'hook':
-      return 1;
-    case 'salidium':
-      return 0;
-  }
-}
-
-function callFidelity(e: StoredEventOf<'tool.called'>): number {
-  return (e.input.kind === 'other' ? 0 : 100) + sourceFidelity(e);
-}
-
-function completionFidelity(e: StoredEventOf<'tool.completed'>): number {
-  let information = 100;
-  switch (e.result.kind) {
-    case 'command':
-      information =
-        e.result.exit.observation === 'explicit'
-          ? 500
-          : e.result.exit.observation === 'unknown'
-            ? 300
-            : 400;
-      break;
-    case 'fileChanges': {
-      const applied = e.result.changes.filter((change) => change.applied);
-      information =
-        300 +
-        (applied.some((change) => change.linesAdded + change.linesRemoved > 0) ? 100 : 0) +
-        (applied.some((change) => Boolean(change.hunks?.length)) ? 50 : 0);
-      break;
-    }
-    case 'fileRead':
-      information = 300;
-      break;
-    case 'subagent':
-      information = e.result.status === 'completed' ? 400 : 300;
-      break;
-    case 'generic':
-      information = e.result.excerpt ? 200 : 100;
-      break;
-  }
-  return information * 10 + sourceFidelity(e);
-}
-
-function failureFidelity(e: StoredEventOf<'tool.failed'>): number {
-  const information =
-    e.exit?.observation === 'explicit'
-      ? 500
-      : e.exit?.observation === 'unknown'
-        ? 300
-        : e.exit
-          ? 400
-          : 200;
-  return information * 10 + sourceFidelity(e);
-}
-
-/**
- * True for a tool event that belongs to a call folded into its parent, which then only remembers
- * the event for drill-through.
- *
- * A child is folded when it names a parent that is already a command and it has no activity of its
- * own yet. In practice that is one case: a Codex code cell that an older Salidium stored as a
- * command, re-read now that each process inside it is reported separately. Showing both would
- * count the command twice, and the cell already carries the exit code the process's record gave
- * it. A parent that is a step, as every code cell now is, keeps its children as activities, and a
- * child that already has an activity (a hook reported it first) keeps it: retracting checks,
- * findings and history already derived from it is not something replay can do honestly.
- */
-function absorbed(state: RunState, e: StoredEvent): boolean {
-  if (e.kind !== 'tool.called' && e.kind !== 'tool.completed' && e.kind !== 'tool.failed')
-    return false;
-  // Call ids are provider data: only own entries count, so an id such as `constructor` is not
-  // mistaken for a folded call, and `__proto__` is recorded rather than assigned.
-  let parentId = ownEntry(state.absorbedCalls, e.callId);
-  if (
-    !parentId &&
-    e.kind === 'tool.called' &&
-    e.parentCallId &&
-    !ownEntry(state.activities, e.callId) &&
-    ownEntry(state.activities, e.parentCallId)?.kind === 'command'
-  ) {
-    parentId = e.parentCallId;
-    setEntry(state.absorbedCalls, e.callId, parentId);
-  }
-  if (!parentId) return false;
-  const parent = ownEntry(state.activities, parentId);
-  if (parent) rememberEventId(parent, e.id);
-  return true;
-}
-
-function rememberEventId(a: Activity, id: string): void {
-  if (!a.eventIds.includes(id)) a.eventIds.push(id);
-  // Channel-specific ids make equivalent observations coexist. A lexical order is stable across
-  // arrival order and puts the unsuffixed durable transcript id before its `:hook` counterpart.
-  a.eventIds.sort((left, right) => left.localeCompare(right));
 }
 
 function onToolCalled(state: RunState, e: StoredEventOf<'tool.called'>, log: ChangeLog) {
@@ -623,7 +493,6 @@ function onToolCalled(state: RunState, e: StoredEventOf<'tool.called'>, log: Cha
   if (lane) lane.toolCalls += 1;
 
   if (e.input.kind === 'question') {
-    // The review rules emit the history entry and open the review item.
     const q = e.input.questions[0] ?? 'question';
     state.waiting = {
       kind: 'question',
@@ -669,9 +538,6 @@ function upgradeLateToolCall(
   if (previousInputKind === 'command' && e.input.kind !== 'command') state.counters.commands -= 1;
   const lane = e.agentId ? ownEntry(state.subagents, e.agentId) : undefined;
   if (lane && resultOnlyPlaceholder) lane.toolCalls += 1;
-  // Only a call that first names the command derives what its result means. A better record of a
-  // call that was already a command (a hook's, then the provider's) has nothing new to derive, and
-  // deriving again would count its check twice.
   if (e.input.kind !== 'command' || a.status === 'running' || previousInputKind === 'command')
     return;
 
@@ -692,8 +558,6 @@ function upgradeLateToolCall(
   }
 
   if (a.isError && a.status === 'failed') {
-    // Replace the generic placeholder issue with the command-specific interpretation now that the
-    // input is known. The original generic history remains a truthful earlier observation.
     for (let i = state.issues.length - 1; i >= 0; i--)
       if (state.issues[i]?.callId === a.callId && state.issues[i]?.kind === 'toolError')
         state.issues.splice(i, 1);
@@ -729,7 +593,6 @@ function completeActivity(state: RunState, callId: string, e: StoredEvent): Acti
 function onToolCompleted(state: RunState, e: StoredEventOf<'tool.completed'>, log: ChangeLog) {
   let a = ownEntry(state.activities, e.callId);
   if (!a) {
-    // Result without a recorded call (channel gap): synthesize the activity from the result.
     const turn = turnFor(state, e);
     a = {
       callId: e.callId,
@@ -788,21 +651,12 @@ function onToolCompleted(state: RunState, e: StoredEventOf<'tool.completed'>, lo
     default:
       break;
   }
-  // A command result can precede the call that names the command. Keep its bounded event excerpt
-  // until that call arrives so verification parsing sees the same evidence normal ordering does.
   a.result =
     a.input.kind === 'other' && e.result.kind === 'command'
       ? e.result
       : trimResultForState(e.result);
 }
 
-/**
- * A second result for an already-completed call arrives when a lower-fidelity channel (a hook
- * without exit codes or line counts) reported first and the provider's own record follows. The
- * canonical rule is "the more informative result wins": explicit exit codes replace inferred or
- * unknown ones (verification is re-derived), and real diffs replace zero-line placeholders.
- * Anything else is a duplicate and is ignored, so replay order cannot change the outcome.
- */
 function upgradeCompletedActivity(
   state: RunState,
   a: Activity,
@@ -904,428 +758,6 @@ function upgradeCompletedActivity(
   a.result = trimResultForState(e.result);
 }
 
-type TerminalVerdict = 'pass' | 'fail' | 'unknown';
-
-function commandVerdict(exit: Activity['exit'], isError: boolean): TerminalVerdict {
-  if (isError) return 'fail';
-  if (exit?.observation === 'inferred-failure') return 'fail';
-  if (exit?.observation === 'inferred-success') return 'pass';
-  if (exit?.observation === 'explicit') return exit.code === 0 ? 'pass' : 'fail';
-  return 'unknown';
-}
-
-function terminalVerdictsConflict(a: TerminalVerdict, b: TerminalVerdict): boolean {
-  return (a === 'pass' && b === 'fail') || (a === 'fail' && b === 'pass');
-}
-
-function failedEventVerdict(e: StoredEventOf<'tool.failed'>): TerminalVerdict {
-  return e.cause === 'timeout' ||
-    e.cause === 'interrupted' ||
-    e.cause === 'rejected' ||
-    e.cause === 'denied'
-    ? 'unknown'
-    : 'fail';
-}
-
-/**
- * Two explicit terminal records disagree about one call. Preserve both as evidence, but do not
- * let arrival order select a winner. The raw records remain available through eventIds; the
- * projected activity and verification intentionally become inconclusive.
- */
-function markSourceConflict(
-  state: RunState,
-  a: Activity,
-  e: StoredEventOf<'tool.completed'> | StoredEventOf<'tool.failed'>,
-  log: ChangeLog,
-): void {
-  const evidenceIds = [...new Set([...a.eventIds, e.id])].sort();
-  const incomingIsFailure = e.kind === 'tool.failed' || e.isError;
-  const priorFailureCounted = a.status === 'failed' || a.isError;
-  if (incomingIsFailure && !priorFailureCounted) state.counters.toolFailures += 1;
-
-  const turn = a.turnId ? state.turns.find((candidate) => candidate.id === a.turnId) : undefined;
-  const previous = state.verifications.find((v) => v.callId === a.callId);
-  state.verifications = state.verifications.filter((v) => v.callId !== a.callId);
-  if (turn) turn.verificationIds = turn.verificationIds.filter((id) => id !== a.callId);
-  state.issues = state.issues.filter((issue) => issue.callId !== a.callId);
-  state.review = state.review.filter(
-    (item) =>
-      !(item.rule === 'verification-failed' && item.refs.some((ref) => evidenceIds.includes(ref))),
-  );
-
-  const endedAt = a.endedAt && a.endedAt > e.ts ? a.endedAt : e.ts;
-  const incomingDuration = e.durationMs ?? msBetween(a.startedAt, e.ts) ?? 0;
-  a.endedAt = endedAt;
-  a.durationMs = Math.max(a.durationMs ?? 0, incomingDuration);
-  a.seqCompleted = e.seq;
-  a.eventIds = evidenceIds;
-  a.status = 'unknown';
-  a.sourceConflict = true;
-  a.isError = false;
-  a.errorExcerpt = undefined;
-  a.failureCause = undefined;
-  a.exit = { observation: 'unknown' };
-  a.result = {
-    kind: 'command',
-    exit: { observation: 'unknown' },
-    outputExcerpt: '',
-    outputChars: 0,
-    truncated: false,
-  };
-  state.running = state.running.filter((id) => id !== a.callId);
-
-  const derived = deriveVerification(a, e.seq);
-  if (derived) {
-    const conflict: Verification = {
-      ...derived,
-      outcome: 'unknown',
-      counts: undefined,
-      exit: { observation: 'unknown' },
-      outcomeEpistemic: 'observed',
-      caveats: [...new Set([...derived.caveats, 'source-conflict'])],
-      failureExcerpt: undefined,
-    };
-    recordVerification(state, a, conflict, e, log, turn);
-  } else if (previous && a.input.kind === 'command') {
-    const conflict: Verification = {
-      ...previous,
-      at: endedAt,
-      seq: e.seq,
-      outcome: 'unknown',
-      counts: undefined,
-      exit: { observation: 'unknown' },
-      outcomeEpistemic: 'observed',
-      caveats: [...new Set([...previous.caveats, 'source-conflict'])],
-      failureExcerpt: undefined,
-    };
-    recordVerification(state, a, conflict, e, log, turn);
-  }
-
-  const reviewId = `source-conflict:${a.callId}`;
-  if (!state.review.some((item) => item.id === reviewId && item.resolvedSeq === undefined)) {
-    const label = 'Conflicting tool results';
-    const instance = clip(a.input.kind === 'command' ? a.input.command : a.title, 120);
-    state.review.push({
-      id: reviewId,
-      rule: 'source-conflict',
-      severity: 'high',
-      label,
-      instance,
-      summary: `${label}: ${instance}`,
-      detail: 'The provider records disagree about whether this call succeeded.',
-      refs: evidenceIds,
-      createdSeq: e.seq,
-      createdAt: endedAt,
-      epistemic: 'observed',
-    });
-    log.add('review', `${label}: ${instance}`, 'observed', {
-      rule: 'source-conflict',
-      severity: 'high',
-    });
-  }
-}
-
-/**
- * Sticky: once any change replaced a file without saying what it held, its removed count and the
- * session's are lower bounds, whatever exact changes follow.
- */
-function markRemovedUnknown(state: RunState, file: FileState): void {
-  file.linesRemovedUnknown = true;
-  state.counters.linesRemovedUnknown = true;
-}
-
-function changeVerb(kind: FileChange['change']): string {
-  return kind === 'add'
-    ? 'Created'
-    : kind === 'delete'
-      ? 'Deleted'
-      : kind === 'move'
-        ? 'Moved'
-        : 'Changed';
-}
-
-/**
- * The event log keeps full excerpts; the in-memory/checkpointed state keeps only what the
- * projections need. Everything else is one drill-through away via the activity's event ids.
- */
-function trimResultForState(
-  result: StoredEventOf<'tool.completed'>['result'],
-): StoredEventOf<'tool.completed'>['result'] {
-  switch (result.kind) {
-    case 'command':
-      return { ...result, outputExcerpt: clip(result.outputExcerpt, 240) };
-    case 'fileChanges':
-      return { ...result, changes: result.changes.map((c) => ({ ...c, hunks: undefined })) };
-    case 'subagent':
-      return {
-        ...result,
-        summaryExcerpt: result.summaryExcerpt ? clip(result.summaryExcerpt, 400) : undefined,
-      };
-    case 'generic':
-      return { ...result, excerpt: result.excerpt ? clip(result.excerpt, 240) : undefined };
-    default:
-      return result;
-  }
-}
-
-function inferKindFromResult(e: StoredEventOf<'tool.completed'>): Activity['kind'] {
-  switch (e.result.kind) {
-    case 'command':
-      return 'command';
-    case 'fileChanges':
-      return 'fileEdit';
-    case 'fileRead':
-      return 'fileRead';
-    case 'subagent':
-      return 'subagent';
-    default:
-      return 'other';
-  }
-}
-
-function applyFileChange(
-  state: RunState,
-  a: Activity,
-  change: FileChange,
-  e: StoredEvent,
-  log: ChangeLog,
-  turn: Turn | undefined,
-) {
-  if (!change.applied) {
-    state.issues.push({
-      id: `patch:${e.id}:${change.path}`,
-      kind: 'patchFailed',
-      summary: `Patch not applied: ${basename(change.path)}`,
-      seq: e.seq,
-      ts: e.ts,
-      callId: a.callId,
-    });
-    log.add('review', `Patch not applied: ${basename(change.path)}`, 'observed');
-    return;
-  }
-  const existing = ownEntry(state.files, change.path);
-  const file: FileState = existing ?? {
-    path: change.path,
-    changeCount: 0,
-    linesAdded: 0,
-    linesRemoved: 0,
-    kinds: [],
-    firstChangedAt: e.ts,
-    lastChangedAt: e.ts,
-    lastChangeSeq: e.seq,
-    lastCallId: a.callId,
-    turnIds: [],
-  };
-  if (!existing) {
-    setEntry(state.files, change.path, file);
-    state.counters.filesChanged += 1;
-  }
-  file.changeCount += 1;
-  file.linesAdded += change.linesAdded;
-  file.linesRemoved += change.linesRemoved;
-  if (!file.kinds.includes(change.change)) file.kinds.push(change.change);
-  file.lastChangedAt = e.ts > file.lastChangedAt ? e.ts : file.lastChangedAt;
-  file.lastChangeSeq = e.seq;
-  file.lastCallId = a.callId;
-  file.lastAgentId = e.agentId;
-  if (change.hunks) file.lastHunks = change.hunks.slice(0, 20);
-  if (change.userModifiedBefore) file.userModifiedBefore = true;
-  if (change.linesRemovedUnknown) markRemovedUnknown(state, file);
-  if (turn && !file.turnIds.includes(turn.id)) file.turnIds.push(turn.id);
-  if (turn && !turn.filesTouched.includes(change.path)) turn.filesTouched.push(change.path);
-  state.counters.linesAdded += change.linesAdded;
-  state.counters.linesRemoved += change.linesRemoved;
-  for (const v of state.verifications) if (v.at <= e.ts) v.stale = true;
-
-  const verb = changeVerb(change.change);
-  const delta =
-    change.change === 'delete' ? '' : ` (+${change.linesAdded} −${change.linesRemoved})`;
-  // A zero-line update is a placeholder from a channel without diffs; the real result upgrades it.
-  const placeholder =
-    change.change === 'update' && change.linesAdded + change.linesRemoved === 0 && !change.hunks;
-  if (!placeholder) {
-    log.add('what', `${verb} ${basename(change.path)}${delta}`, 'observed', {
-      path: change.path,
-      change: change.change,
-      linesAdded: change.linesAdded,
-      linesRemoved: change.linesRemoved,
-      agentId: e.agentId,
-    });
-  }
-  if (change.userModifiedBefore)
-    log.add(
-      'review',
-      `You had edited ${basename(change.path)} before the agent changed it`,
-      'observed',
-      { path: change.path, rule: 'user-modified' },
-    );
-}
-
-const READ_ONLY_COMMAND =
-  /^\s*(ls|cat|head|tail|grep|rg|find|fd|pwd|which|echo|wc|tree|stat|file|du|df|env|printenv|git\s+(status|log|diff|show|blame|branch|remote|rev-parse|ls-files)|sed\s+-n|awk|jq|less|more|type|node\s+-e|python3?\s+-c|open|curl\s+-s)\b/;
-
-function onCommandCompleted(
-  state: RunState,
-  a: Activity,
-  e: StoredEventOf<'tool.completed'>,
-  log: ChangeLog,
-  turn: Turn | undefined,
-) {
-  if (a.input.kind !== 'command' || e.result.kind !== 'command') return;
-  const command = a.input.command;
-  const result = e.result;
-
-  if (result.gitOperation) {
-    state.git.operations.push({ op: result.gitOperation, at: e.ts, callId: a.callId });
-    if (result.gitOperation.commit) {
-      state.git.commits.push({
-        sha: result.gitOperation.commit.sha,
-        at: e.ts,
-        callId: a.callId,
-        kind: result.gitOperation.commit.kind,
-      });
-      state.git.head = result.gitOperation.commit.sha;
-      log.add('what', `Committed ${shortSha(result.gitOperation.commit.sha)}`, 'observed', {
-        sha: result.gitOperation.commit.sha,
-      });
-    }
-    if (result.gitOperation.push) {
-      state.git.pushes.push({
-        branch: result.gitOperation.push.branch,
-        at: e.ts,
-        callId: a.callId,
-      });
-    }
-  } else {
-    const git = detectGitCommand(command);
-    if (git === 'commit' && !e.isError) {
-      const sha = /\[[^\]]*\s([0-9a-f]{7,40})\]/.exec(result.outputExcerpt)?.[1];
-      state.git.commits.push({ sha: sha ?? '', at: e.ts, callId: a.callId });
-      if (sha) state.git.head = sha;
-      log.add(
-        'what',
-        sha ? `Committed ${shortSha(sha)}` : 'Committed',
-        sha ? 'observed' : 'inferred',
-        { sha },
-      );
-    } else if (git === 'push' && !e.isError) {
-      state.git.pushes.push({ at: e.ts, callId: a.callId });
-    }
-  }
-
-  const verification = deriveVerification(a, e.seq);
-  if (verification) {
-    recordVerification(state, a, verification, e, log, turn);
-    return;
-  }
-
-  if (e.isError) {
-    state.issues.push({
-      id: `command:${e.id}`,
-      kind: 'commandFailed',
-      summary: `Command failed: ${clip(command, 100)}`,
-      seq: e.seq,
-      ts: e.ts,
-      callId: a.callId,
-    });
-    log.add('what', `Command failed: ${clip(command, 100)}`, 'observed', { exit: result.exit });
-    return;
-  }
-  // Routine successful commands are activity, not semantic history: they stay in the Activity list.
-  // Long-running ones (installs, builds without a recognized runner) are worth a line.
-  if (!READ_ONLY_COMMAND.test(command) && (a.durationMs ?? 0) >= 30_000) {
-    log.add(
-      'what',
-      `Ran ${clip(command, 110)} (${Math.round((a.durationMs ?? 0) / 1000)}s)`,
-      'observed',
-    );
-  }
-}
-
-/** Records a derived verification: state, turn linkage, issue tracking, and one history line. */
-function recordVerification(
-  state: RunState,
-  a: Activity,
-  verification: Verification,
-  e: StoredEvent,
-  log: ChangeLog,
-  turn: Turn | undefined,
-  logChange = true,
-) {
-  state.verifications.push(verification);
-  turn?.verificationIds.push(verification.id);
-  if (logChange) {
-    log.add('verified', describeVerification(verification), verification.outcomeEpistemic, {
-      outcome: verification.outcome,
-      runner: verification.runner,
-      method: verification.method,
-      counts: verification.counts,
-      caveats: verification.caveats,
-    });
-  }
-  if (verification.outcome === 'fail') {
-    state.issues.push({
-      id: `verification:${verification.id}`,
-      kind: 'commandFailed',
-      summary: describeVerification(verification),
-      seq: e.seq,
-      ts: e.ts,
-      callId: a.callId,
-    });
-  } else if (verification.outcome === 'pass' && verification.scope !== 'partial') {
-    for (const issue of state.issues) {
-      if (
-        issue.kind === 'commandFailed' &&
-        issue.resolvedSeq === undefined &&
-        issue.id.startsWith('verification:')
-      )
-        issue.resolvedSeq = e.seq;
-    }
-  }
-}
-
-export function describeVerification(v: {
-  method: string;
-  runner?: string;
-  outcome: string;
-  counts?: { passed?: number; failed?: number; skipped?: number; total?: number };
-  scope?: string;
-  caveats?: string[];
-}): string {
-  const runner = v.runner ? ` (${v.runner})` : '';
-  const c = v.counts;
-  const partial = v.scope === 'partial' ? ' [subset]' : '';
-  if (v.method === 'test') {
-    if (v.outcome === 'pass') {
-      if (c?.total !== undefined && c.total > 0) {
-        const skipped = c.skipped ? `, ${c.skipped} skipped` : '';
-        return `${c.passed ?? 0}/${c.total} tests passed${skipped}${runner}${partial}`;
-      }
-      return `Tests passed${runner}${partial}${v.caveats?.includes('exit-inferred') ? ' (exit inferred)' : ''}`;
-    }
-    if (v.outcome === 'fail') {
-      if (c?.failed !== undefined && c.failed > 0)
-        return `${c.failed} of ${c.total ?? '?'} tests failed${runner}${partial}`;
-      return `Tests failed${runner}${partial}`;
-    }
-    if (v.outcome === 'partial') return `Tests passed but command failed${runner}`;
-    return `Test run result unknown${runner}`;
-  }
-  const label =
-    v.method === 'typecheck'
-      ? 'Typecheck'
-      : v.method === 'lint'
-        ? 'Lint'
-        : v.method === 'build'
-          ? 'Build'
-          : 'Check';
-  if (v.outcome === 'pass') return `${label} passed${runner}`;
-  if (v.outcome === 'fail')
-    return `${label} failed${runner}${c?.failed ? ` (${c.failed} error${c.failed === 1 ? '' : 's'})` : ''}`;
-  if (v.outcome === 'partial') return `${label} partially passed${runner}`;
-  return `${label} result unknown${runner}`;
-}
-
 function onToolFailed(state: RunState, e: StoredEventOf<'tool.failed'>, log: ChangeLog) {
   onToolFailedInner(state, e, log);
   const a = ownEntry(state.activities, e.callId);
@@ -1339,8 +771,6 @@ function onToolFailed(state: RunState, e: StoredEventOf<'tool.failed'>, log: Cha
 function onToolFailedInner(state: RunState, e: StoredEventOf<'tool.failed'>, log: ChangeLog) {
   let a = ownEntry(state.activities, e.callId);
   if (!a) {
-    // Preserve a failure whose call record has not arrived yet. The late call upgrades this
-    // placeholder and applies command-specific verification/failure semantics then.
     const turn = turnFor(state, e);
     a = {
       callId: e.callId,
@@ -1435,61 +865,6 @@ function upgradeFailedActivity(
   recordToolFailure(state, a, e, log);
 }
 
-function recordToolFailure(
-  state: RunState,
-  a: Activity,
-  e: StoredEventOf<'tool.failed'>,
-  log: ChangeLog,
-) {
-  if (a.kind === 'command' && a.input.kind === 'command') {
-    const inconclusive = e.cause === 'timeout' || e.cause === 'interrupted';
-    if (!a.result) {
-      a.result = {
-        kind: 'command',
-        // A timed-out or interrupted command did not finish: its outcome is unknown, not a failure.
-        exit: inconclusive
-          ? { observation: 'unknown' }
-          : (e.exit ?? { observation: 'inferred-failure' }),
-        outputExcerpt: e.errorExcerpt,
-        outputChars: e.errorExcerpt.length,
-        truncated: false,
-        interrupted: e.interrupted || e.cause === 'interrupted' || undefined,
-        timedOut: e.cause === 'timeout' || undefined,
-      };
-    }
-    if (inconclusive) a.exit = { observation: 'unknown' };
-    const turn = a.turnId ? state.turns.find((t) => t.id === a.turnId) : undefined;
-    const verification = deriveVerification(a, e.seq);
-    if (verification) {
-      recordVerification(state, a, verification, e, log, turn);
-      return;
-    }
-    if (e.interrupted) {
-      log.add('what', `Interrupted: ${clip(a.input.command, 100)}`, 'observed');
-      return;
-    }
-    state.issues.push({
-      id: `command:${e.id}`,
-      kind: 'commandFailed',
-      summary: `Command failed: ${clip(a.input.command, 100)}`,
-      seq: e.seq,
-      ts: e.ts,
-      callId: a.callId,
-    });
-    log.add('what', `Command failed: ${clip(a.input.command, 100)}`, 'observed', { exit: e.exit });
-    return;
-  }
-  state.issues.push({
-    id: `tool:${e.id}`,
-    kind: 'toolError',
-    summary: `${a.title} failed`,
-    seq: e.seq,
-    ts: e.ts,
-    callId: a.callId,
-  });
-  log.add('what', `${a.title} failed`, 'observed');
-}
-
 function onPlanUpdated(state: RunState, e: StoredEventOf<'plan.updated'>, log: ChangeLog) {
   const before = state.plan.items;
   let items: PlanItem[];
@@ -1568,10 +943,6 @@ function onGitSnapshot(state: RunState, e: StoredEventOf<'git.snapshot'>, log: C
   state.git.dirtyCount = e.dirty ? e.dirty.length + (e.dirtyTruncated ? 1 : 0) : undefined;
   state.git.snapshotAt = e.ts;
   if (!state.repoRoot) state.repoRoot = e.repoRoot;
-  // Anchors come only from snapshots that say which boundary they observed. One written before
-  // snapshots named their trigger anchors nothing, rather than being guessed into a boundary.
-  // The start anchor is the first start Salidium watched. A resume, clear, or compaction reads
-  // HEAD without naming a trigger (see the git snapshot enricher), so it never stands in for one.
   const anchor = { root: e.repoRoot, head: e.head, branch: e.branch, at: e.ts };
   if (e.trigger === 'session.started' && !state.git.atStart) state.git.atStart = anchor;
   if (e.trigger === 'turn.ended') state.git.atTurnEnd = anchor;
@@ -1580,9 +951,8 @@ function onGitSnapshot(state: RunState, e: StoredEventOf<'git.snapshot'>, log: C
       (c) => c.sha && (e.head?.startsWith(c.sha) || c.sha.startsWith(e.head ?? '')),
     );
     if (known) {
-      if (known.sha.length < e.head.length) known.sha = e.head; // upgrade a short sha to the full one
+      if (known.sha.length < e.head.length) known.sha = e.head;
     } else {
-      // A HEAD move without an observed commit (checkout, reset, pull) is not a commit.
       state.git.headMoves.push({ from: prevHead, to: e.head, at: e.ts });
       log.add('what', `HEAD moved to ${shortSha(e.head)}`, 'observed', {
         sha: e.head,
@@ -1590,16 +960,4 @@ function onGitSnapshot(state: RunState, e: StoredEventOf<'git.snapshot'>, log: C
       });
     }
   }
-}
-
-function msBetween(a: string, b: string): number | undefined {
-  const t1 = Date.parse(a);
-  const t2 = Date.parse(b);
-  if (Number.isNaN(t1) || Number.isNaN(t2) || t2 < t1) return undefined;
-  return t2 - t1;
-}
-
-function maxTs(a: string | undefined, b: string): string {
-  if (!a) return b;
-  return b > a ? b : a;
 }

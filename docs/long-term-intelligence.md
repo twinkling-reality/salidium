@@ -6,11 +6,17 @@ that Phase 0 already learns or recalls context.
 
 ## Evidence-backed audit
 
-The public product already has strong raw ingredients. Provider adapters create deterministic event
-identities and preserve source provenance. The reducer distinguishes observed verification from
-agent-reported claims, makes contradiction visible, and can abstain. SQLite is the authoritative
-event and lifecycle store. Redaction, offline retention, Forget tombstones, replay, reingest, and
-raw-evidence inspection are implemented and tested.
+Salidium is built to be the most intelligent and personal surface to understand agentic work. Within
+a session, intelligence comes from deterministic event reduction (`@salidium/core`), static AST
+dependency and blast-radius analysis (`@salidium/project-map`), and adaptive layout composition
+(`salidium.canvas-spec/v1`), paired with personal cognitive and visual controls
+(`salidium.canvas-style/v1`).
+
+For cross-session continuity, the public product already has strong raw ingredients. Provider
+adapters create deterministic event identities and preserve source provenance. The reducer
+distinguishes observed verification from agent-reported claims, makes contradiction visible, and can
+abstain. SQLite is the authoritative event and lifecycle store. Redaction, offline retention, Forget
+tombstones, replay, reingest, and raw-evidence inspection are implemented and tested.
 
 Those ingredients are not a durable intelligence model. `CanonicalEvent` and `RunState` are local
 session structures, not replication records. The claim classifier extracts attributed report kinds

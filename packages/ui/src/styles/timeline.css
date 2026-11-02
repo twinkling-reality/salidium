@@ -1,0 +1,294 @@
+/* ------------------------------------------------------------ timeline */
+/* One rail: turn identity underneath, observed activity above, exact selection through both. */
+.timeline {
+  min-width: 0;
+}
+.tl-navigation {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+.tl-segments {
+  --fade-left: 0px;
+  --fade-right: 0px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  padding: 3px 14px;
+  margin: -3px -14px;
+  scroll-padding-inline: 16px;
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 var(--fade-left),
+    #000 calc(100% - var(--fade-right)),
+    transparent
+  );
+}
+.tl-segments[data-fade="left"],
+.tl-segments[data-fade="both"] {
+  --fade-left: 16px;
+}
+.tl-segments[data-fade="right"],
+.tl-segments[data-fade="both"] {
+  --fade-right: 16px;
+}
+/* A small, repeatable identity palette. Outcome is conveyed by the glyph, never by turn color. */
+.timeline [data-palette="0"] {
+  --rail-light: #e6e3dc;
+  --rail-deep: #cfcac0;
+}
+.timeline [data-palette="1"] {
+  --rail-light: #dfe6ec;
+  --rail-deep: #c3cfd9;
+}
+.timeline [data-palette="2"] {
+  --rail-light: #dde7e3;
+  --rail-deep: #bfd1ca;
+}
+.timeline [data-palette="3"] {
+  --rail-light: #e4e1ea;
+  --rail-deep: #cbc5d6;
+}
+.timeline [data-palette="4"] {
+  --rail-light: #e8e2d5;
+  --rail-deep: #d1c7b2;
+}
+:root[data-theme="dark"] .timeline [data-palette="0"] {
+  --rail-light: #302f2c;
+  --rail-deep: #242320;
+}
+:root[data-theme="dark"] .timeline [data-palette="1"] {
+  --rail-light: #28313a;
+  --rail-deep: #1e252c;
+}
+:root[data-theme="dark"] .timeline [data-palette="2"] {
+  --rail-light: #26332f;
+  --rail-deep: #1c2623;
+}
+:root[data-theme="dark"] .timeline [data-palette="3"] {
+  --rail-light: #2e2b36;
+  --rail-deep: #23202a;
+}
+:root[data-theme="dark"] .timeline [data-palette="4"] {
+  --rail-light: #332e24;
+  --rail-deep: #26221b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .timeline [data-palette="0"] {
+    --rail-light: #302f2c;
+    --rail-deep: #242320;
+  }
+  :root:not([data-theme="light"]) .timeline [data-palette="1"] {
+    --rail-light: #28313a;
+    --rail-deep: #1e252c;
+  }
+  :root:not([data-theme="light"]) .timeline [data-palette="2"] {
+    --rail-light: #26332f;
+    --rail-deep: #1c2623;
+  }
+  :root:not([data-theme="light"]) .timeline [data-palette="3"] {
+    --rail-light: #2e2b36;
+    --rail-deep: #23202a;
+  }
+  :root:not([data-theme="light"]) .timeline [data-palette="4"] {
+    --rail-light: #332e24;
+    --rail-deep: #26221b;
+  }
+}
+.tl-track {
+  position: relative;
+  height: 68px;
+}
+.tl-bands {
+  position: absolute;
+  inset: 15px 0 auto;
+  height: 6px;
+}
+.tl-bands::before {
+  content: "";
+  position: absolute;
+  left: 8px;
+  width: var(--lead-width);
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+}
+.tl-band {
+  position: absolute;
+  top: 0;
+  height: 6px;
+  border-radius: 3px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 55%, transparent);
+  background: linear-gradient(90deg, var(--rail-deep), var(--rail-light));
+}
+.tl-segment {
+  position: absolute;
+  top: 40px;
+  justify-content: flex-start;
+  gap: 6px;
+  min-width: 0;
+  padding-inline: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  overflow: hidden;
+}
+.tl-segment:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-muted);
+}
+.tl-segment.is-on {
+  border-color: var(--border-strong);
+  background: var(--bg);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  color: var(--text);
+}
+.tl-segment-number {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+.tl-segment-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tl-end {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: space-between;
+  height: 68px;
+  padding-top: 4px;
+}
+.tl-now {
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+.tl-now:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-muted);
+}
+.tl-now.is-on {
+  border-color: var(--border-strong);
+  background: var(--bg-muted);
+  color: var(--text);
+}
+.tl-readout {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-h);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+.tl-empty {
+  position: absolute;
+  top: 16px;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+.tl-range {
+  position: absolute;
+  inset: 2px 0 auto;
+  width: 100%;
+  height: 34px;
+  margin: 0;
+  background: transparent;
+  appearance: none;
+  cursor: ew-resize;
+}
+.tl-range::-webkit-slider-thumb {
+  width: 16px;
+  height: 34px;
+  border: 0;
+  background: transparent;
+  appearance: none;
+  cursor: grab;
+}
+.tl-range::-moz-range-thumb {
+  width: 16px;
+  height: 34px;
+  border: 0;
+  background: transparent;
+  cursor: grab;
+}
+.tl-range::-moz-range-track {
+  background: transparent;
+}
+.tl-range:active::-webkit-slider-thumb {
+  cursor: grabbing;
+}
+.tl-range:focus-visible {
+  outline: none;
+}
+.tl-badge {
+  --marker-light: var(--rail-light);
+  --marker-deep: var(--rail-deep);
+  position: absolute;
+  top: 6px;
+  z-index: 1;
+  margin-left: -12px;
+}
+.tl-playhead {
+  position: absolute;
+  top: 2px;
+  z-index: 0;
+  width: 2px;
+  height: 32px;
+  margin-left: -1px;
+  border-radius: 2px;
+  background: var(--text);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg) 75%, transparent);
+  pointer-events: none;
+}
+.tl-playhead::before,
+.tl-playhead::after {
+  content: "";
+  position: absolute;
+  left: -2px;
+  width: 6px;
+  height: 3px;
+  border-radius: 2px;
+  background: inherit;
+}
+.tl-playhead::before {
+  top: 0;
+}
+.tl-playhead::after {
+  bottom: 0;
+}
+.tl-range:focus-visible ~ .tl-playhead {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+/* The exposed tray shares the report column; its controls form one surface. */
+.rewind {
+  width: 100%;
+  max-width: var(--page-w);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  pointer-events: auto;
+}
+
+.rewind:not(.is-open) {
+  position: absolute;
+}
+
+@media (max-width: 600px) {
+  .session-foot {
+    padding: var(--space-3) var(--space-4);
+  }
+}
+
+/* On a stacked layout the report, time control and inspector must all remain usable.
+   Give the inspector a smaller scrollable share while the time control is exposed. */
+@media (max-width: 900px) {
+  .session.has-inspector:has(.session-main.has-rewind) {
+    grid-template-rows: minmax(0, 1fr) minmax(0, min(220px, 25%));
+  }
+}

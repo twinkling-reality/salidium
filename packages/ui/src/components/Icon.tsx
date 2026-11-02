@@ -38,7 +38,16 @@ export type IconName =
   | 'trash'
   | 'outbound'
   | 'storage'
-  | 'where';
+  | 'where'
+  | 'claude'
+  | 'codex'
+  | 'opencode'
+  | 'folder'
+  | 'branch'
+  | 'ide'
+  | 'model'
+  | 'globe'
+  | 'mcp';
 
 const PATHS: Record<IconName, React.ReactNode> = {
   commit: (
@@ -222,6 +231,68 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <>
       <path d="M4 14.5V2.5" />
       <path d="M4 3.2h7.6l-1.6 2.9 1.6 2.9H4" />
+    </>
+  ),
+  /* Geometric starburst for Claude Code sessions. */
+  claude: (
+    <>
+      <path d="M8 2.2v11.6M2.2 8h11.6M3.9 3.9l8.2 8.2M12.1 3.9 3.9 12.1" />
+      <circle cx="8" cy="8" r="1.6" fill="currentColor" stroke="none" />
+    </>
+  ),
+  /* Hexagonal node lattice for Codex sessions. */
+  codex: (
+    <>
+      <path d="M8 2.2 13 5.1v5.8L8 13.8 3 10.9V5.1Z" />
+      <path d="M8 8v5.8M8 8 3 5.1M8 8l5-2.9" />
+    </>
+  ),
+  /* Code brackets for OpenCode and SDK sessions. */
+  opencode: (
+    <>
+      <path d="M5.2 4.8 2.2 8l3 3.2M10.8 4.8 13.8 8l-3 3.2M9 3.5 7 12.5" />
+    </>
+  ),
+  /* Repository or working directory path. */
+  folder: (
+    <>
+      <path d="M2.2 4.5a1.3 1.3 0 0 1 1.3-1.3h3l1.4 1.6h4.6a1.3 1.3 0 0 1 1.3 1.3v5.4a1.3 1.3 0 0 1-1.3 1.3H3.5a1.3 1.3 0 0 1-1.3-1.3Z" />
+    </>
+  ),
+  /* Git branch ref. */
+  branch: (
+    <>
+      <circle cx="5" cy="4.2" r="1.6" />
+      <circle cx="5" cy="11.8" r="1.6" />
+      <circle cx="11.5" cy="6.2" r="1.6" />
+      <path d="M5 5.8v4.4M11.5 7.8c0 2-1.5 2.5-4 2.5H5" />
+    </>
+  ),
+  /* IDE or desktop window surface. */
+  ide: (
+    <>
+      <rect x="2" y="2.8" width="12" height="10.4" rx="1.6" />
+      <path d="M2 5.8h12M5.6 5.8v7.4" />
+    </>
+  ),
+  /* Model compute core. */
+  model: (
+    <>
+      <rect x="4.5" y="4.5" width="7" height="7" rx="1.3" />
+      <path d="M6.5 2.2v2.3M9.5 2.2v2.3M6.5 11.5v2.3M9.5 11.5v2.3M2.2 6.5h2.3M2.2 9.5h2.3M11.5 6.5h2.3M11.5 9.5h2.3" />
+    </>
+  ),
+  /* Web search or fetch tool. */
+  globe: (
+    <>
+      <circle cx="8" cy="8" r="5.5" />
+      <path d="M2.5 8h11M8 2.5c1.8 1.6 1.8 9.4 0 11M8 2.5c-1.8 1.6-1.8 9.4 0 11" />
+    </>
+  ),
+  /* MCP server tool call. */
+  mcp: (
+    <>
+      <path d="M5.5 6V3.5M10.5 6V3.5M4 6h8v2.5a4 4 0 0 1-8 0ZM8 12.5v2" />
     </>
   ),
 };

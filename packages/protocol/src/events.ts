@@ -491,6 +491,41 @@ const DiagramStepSchema = z
     'diagram steps contain at most six words',
   );
 
+/**
+ * Constrained interactive visual primitives for the Declarative Interface Language
+ * (`salidium.canvas-spec/v1`). Each block binds by reference (`refs`) to observed session
+ * records (`file:<path>`, `call:<callId>`, `subagent:<id>`, `turn:<index>`, `edge:<id>`)
+ * rather than duplicating or hallucinating telemetry values.
+ */
+export const CanvasBlockKindSchema = z.enum([
+  'failure-chain',
+  'topology',
+  'blast-radius',
+  'subagent-fanout',
+  'turn-pipeline',
+  'decisions',
+]);
+export type CanvasBlockKind = z.infer<typeof CanvasBlockKindSchema>;
+
+export const CanvasBlockSchema = z.object({
+  kind: CanvasBlockKindSchema,
+  priority: z.enum(['primary', 'secondary']).default('primary'),
+  reason: z.string().max(240),
+  refs: z.array(z.string().max(300)).max(24).default([]),
+  density: z.enum(['files', 'modules']).optional(),
+});
+export type CanvasBlock = z.infer<typeof CanvasBlockSchema>;
+
+export const CanvasSpecSchema = z.object({
+  format: z.literal('salidium.canvas-spec/v1'),
+  composer: z.enum(['deterministic', 'model']),
+  model: z.string().max(120).optional(),
+  headline: z.string().max(240),
+  recommendedDensity: z.enum(['files', 'modules']),
+  blocks: z.array(CanvasBlockSchema).min(1).max(6),
+});
+export type CanvasSpec = z.infer<typeof CanvasSpecSchema>;
+
 export const ExplanationEventSchema = Base.extend({
   kind: z.literal('salidium.explanation'),
   /** Sequence of the newest event the explanation was written from. */
@@ -534,6 +569,8 @@ export const ExplanationEventSchema = Base.extend({
       toSteps: z.array(DiagramStepSchema).min(2).max(4),
     })
     .nullable(),
+  /** Optional model-suggested visual block composition (`salidium.canvas-spec/v1`). */
+  canvasBlocks: z.array(CanvasBlockSchema).max(6).optional(),
 });
 
 export const CanonicalEventSchema = z.discriminatedUnion('kind', [

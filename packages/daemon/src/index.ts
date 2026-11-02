@@ -56,7 +56,11 @@ export type {
   HookConfigurationInspection,
   HookConfigurationStatus,
 } from './ingest/hookConfiguration.ts';
-export { inspectBuiltInHooks } from './ingest/hookConfiguration.ts';
+export {
+  connectBuiltInHooks,
+  disconnectBuiltInHooks,
+  inspectBuiltInHooks,
+} from './ingest/hookConfiguration.ts';
 export { HOOK_PAUSE_FILE, HOOK_PAUSE_LEASE_MS } from './ingest/limits.ts';
 export {
   DEFAULT_LOG_FILES,

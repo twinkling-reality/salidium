@@ -29,7 +29,10 @@ import type {
   PersonalizationSettingsRequest,
   PersonalizedExplanation,
   QueueInspection,
+  StorageCompactResult,
   StorageComposition,
+  StorageDeletionPreview,
+  StorageDeletionScope,
   StoredEvent,
   StreamMessage,
 } from '@salidium/protocol';
@@ -39,6 +42,8 @@ import {
   ExplainerSettingsRequestSchema,
   OperationalConfigPatchSchema,
   PersonalizationSettingsRequestSchema,
+  StorageDeletionRequestSchema,
+  StorageDeletionScopeSchema,
 } from '@salidium/protocol';
 import type { createConsumerRoutes } from '../consumer/routes.ts';
 import type { HookIngress } from '../ingest/hookIngress.ts';
@@ -46,6 +51,7 @@ import { MAX_INGEST_PAYLOAD_BYTES } from '../ingest/limits.ts';
 import type { Logger } from '../logging/logger.ts';
 import { type createProjectMapRoutes, isProjectMapPath } from '../projectMap/routes.ts';
 import { isUserSession, type SessionRegistry } from '../sessions/sessionRegistry.ts';
+import type { AppliedStorageDeletion } from '../storage/salidiumStore.ts';
 import { startSse } from './sse.ts';
 
 export interface HttpServerDeps {
@@ -59,6 +65,7 @@ export interface HttpServerDeps {
   collection?: {
     status: () => CollectionStatus;
     set: (request: CollectionControlRequest) => CollectionStatus;
+    connect?: (provider: string) => CollectionStatus | undefined;
     disconnect: (provider: string) => CollectionStatus | undefined;
   };
   operations?: {
@@ -80,6 +87,16 @@ export interface HttpServerDeps {
     acknowledgeAlert: (id: string) => LocalAlertState;
     storageComposition: () => StorageComposition;
     analyzeStorage: () => StorageComposition;
+    previewStorageDeletion?: (scope: StorageDeletionScope) => StorageDeletionPreview;
+    deleteStorage?: (
+      scope: StorageDeletionScope,
+      expectedSessions: number | undefined,
+    ) => AppliedStorageDeletion;
+    compactStorage?: () => Promise<StorageCompactResult>;
+  };
+  projectMapRepositories?: {
+    allow: (root: string) => Promise<{ root: string; allowedAt: string; added: boolean }>;
+    revoke: (root: string) => Promise<boolean>;
   };
   /**
    * The choices that survive a restart. Optional because the routes are the only thing that needs
@@ -320,6 +337,56 @@ export function createHttpServer(deps: HttpServerDeps): Server {
       if (req.method === 'POST') return json(res, 200, deps.operations.analyzeStorage());
       return json(res, 405, { error: 'method not allowed' });
     }
+    if (
+      url.pathname === '/api/operations/storage/preview' &&
+      deps.operations?.previewStorageDeletion
+    ) {
+      if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' });
+      const body = await readBody(req, MAX_SETTINGS_BODY_BYTES);
+      let payload: unknown;
+      try {
+        payload = JSON.parse(body);
+      } catch {
+        return json(res, 400, { error: 'invalid json' });
+      }
+      const candidate =
+        payload && typeof payload === 'object' && 'scope' in payload ? payload.scope : payload;
+      const parsed = StorageDeletionScopeSchema.safeParse(candidate);
+      if (!parsed.success) return json(res, 400, { error: 'invalid deletion scope' });
+      return json(res, 200, deps.operations.previewStorageDeletion(parsed.data));
+    }
+    if (url.pathname === '/api/operations/storage/delete' && deps.operations?.deleteStorage) {
+      if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' });
+      const body = await readBody(req, MAX_SETTINGS_BODY_BYTES);
+      let payload: unknown;
+      try {
+        payload = JSON.parse(body);
+      } catch {
+        return json(res, 400, { error: 'invalid json' });
+      }
+      const parsed = StorageDeletionRequestSchema.safeParse(payload);
+      if (!parsed.success) return json(res, 400, { error: 'invalid deletion request' });
+      try {
+        const outcome = deps.operations.deleteStorage(
+          parsed.data.scope,
+          parsed.data.expectedSessions,
+        );
+        if (outcome.status === 'conflict') {
+          return json(res, 409, { error: 'session count changed', preview: outcome.current });
+        }
+        return json(res, 200, outcome.result);
+      } catch (error) {
+        return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    if (url.pathname === '/api/operations/storage/compact' && deps.operations?.compactStorage) {
+      if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' });
+      try {
+        return json(res, 200, await deps.operations.compactStorage());
+      } catch (error) {
+        return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
     const acknowledge = /^\/api\/operations\/alerts\/([^/]+)\/acknowledge$/.exec(url.pathname);
     if (req.method === 'POST' && acknowledge?.[1] && deps.operations) {
       const alertId = decodeSegment(acknowledge[1]);
@@ -348,12 +415,52 @@ export function createHttpServer(deps: HttpServerDeps): Server {
       }
       return json(res, 405, { error: 'method not allowed' });
     }
-    const disconnect = /^\/api\/collection\/hooks\/([^/]+)$/.exec(url.pathname);
-    if (req.method === 'DELETE' && disconnect?.[1] && deps.collection) {
-      const provider = decodeSegment(disconnect[1]);
+    const hookRoute = /^\/api\/collection\/hooks\/([^/]+)$/.exec(url.pathname);
+    if (hookRoute?.[1] && deps.collection) {
+      const provider = decodeSegment(hookRoute[1]);
       if (provider === undefined) return badEncoding(res);
-      const status = deps.collection.disconnect(provider);
-      return status ? json(res, 200, status) : json(res, 404, { error: 'unknown provider' });
+      if (req.method === 'DELETE') {
+        const status = deps.collection.disconnect(provider);
+        return status ? json(res, 200, status) : json(res, 404, { error: 'unknown provider' });
+      }
+      if (req.method === 'POST' && deps.collection.connect) {
+        try {
+          const status = deps.collection.connect(provider);
+          return status ? json(res, 200, status) : json(res, 404, { error: 'unknown provider' });
+        } catch (error) {
+          return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      return json(res, 405, { error: 'method not allowed' });
+    }
+    if (url.pathname === '/api/project-map/repositories' && deps.projectMapRepositories) {
+      if (req.method !== 'POST' && req.method !== 'DELETE')
+        return json(res, 405, { error: 'method not allowed' });
+      const body = await readBody(req, MAX_SETTINGS_BODY_BYTES);
+      let payload: unknown;
+      try {
+        payload = JSON.parse(body);
+      } catch {
+        return json(res, 400, { error: 'invalid json' });
+      }
+      const root =
+        payload &&
+        typeof payload === 'object' &&
+        'root' in payload &&
+        typeof payload.root === 'string'
+          ? payload.root.trim()
+          : '';
+      if (!root) return json(res, 400, { error: 'repository root is required' });
+      try {
+        if (req.method === 'POST') {
+          const allowed = await deps.projectMapRepositories.allow(root);
+          return json(res, 200, allowed);
+        }
+        const revoked = await deps.projectMapRepositories.revoke(root);
+        return revoked ? json(res, 200, { revoked: root }) : json(res, 404, { error: 'not found' });
+      } catch (error) {
+        return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+      }
     }
     if (req.method === 'GET' && url.pathname === '/api/sessions')
       return json(res, 200, registry.listSessions());

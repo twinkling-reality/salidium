@@ -1,8 +1,14 @@
 import { formatBytes } from '@salidium/core';
-import type { StorageComposition, StorageCompositionPart } from '@salidium/protocol';
+import type {
+  StorageCompactResult,
+  StorageComposition,
+  StorageCompositionPart,
+  StorageDeletionPreview,
+  StorageDeletionScope,
+} from '@salidium/protocol';
 import { StorageCompositionSchema } from '@salidium/protocol';
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
-import { resolveToken } from '../api/client.ts';
+import { ApiError, resolveToken } from '../api/client.ts';
 import { durationMs, relativeTime } from '../lib/format.ts';
 import { useAppStore } from '../store/appStore.ts';
 import { Loading } from './Loading.tsx';
@@ -60,11 +66,23 @@ function partNote(key: PartKey): ReactNode {
   if (key === 'reusable')
     return (
       <>
-        Pages already deleted inside the file. With the daemon stopped,{' '}
-        <code>salidium retention compact</code> returns them to the disk.
+        Pages already deleted inside the file. Compact storage or{' '}
+        <code>salidium storage compact</code> returns them to the disk.
       </>
     );
   return undefined;
+}
+
+export function formatDeletionRange(oldestAt: string | null, newestAt: string | null): string {
+  const shortDate = (iso: string) => iso.slice(0, 10);
+  if (oldestAt && newestAt) {
+    const start = shortDate(oldestAt);
+    const end = shortDate(newestAt);
+    return start === end ? `from ${start}` : `from ${start} to ${end}`;
+  }
+  if (oldestAt) return `from ${shortDate(oldestAt)}`;
+  if (newestAt) return `up to ${shortDate(newestAt)}`;
+  return '';
 }
 
 /*
@@ -151,7 +169,15 @@ function Parts({ composition }: { composition: StorageComposition }) {
   );
 }
 
-function Projects({ composition }: { composition: StorageComposition }) {
+function Projects({
+  composition,
+  busy,
+  onForgetProject,
+}: {
+  composition: StorageComposition;
+  busy: boolean;
+  onForgetProject: (projectPath: string) => void;
+}) {
   if (composition.projects.length === 0) return null;
   /*
    * Bars compare the listed projects with each other, not with the store. Against the whole file
@@ -175,6 +201,19 @@ function Projects({ composition }: { composition: StorageComposition }) {
             </span>
             <span className="composition-project-count num">
               {project.sessions.toLocaleString()} session{project.sessions === 1 ? '' : 's'}
+              {project.path ? (
+                <>
+                  {' · '}
+                  <button
+                    type="button"
+                    className="link"
+                    disabled={busy}
+                    onClick={() => onForgetProject(project.path)}
+                  >
+                    Delete
+                  </button>
+                </>
+              ) : null}
             </span>
           </li>
         ))}
@@ -192,6 +231,13 @@ function Projects({ composition }: { composition: StorageComposition }) {
 export function StorageCompositionView({ now }: { now: number }) {
   const api = useAppStore((state) => state.api);
   const unauthorized = useAppStore((state) => state.unauthorized);
+  const operationsPending = useAppStore((state) => state.operationsPending);
+  const deleteStorage = useAppStore((state) => state.deleteStorage);
+  const compactStorage = useAppStore((state) => state.compactStorage);
+  const ingestFocus = useAppStore((state) => state.ingestFocus);
+  const clearIngestFocus = useAppStore((state) => state.clearIngestFocus);
+  const sessionsLoaded = useAppStore((state) => state.sessionsLoaded);
+  const sectionRef = useRef<HTMLElement>(null);
   const [composition, setComposition] = useState<StorageComposition>();
   const [requestError, setRequestError] = useState<string>();
   /*
@@ -202,6 +248,12 @@ export function StorageCompositionView({ now }: { now: number }) {
    */
   const [offered, setOffered] = useState(true);
   const [starting, setStarting] = useState(false);
+  const [pendingScope, setPendingScope] = useState<StorageDeletionScope>();
+  const [preview, setPreview] = useState<StorageDeletionPreview>();
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [confirmCompact, setConfirmCompact] = useState(false);
+  const [compactResult, setCompactResult] = useState<StorageCompactResult>();
+  const [statusNotice, setStatusNotice] = useState<string>();
   /* Invalidates a read that a newer read, or the POST that starts a measurement, has overtaken. */
   const generation = useRef(0);
 
@@ -267,6 +319,74 @@ export function StorageCompositionView({ now }: { now: number }) {
     return () => clearInterval(timer);
   }, [api, running, read]);
 
+  useEffect(() => {
+    if (ingestFocus !== 'storage' || !composition || !sessionsLoaded) return;
+    sectionRef.current?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+    if (composition.state === 'absent' && !starting) {
+      void start();
+    }
+    clearIngestFocus();
+  }, [ingestFocus, composition, sessionsLoaded, starting, start, clearIngestFocus]);
+
+  const requestDelete = useCallback(
+    async (scope: StorageDeletionScope) => {
+      if (!api) return;
+      setConfirmCompact(false);
+      setCompactResult(undefined);
+      setStatusNotice(undefined);
+      setRequestError(undefined);
+      setPendingScope(scope);
+      setPreview(undefined);
+      setPreviewLoading(true);
+      try {
+        const nextPreview = await api.previewStorageDeletion(scope);
+        setPreview(nextPreview);
+      } catch (error) {
+        setRequestError(failureMessage(error));
+        setPendingScope(undefined);
+      } finally {
+        setPreviewLoading(false);
+      }
+    },
+    [api],
+  );
+
+  const confirmDelete = useCallback(async () => {
+    if (!pendingScope || !preview) return;
+    setRequestError(undefined);
+    try {
+      const result = await deleteStorage(pendingScope, preview.sessions);
+      setPendingScope(undefined);
+      setPreview(undefined);
+      setStatusNotice(
+        `Deleted ${result.removedSessions.toLocaleString()} ${result.removedSessions === 1 ? 'session' : 'sessions'} (${formatBytes(result.removedBytes)}).`,
+      );
+      void start();
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409 && error.preview) {
+        setPreview(error.preview);
+        setRequestError(
+          'The session count changed while you were reviewing. Confirm the updated count.',
+        );
+        return;
+      }
+      setRequestError(failureMessage(error));
+    }
+  }, [pendingScope, preview, deleteStorage, start]);
+
+  const runCompact = useCallback(async () => {
+    setRequestError(undefined);
+    setStatusNotice(undefined);
+    try {
+      const result = await compactStorage();
+      setConfirmCompact(false);
+      setCompactResult(result);
+      void start();
+    } catch (error) {
+      setRequestError(failureMessage(error));
+    }
+  }, [compactStorage, start]);
+
   if (!offered) return null;
   /*
    * Nothing at all until the first answer arrives. The empty state of this section is a sentence
@@ -276,7 +396,7 @@ export function StorageCompositionView({ now }: { now: number }) {
   if (!composition && !requestError) return null;
 
   const state = composition?.state ?? 'absent';
-  const busy = starting || running;
+  const busy = starting || running || previewLoading || operationsPending !== undefined;
   const action =
     state === 'ready'
       ? 'Measure again'
@@ -293,9 +413,14 @@ export function StorageCompositionView({ now }: { now: number }) {
         : state === 'failed'
           ? 'Did not finish'
           : 'Not measured';
+  const rangeText = preview ? formatDeletionRange(preview.oldestAt, preview.newestAt) : '';
 
   return (
-    <section className="is-section is-composition" aria-labelledby="is-composition-title">
+    <section
+      className="is-section is-composition"
+      aria-labelledby="is-composition-title"
+      ref={sectionRef}
+    >
       <div className="operations-section-head">
         <h3 className="mu-title" id="is-composition-title">
           What is using this space
@@ -328,7 +453,13 @@ export function StorageCompositionView({ now }: { now: number }) {
       {state === 'ready' && composition && (
         <>
           <Parts composition={composition} />
-          <Projects composition={composition} />
+          <Projects
+            composition={composition}
+            busy={busy}
+            onForgetProject={(projectPath) =>
+              void requestDelete({ kind: 'project', project: projectPath })
+            }
+          />
           <p className="composition-note">
             A measurement, not a live reading. It was taken{' '}
             {relativeTime(composition.computedAt ?? undefined, now) || 'at an unrecorded time'}
@@ -337,14 +468,125 @@ export function StorageCompositionView({ now }: { now: number }) {
           </p>
         </>
       )}
+      {previewLoading && (
+        <div className="operations-action-status">
+          <Loading label="Counting matching sessions" />
+        </div>
+      )}
+      {pendingScope && preview && (
+        <div className="operations-retention-confirm" role="alert">
+          <p>
+            {pendingScope.kind === 'project' ? (
+              <>
+                Deleting <code>{pendingScope.project}</code> permanently removes{' '}
+                <strong>
+                  {preview.sessions.toLocaleString()}{' '}
+                  {preview.sessions === 1 ? 'session' : 'sessions'}
+                </strong>{' '}
+                ({preview.eventCount.toLocaleString()}{' '}
+                {preview.eventCount === 1 ? 'event' : 'events'}, {formatBytes(preview.bytes)}
+                {rangeText ? `, ${rangeText}` : ''}). This cannot be undone.
+              </>
+            ) : (
+              <>
+                Deleting all session history permanently removes{' '}
+                <strong>
+                  {preview.sessions.toLocaleString()}{' '}
+                  {preview.sessions === 1 ? 'session' : 'sessions'}
+                </strong>{' '}
+                ({preview.eventCount.toLocaleString()}{' '}
+                {preview.eventCount === 1 ? 'event' : 'events'}, {formatBytes(preview.bytes)}
+                {rangeText ? `, ${rangeText}` : ''}). Settings, consumer credentials, and hook
+                configuration stay intact.
+              </>
+            )}
+          </p>
+          <button
+            type="button"
+            className="btn is-confirm"
+            disabled={busy || preview.sessions === 0}
+            onClick={() => void confirmDelete()}
+          >
+            Delete {preview.sessions.toLocaleString()}{' '}
+            {preview.sessions === 1 ? 'session' : 'sessions'}
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={() => {
+              setPendingScope(undefined);
+              setPreview(undefined);
+            }}
+          >
+            Keep sessions
+          </button>
+        </div>
+      )}
+      {confirmCompact && (
+        <div className="operations-retention-confirm" role="alert">
+          <p>
+            Compacting storage pauses collection briefly while SQLite reclaims deleted pages and
+            returns reusable space to the disk.
+          </p>
+          <button
+            type="button"
+            className="btn is-confirm"
+            disabled={busy}
+            onClick={() => void runCompact()}
+          >
+            {operationsPending === 'storage-compact' ? 'Compacting…' : 'Compact storage now'}
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={() => setConfirmCompact(false)}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+      {statusNotice && (
+        <p className="composition-note" role="status">
+          {statusNotice}
+        </p>
+      )}
+      {compactResult && (
+        <p className="composition-note" role="status">
+          Compacted storage from {formatBytes(compactResult.beforeBytes)} to{' '}
+          {formatBytes(compactResult.afterBytes)} (reclaimed{' '}
+          {formatBytes(Math.max(0, compactResult.beforeBytes - compactResult.afterBytes))}).
+        </p>
+      )}
       {requestError && (
         <p className="is-action-error" role="alert">
-          Storage measurement unavailable. {requestError}
+          Storage action failed. {requestError}
         </p>
       )}
       <div className="operations-actions">
         <button type="button" className="btn" disabled={busy} onClick={() => void start()}>
           {action}
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={busy}
+          onClick={() => {
+            setPendingScope(undefined);
+            setPreview(undefined);
+            setConfirmCompact(true);
+          }}
+        >
+          Compact Storage
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={busy}
+          onClick={() => void requestDelete({ kind: 'all' })}
+        >
+          Delete All Sessions…
         </button>
       </div>
     </section>

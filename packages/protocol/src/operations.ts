@@ -255,6 +255,63 @@ export const StorageCompositionSchema = z
   .strict();
 export type StorageComposition = z.infer<typeof StorageCompositionSchema>;
 
+export const StorageDeletionScopeSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('session'), sessionId: z.string().min(1).max(512) }).strict(),
+  z.object({ kind: z.literal('project'), project: z.string().max(4096) }).strict(),
+  z
+    .object({
+      kind: z.literal('retention'),
+      days: z.union([z.literal(30), z.literal(90), z.literal(365)]),
+    })
+    .strict(),
+  z.object({ kind: z.literal('all') }).strict(),
+]);
+export type StorageDeletionScope = z.infer<typeof StorageDeletionScopeSchema>;
+
+export const StorageDeletionPreviewSchema = z
+  .object({
+    contractVersion: z.literal(OPERATIONS_CONTRACT_VERSION),
+    scope: StorageDeletionScopeSchema,
+    sessions: z.number().int().nonnegative(),
+    eventCount: z.number().int().nonnegative(),
+    bytes: z.number().int().nonnegative(),
+    oldestAt: CanonicalTimestampSchema.nullable(),
+    newestAt: CanonicalTimestampSchema.nullable(),
+  })
+  .strict();
+export type StorageDeletionPreview = z.infer<typeof StorageDeletionPreviewSchema>;
+
+export const StorageDeletionRequestSchema = z
+  .object({
+    scope: StorageDeletionScopeSchema,
+    /** The exact session count shown in the preview, so a deletion confirms what was inspected. */
+    expectedSessions: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+export type StorageDeletionRequest = z.infer<typeof StorageDeletionRequestSchema>;
+
+export const StorageDeletionResultSchema = z
+  .object({
+    contractVersion: z.literal(OPERATIONS_CONTRACT_VERSION),
+    scope: StorageDeletionScopeSchema,
+    removedSessions: z.number().int().nonnegative(),
+    removedEvents: z.number().int().nonnegative(),
+    removedBytes: z.number().int().nonnegative(),
+    oldestAt: CanonicalTimestampSchema.nullable(),
+    newestAt: CanonicalTimestampSchema.nullable(),
+  })
+  .strict();
+export type StorageDeletionResult = z.infer<typeof StorageDeletionResultSchema>;
+
+export const StorageCompactResultSchema = z
+  .object({
+    contractVersion: z.literal(OPERATIONS_CONTRACT_VERSION),
+    beforeBytes: z.number().int().nonnegative(),
+    afterBytes: z.number().int().nonnegative(),
+  })
+  .strict();
+export type StorageCompactResult = z.infer<typeof StorageCompactResultSchema>;
+
 export const MaintenancePhaseSchema = z.enum([
   'idle',
   'pause',

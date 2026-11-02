@@ -35,7 +35,7 @@ const CHOSEN: Record<NonNullable<RepositoryLink['commit']>['chosen'], string> = 
 };
 
 /** Statuses of files that did not link, in plain words. */
-const FILE_WORDS: Record<
+export const FILE_WORDS: Record<
   Exclude<FileLink['status'], 'linked' | 'repository-not-mapped'>,
   string
 > = {
@@ -46,14 +46,31 @@ const FILE_WORDS: Record<
     'Salidium did not record which repository held these, as for sessions imported from history. It does not guess one.',
 };
 
-const UNAVAILABLE: Record<NonNullable<RepositoryLink['unavailable']>, string> = {
+export const UNLINKED_FILE_WORDS = FILE_WORDS;
+
+export const UNAVAILABLE: Record<NonNullable<RepositoryLink['unavailable']>, string> = {
   'over-bound': 'This repository is larger than the experimental map reads.',
   busy: 'Another map was being built. Try again in a moment.',
   'repository-unsupported':
     'Salidium cannot read this repository safely, for example because it borrows objects from another directory.',
 };
 
-function repositoryWords(repository: RepositoryLink): string {
+export const REPOSITORY_UNAVAILABLE_WORDS = UNAVAILABLE;
+
+export const COMMIT_CHOSEN_WORDS: Record<NonNullable<RepositoryLink['commit']>['chosen'], string> =
+  {
+    'latest-turn-end': 'Latest Turn End',
+    'session-start': 'Session Start',
+  };
+
+export const EDGE_KIND_WORDS: Partial<Record<Neighbour['kind'], string>> = {
+  'imports-type': 'Type Import',
+  're-exports': 'Re-Export',
+  'imports-dynamic': 'Dynamic Import',
+  requires: 'Require',
+};
+
+export function repositoryWords(repository: RepositoryLink): string {
   switch (repository.status) {
     case 'mapped':
       return '';
@@ -68,17 +85,25 @@ function repositoryWords(repository: RepositoryLink): string {
   }
 }
 
+export const describeRepositoryStatus = repositoryWords;
+
 /** The panel's body, without fetching, so it renders the same for a test as for the daemon. */
 export function WhereItSits({
   links,
   widened,
   onWiden,
   onRetry,
+  onAllowRepository,
+  allowingRepository,
+  allowError,
 }: {
   links: ExecutionLinks;
   widened: boolean;
   onWiden: () => void;
   onRetry?: () => void;
+  onAllowRepository?: (root: string) => void;
+  allowingRepository?: string;
+  allowError?: string;
 }) {
   const mapped = links.repositories.filter((r) => r.status === 'mapped');
   const unmapped = links.repositories.filter((r) => r.status !== 'mapped');
@@ -136,6 +161,9 @@ export function WhereItSits({
             (f) => f.status === 'repository-not-mapped' && f.repository === repository.root,
           )}
           onRetry={onRetry}
+          onAllowRepository={onAllowRepository}
+          allowing={allowingRepository === repository.root}
+          allowError={allowingRepository === repository.root ? allowError : undefined}
         />
       ))}
 
@@ -380,10 +408,16 @@ function UnmappedRepository({
   repository,
   files,
   onRetry,
+  onAllowRepository,
+  allowing,
+  allowError,
 }: {
   repository: RepositoryLink;
   files: FileLink[];
   onRetry?: () => void;
+  onAllowRepository?: (root: string) => void;
+  allowing?: boolean;
+  allowError?: string;
 }) {
   const root = repository.root;
   return (
@@ -403,6 +437,23 @@ function UnmappedRepository({
             To place these files, allow Salidium to map this repository. It reads committed files
             only, never your working tree, and only when you open this panel.
           </p>
+          {onAllowRepository && (
+            <div className="operations-actions">
+              <button
+                type="button"
+                className="btn btn-accent"
+                disabled={allowing}
+                onClick={() => onAllowRepository(root)}
+              >
+                {allowing ? 'Allowing…' : 'Allow this repository'}
+              </button>
+            </div>
+          )}
+          {allowError && (
+            <p className="is-action-error" role="alert">
+              {allowError}
+            </p>
+          )}
           <pre className="where-command mono">
             <code>salidium map allow {shellWord(root)}</code>
           </pre>

@@ -53,6 +53,7 @@ export function App() {
   const listConnection = useAppStore((s) => s.listConnection);
   const sidebarOpen = useAppStore((s) => s.sidebarOpen);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
+  const openIngest = useAppStore((s) => s.openIngest);
   const loadExplainer = useAppStore((s) => s.loadExplainer);
   const loadPersonalization = useAppStore((s) => s.loadPersonalization);
   const sideRef = useRef<HTMLElement>(null);
@@ -95,19 +96,35 @@ export function App() {
     };
   }, [api, loadPersonalization]);
 
-  // Hash routing: #/s/<sessionId>
+  // Hash routing: #/s/<sessionId>, #/storage, #/operations
   useEffect(() => {
     const apply = () => {
-      const m = /^#\/s\/(.+)$/.exec(window.location.hash);
+      const hash = window.location.hash;
+      if (/^#\/storage(?:[&?]|$)/.test(hash)) {
+        openIngest('storage');
+        return;
+      }
+      if (/^#\/operations(?:[&?]|$)/.test(hash)) {
+        openIngest('operations');
+        return;
+      }
+      const m = /^#\/s\/(.+)$/.exec(hash);
       if (m?.[1]) select(decodeURIComponent(m[1]));
     };
     apply();
     window.addEventListener('hashchange', apply);
     return () => window.removeEventListener('hashchange', apply);
-  }, [select]);
+  }, [select, openIngest]);
   useEffect(() => {
+    const hash = window.location.hash;
+    if (
+      !selectedId &&
+      (/^#\/storage(?:[&?]|$)/.test(hash) || /^#\/operations(?:[&?]|$)/.test(hash))
+    ) {
+      return;
+    }
     const target = selectedId ? `#/s/${encodeURIComponent(selectedId)}` : '';
-    if (window.location.hash !== target && !/token=/.test(window.location.hash))
+    if (hash !== target && !/token=/.test(hash))
       history.replaceState(null, '', `${window.location.pathname}${target}`);
   }, [selectedId]);
   // Auto-select the most recent session when nothing is selected.

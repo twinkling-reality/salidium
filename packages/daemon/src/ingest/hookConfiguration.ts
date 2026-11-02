@@ -75,6 +75,38 @@ export function inspectBuiltInHooks(
   }
 }
 
+/** Installs or repairs Salidium-owned hook specs while preserving every unrelated group and setting. */
+export function connectBuiltInHooks(
+  provider: BuiltInHookProvider,
+  userHome: string,
+  salidiumHome: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): { changed: boolean; settingsPath: string } {
+  if (platform === 'win32') {
+    throw new Error(
+      'native Windows uses transcript history only; POSIX live hooks were not installed',
+    );
+  }
+  const path = hookSettingsPath(provider, userHome, env);
+  const file = readJson(path);
+  const existing = readHookMap(file, path);
+  const ours = desiredHooks(provider, salidiumHome);
+  const isOurs = hookPredicate(provider);
+  const hooks: Record<string, HookGroup[]> = {};
+  const events = new Set([...Object.keys(existing), ...Object.keys(ours)]);
+  for (const event of events) {
+    const kept = (existing[event] ?? [])
+      .map((group) => ({ ...group, hooks: group.hooks.filter((hook) => !isOurs(hook)) }))
+      .filter((group) => group.hooks.length > 0);
+    const merged = [...kept, ...(ours[event] ?? [])];
+    if (merged.length > 0) hooks[event] = merged;
+  }
+  if (isDeepStrictEqual(existing, hooks)) return { changed: false, settingsPath: path };
+  writeJsonWithBackup(path, { ...file, hooks });
+  return { changed: true, settingsPath: path };
+}
+
 /** Removes only Salidium-owned hook specs and preserves every unrelated group and setting. */
 export function disconnectBuiltInHooks(
   provider: BuiltInHookProvider,

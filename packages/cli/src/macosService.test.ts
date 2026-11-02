@@ -190,6 +190,17 @@ describe('macOS always-on service', () => {
     });
 
     expect(readFileSync(paths.runtime, 'utf8')).toContain('bundled runtime');
+    const compilerCall = launchctl.calls.find(({ command }) => command === value.swiftc);
+    expect(compilerCall?.args).toEqual(
+      expect.arrayContaining([
+        '-framework',
+        'AppKit',
+        '-framework',
+        'Foundation',
+        '-framework',
+        'WebKit',
+      ]),
+    );
     expect(JSON.parse(readFileSync(join(paths.current, 'package.json'), 'utf8'))).toMatchObject({
       version: '1.2.3',
       private: true,
@@ -379,5 +390,21 @@ describe('menu bar byte rendering', () => {
       else expect(body).toContain(form);
     }
     expect(body).not.toContain('ByteCountFormatter');
+  });
+
+  it('hosts a native WKWebView window with regular activation while open and releases it on close while keeping Open in Browser', () => {
+    const swift = readFileSync(
+      join(import.meta.dirname, '..', 'native', 'SalidiumMenuBar.swift'),
+      'utf8',
+    );
+    expect(swift).toContain('import WebKit');
+    expect(swift).toContain('NSWindow(');
+    expect(swift).toContain('WKWebView(');
+    expect(swift).toContain('NSApp.setActivationPolicy(.regular)');
+    expect(swift).toContain('NSApp.setActivationPolicy(.accessory)');
+    expect(swift).toContain('webView = nil');
+    expect(swift).toContain('mainWindow = nil');
+    expect(swift).toContain('title: "Open in Browser"');
+    expect(swift).toContain('#selector(openInBrowser)');
   });
 });

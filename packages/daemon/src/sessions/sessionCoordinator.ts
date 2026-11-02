@@ -572,7 +572,7 @@ export class SessionCoordinator {
     void this.opts
       .explainSession(this.state, controller.signal)
       .then((result) => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || this.closed) return;
         // Marked done either way: a session whose evidence the agent cannot turn into an
         // explanation would otherwise be retried, and paid for, on every open.
         if (result.status === 'generated') this.ingest([result.event]);
@@ -582,37 +582,41 @@ export class SessionCoordinator {
         this.explainedSeq = result.status === 'generated' ? this.state.latestSeq : seq;
       })
       .catch(() => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || this.closed) return;
         this.explanationStatus = 'failed';
       })
       .finally(() => {
         if (this.explanationAbort === controller) this.explanationAbort = undefined;
+        if (this.closed) return;
         this.scheduleSummary();
         if (this.explanationNeedsPersist()) this.scheduleFlush();
       });
   }
 
   private scheduleFlush(): void {
-    if (this.flushTimer) return;
+    if (this.closed || this.flushTimer) return;
     this.flushTimer = setTimeout(() => this.flush(), this.opts.flushDelayMs);
     this.flushTimer.unref?.();
   }
 
   private scheduleSummary(): void {
-    if (this.summaryTimer) return;
+    if (this.closed || this.summaryTimer) return;
     this.summaryTimer = setTimeout(() => {
       this.summaryTimer = undefined;
+      if (this.closed) return;
       this.listener.onSummary(this.summary);
     }, 100);
     this.summaryTimer.unref?.();
   }
 
   private checkpointPending = false;
+  private discarded = false;
   private scheduleCheckpoint(): void {
     if (this.checkpointPending) return;
     this.checkpointPending = true;
     setTimeout(() => {
       this.checkpointPending = false;
+      if (this.closed) return;
       this.checkpoint();
     }, 250).unref?.();
   }
@@ -626,6 +630,7 @@ export class SessionCoordinator {
       clearTimeout(this.flushTimer);
       this.flushTimer = undefined;
     }
+    if (this.discarded) return true;
     const statusOnly = this.pendingEvents.length === 0 && this.pendingChanges.length === 0;
     if (statusOnly && !this.explanationNeedsPersist()) return true;
     if (statusOnly && this.state.latestSeq < 0) return true;
@@ -674,5 +679,23 @@ export class SessionCoordinator {
     if (this.summaryTimer) clearTimeout(this.summaryTimer);
     this.checkpoint();
     this.listener.onSummary(this.summary);
+  }
+
+  /** Stops a coordinator whose session was deleted without writing a final checkpoint or summary. */
+  discard(): void {
+    this.closed = true;
+    this.discarded = true;
+    this.clearIdleEnd();
+    this.explanationAbort?.abort();
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = undefined;
+    }
+    if (this.summaryTimer) {
+      clearTimeout(this.summaryTimer);
+      this.summaryTimer = undefined;
+    }
+    this.pendingEvents = [];
+    this.pendingChanges = [];
   }
 }

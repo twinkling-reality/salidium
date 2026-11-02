@@ -3,8 +3,14 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { DaemonInfo, StorageComposition } from '@salidium/protocol';
-import { OPERATIONS_CONTRACT_VERSION, StorageCompositionSchema } from '@salidium/protocol';
+import type { CollectionStatus, DaemonInfo, StorageComposition } from '@salidium/protocol';
+import {
+  OPERATIONS_CONTRACT_VERSION,
+  StorageCompactResultSchema,
+  StorageCompositionSchema,
+  StorageDeletionPreviewSchema,
+  StorageDeletionResultSchema,
+} from '@salidium/protocol';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { HookIngress } from '../ingest/hookIngress.ts';
 import { SessionRegistry } from '../sessions/sessionRegistry.ts';
@@ -24,6 +30,18 @@ let server: Server;
 let base: string;
 let composition: StorageComposition;
 let analyzeCalls = 0;
+let connectedProvider: string | undefined;
+let allowedRepository: string | undefined;
+
+const sampleCollectionStatus = (): CollectionStatus => ({
+  observedAt: '2026-10-01T00:00:00.000Z',
+  state: 'active',
+  pause: null,
+  queue: { files: 0, bytes: 0, oldestAt: null },
+  store: { bytes: 1000, retention: 'forever', lastIngestAt: null },
+  health: 'healthy',
+  gaps: { active: [], recovered: [], omittedEpisodes: 0 },
+});
 
 const absent = (): StorageComposition => ({
   contractVersion: OPERATIONS_CONTRACT_VERSION,
@@ -65,6 +83,32 @@ beforeAll(async () => {
         composition = { ...composition, state: 'running' };
         return composition;
       },
+      previewStorageDeletion: (scope) => registry.previewDeletion(scope),
+      deleteStorage: (scope, expectedSessions) => registry.deleteSessions(scope, expectedSessions),
+      compactStorage: async () => {
+        const compacted = store.compact();
+        return {
+          contractVersion: OPERATIONS_CONTRACT_VERSION,
+          beforeBytes: compacted.beforeBytes,
+          afterBytes: compacted.afterBytes,
+        };
+      },
+    },
+    collection: {
+      status: () => sampleCollectionStatus(),
+      set: () => sampleCollectionStatus(),
+      disconnect: () => sampleCollectionStatus(),
+      connect: (provider) => {
+        connectedProvider = provider;
+        return sampleCollectionStatus();
+      },
+    },
+    projectMapRepositories: {
+      allow: async (root) => {
+        allowedRepository = root;
+        return { root, allowedAt: '2026-10-01T00:00:00.000Z', added: true };
+      },
+      revoke: async () => true,
     },
     log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} } as never,
   });
@@ -131,5 +175,85 @@ describe('the storage composition route', () => {
   it('refuses a method it does not implement, and a caller without the token', async () => {
     expect((await call('DELETE')).status).toBe(405);
     expect((await call('GET', 'wrong')).status).toBe(401);
+  });
+
+  it('previews and deletes storage scopes, returning 409 when expectedSessions changes', async () => {
+    store.upsertSession({
+      id: 'codex:s1',
+      provider: 'codex',
+      providerSessionId: 's1',
+      cwd: '/repo/alpha',
+      title: 'codex:s1',
+      status: 'ended',
+      startedAt: '2026-09-01T00:00:00.000Z',
+      lastEventAt: '2026-09-01T00:05:00.000Z',
+      endedAt: '2026-09-01T00:05:00.000Z',
+      latestSeq: 0,
+      counts: {
+        turns: 1,
+        toolCalls: 0,
+        filesChanged: 0,
+        linesAdded: 0,
+        linesRemoved: 0,
+        reviewOpen: 0,
+        remaining: 0,
+      },
+    });
+    const previewRes = await fetch(`${base}/api/operations/storage/preview`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope: { kind: 'project', project: '/repo/alpha' } }),
+    });
+    expect(previewRes.status).toBe(200);
+    const preview = StorageDeletionPreviewSchema.parse(await previewRes.json());
+    expect(preview.sessions).toBe(1);
+
+    const conflictRes = await fetch(`${base}/api/operations/storage/delete`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scope: { kind: 'project', project: '/repo/alpha' },
+        expectedSessions: 5,
+      }),
+    });
+    expect(conflictRes.status).toBe(409);
+
+    const deleteRes = await fetch(`${base}/api/operations/storage/delete`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scope: { kind: 'project', project: '/repo/alpha' },
+        expectedSessions: 1,
+      }),
+    });
+    expect(deleteRes.status).toBe(200);
+    const deleted = StorageDeletionResultSchema.parse(await deleteRes.json());
+    expect(deleted.removedSessions).toBe(1);
+
+    const compactRes = await fetch(`${base}/api/operations/storage/compact`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
+    expect(compactRes.status).toBe(200);
+    const compacted = StorageCompactResultSchema.parse(await compactRes.json());
+    expect(compacted.beforeBytes).toBeGreaterThan(0);
+    expect(compacted.afterBytes).toBeGreaterThan(0);
+  });
+
+  it('connects provider hooks and allows project-map repositories via owner routes', async () => {
+    const hookRes = await fetch(`${base}/api/collection/hooks/claude-code`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
+    expect(hookRes.status).toBe(200);
+    expect(connectedProvider).toBe('claude-code');
+
+    const mapRes = await fetch(`${base}/api/project-map/repositories`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root: '/repo/alpha' }),
+    });
+    expect(mapRes.status).toBe(200);
+    expect(allowedRepository).toBe('/repo/alpha');
   });
 });

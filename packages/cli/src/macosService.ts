@@ -419,6 +419,8 @@ export function prepareMacOSService(options: MacOSServiceOptions = {}): MacOSSer
       'AppKit',
       '-framework',
       'Foundation',
+      '-framework',
+      'WebKit',
       join(staging, SWIFT_SOURCE_NAME),
       '-o',
       menuBinary,

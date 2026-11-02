@@ -174,6 +174,15 @@ export function Timeline({
       const end = available[i + 1]?.target ?? stops.length;
       return { ...segment, start, end, palette: turnPalette(segment.id) };
     });
+  const minBandFraction = bands.reduce(
+    (min, band) => Math.min(min, (band.end - band.start) / Math.max(1, stops.length)),
+    1,
+  );
+  const trackMinWidth = Math.max(
+    320,
+    bands.length * 110,
+    bands.length > 0 ? Math.min(1440, Math.round(80 / Math.max(0.05, minBandFraction))) : 320,
+  );
 
   /** A drag in flight wins over the scrub it is about to replace; neither means live. */
   const value =
@@ -205,17 +214,13 @@ export function Timeline({
     <section className="timeline" aria-label="Session timeline">
       <div className="tl-navigation">
         <div className="tl-segments" ref={segmentStrip}>
-          <div
-            className="tl-track"
-            ref={setTrack}
-            style={{ minWidth: Math.max(320, bands.length * 100) }}
-          >
+          <div className="tl-track" ref={setTrack} style={{ minWidth: trackMinWidth }}>
             <div
               className="tl-bands"
               aria-hidden="true"
               style={
                 {
-                  '--lead-width': `calc((100% - ${THUMB}px) * ${hasStops ? (bands[0]?.start ?? stops.length) / stops.length : 1} - 6px)`,
+                  '--lead-width': `max(0px, calc((100% - ${THUMB}px) * ${hasStops ? (bands[0]?.start ?? stops.length) / stops.length : 1} - 6px))`,
                 } as CSSProperties
               }
             >
@@ -240,7 +245,7 @@ export function Timeline({
                   className={`btn tl-segment ${selectedSegment === band.id ? 'is-on' : ''}`}
                   style={{
                     left: pos(band.start / stops.length),
-                    width: `calc((100% - ${THUMB}px) * ${(band.end - band.start) / stops.length} - 6px)`,
+                    width: `max(24px, calc((100% - ${THUMB}px) * ${(band.end - band.start) / stops.length} - 6px))`,
                   }}
                   aria-pressed={selectedSegment === band.id}
                   aria-label={`Turn ${band.index + 1}: ${band.title}`}

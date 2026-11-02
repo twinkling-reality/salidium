@@ -4,8 +4,23 @@ import type {
   SemanticChange,
   SessionSummary,
   StorageComposition,
+  StorageDeletionPreview,
+  StorageDeletionResult,
+  StorageDeletionScope,
   StoredEvent,
 } from '@salidium/protocol';
+
+export type AppliedStorageDeletion =
+  | {
+      status: 'deleted';
+      result: StorageDeletionResult;
+      removedSessionIds: string[];
+      removedUserSessionIds?: string[];
+    }
+  | {
+      status: 'conflict';
+      current: StorageDeletionPreview;
+    };
 
 export interface UsageTotals {
   messages: number;
@@ -227,12 +242,23 @@ export interface SalidiumStore {
   pinnedSessionIds(): string[];
   isSessionTombstoned(sessionId: string): boolean;
   forgetSession(sessionId: string, now?: Date): boolean;
+  previewStorageDeletion?(
+    scope: StorageDeletionScope,
+    now?: Date,
+    excludeSessionIds?: readonly string[],
+  ): StorageDeletionPreview;
+  applyStorageDeletion?(
+    scope: StorageDeletionScope,
+    now?: Date,
+    excludeSessionIds?: readonly string[],
+    expectedSessions?: number,
+  ): AppliedStorageDeletion;
   /**
    * What the store is made of. One pass per table, ten seconds on a large one, so callers run it
    * off the main loop and never on a timer.
    */
   storageComposition?(projectLimit?: number): StorageComposition;
-  compact(): void;
+  compact(): { beforeBytes: number; afterBytes: number } | undefined;
   close(): void;
 }
 

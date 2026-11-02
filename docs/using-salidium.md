@@ -45,11 +45,12 @@ colour alone: the bare mark while recording, a pause glyph while paused, a dot w
 you, a slash when Salidium is running but not recording, and a dimmed mark when it is not running.
 
 The menu leads with one sentence saying whether your agent work is being captured, and it uses the
-same words the alert would: "Recording your agent work", "Salidium is falling behind", "Claude Code
-needs repair", "Paused, recording resumes at 4:30 PM". Below that are the actions that answer
-it, then one storage row showing what Salidium is using on this Mac against its warning size, with
-the growth per day at the current rate. Readings are exact when they can be observed within the
-safety ceiling and say unavailable rather than displaying a partial count as fact.
+same words the alert would: "Recording · 5.1 GB of session history", "Salidium is falling behind",
+"Claude Code needs repair", "Paused, recording resumes at 4:30 PM". Below that are the actions that
+answer it, then one storage row showing what Salidium is using on this Mac against its warning size,
+with the growth per day at the current rate and a **Storage…** action that opens the storage panel
+directly. Readings are exact when they can be observed within the safety ceiling and say unavailable
+rather than displaying a partial count as fact.
 
 Choosing an item closes the menu, so an action that takes time says so in two places: the mark
 fades slowly while it runs, and the next time you open the menu its first line is what is
@@ -59,9 +60,14 @@ is not, because it is the part that carries the information.
 Rows appear only when they mean something. The queue row and its **Store Waiting Files Now** action
 are shown when work is actually waiting, because an empty queue is the steady state rather than a
 stage work passes through. Maintenance is shown while a phase is running, not after it finished.
-**Local Operations…** opens the panel that holds storage, retention, alert thresholds and provider
-settings, so the menu does not carry a second copy of them. Native alert notifications remain a
-separate opt-in setting; always-on mode does not enable lock-screen notifications.
+**Open Salidium**, **See What Happened**, **Storage…**, and **Local Operations…** open a native
+macOS window (`WKWebView`) backed by the local daemon: while that window is open Salidium switches
+to regular app activation so it appears in `Cmd+Tab` and the Dock, and closing the window releases
+the web view and returns to menu-bar-only accessory mode. **Open in Browser** remains in the menu
+when you want a browser tab instead. **Local Operations…** opens the panel that holds storage,
+retention, alert thresholds and provider settings, so the menu does not carry a second copy of them.
+Native alert notifications remain a separate opt-in setting; always-on mode does not enable
+lock-screen notifications.
 
 When a menu action fails, the alert names what you asked for, gives the reason the command
 reported, and offers **Show Log**. The reason stays in the menu after you dismiss it, until you try
@@ -120,14 +126,17 @@ and the active explanation mode.
 
 `salidium stop` pauses new collection before it stops the background service. Work already in the
 queue stays there and the command prints its exact observed file count and bytes. The pause is a
-24-hour lease. A later ordinary Salidium command resumes collection, and `salidium resume` does so
-explicitly. Lifecycle commands whose purpose is to preserve state (`pause`, `stop`, and every
-`service` command) and coordinated `storage optimize` do not implicitly resume it. Any command can
-be told to leave a pause alone with `--no-resume`, which is for a caller that has already seen the
-daemon answer: the marker it would clear can only be stale if the process that clears leases has
-died, and a live daemon expires its own. If the daemon crashes while paused and no ordinary command
-runs, the marker cannot clear itself. The next ordinary command resumes collection and preserves
-that interval in the collection-gap ledger instead of silently forgetting it.
+24-hour lease. Starting or opening Salidium (`salidium`, `salidium start`, `salidium open`,
+`salidium restart`, `salidium daemon`) or running an ordinary command after an ordinary pause
+resumes collection, and `salidium resume` does so explicitly. A pause set by `salidium stop` stays
+in effect across inspection and configuration commands until you start, open, or resume Salidium.
+Lifecycle commands whose purpose is to preserve state (`pause`, `stop`, and every `service`
+command) and coordinated `storage optimize` and `storage compact` do not implicitly resume it. Any
+command can be told to leave a pause alone with `--no-resume`, which is for a caller that has
+already seen the daemon answer: the marker it would clear can only be stale if the process that
+clears leases has died, and a live daemon expires its own. If the daemon crashes while paused and
+no ordinary command runs, the marker cannot clear itself. The next command that resumes collection
+preserves that interval in the collection-gap ledger instead of silently forgetting it.
 
 Use `salidium pause` to stop new hook and transcript observations without stopping the interface.
 Use **Ingest & Storage** in the interface for the same control and its **Local operations** view:
@@ -151,6 +160,21 @@ It also cancels an explanation already generating. `salidium explanations when-d
 - **Verified** comes from actual test, build, typecheck, and lint output.
 - **Left** contains unfinished, failing, or unknown work.
 - **Review** calls out claims and actions that still need a person.
+
+The interactive session canvas at the top of a report adapts its layout (`salidium.canvas-spec/v1`)
+to observed session telemetry and repository dependency links:
+
+- **View** switches between **Overview** (system architecture and code map), **Steps**
+  (chronological execution sequence and verification matrix), and **Why & How** (attributed
+  narrative diagram).
+- **Detail** adjusts progressive disclosure across **Summary** (compact 3-card overview ribbon),
+  **Standard** (integrated `Code Map & Impact` topology with upstream imports, edited files, and
+  downstream dependents and tests), and **Full** (including AST resolver rules and line references).
+- **Customize** opens the canvas design inspector (`salidium.canvas-style/v1`), where you can adjust
+  layout direction (`Left to Right` or `Top to Bottom`), density (`Compact`, `Comfortable`,
+  `Spacious`), connector style (`Smooth Curves`, `Orthogonal Steps`, `Straight Lines`), surface and
+  border colors (guarded by automatic perceptual contrast checks across backdrop, container, and
+  card tiers), and block visibility, or share styles via **Export Style** and **Import Style**.
 
 Evidence opens coverage, checks, changes, activity, and the original local record. Rewind lifts the
 report to reveal one horizontal rail beneath it. Stable pastel bands distinguish recorded turns,
@@ -219,7 +243,17 @@ scan of every page in the file, which takes longer than the answer is worth.
 Two of the parts are worth knowing about. Replay checkpoints are derived state that makes a session
 open quickly, and `salidium storage optimize` rebuilds them more compactly. Reusable space is pages
 that deleted history has already freed inside the file but that have not gone back to the disk;
-`salidium retention compact` is what returns them.
+**Compact storage** in the panel or `salidium storage compact` coordinates a brief pause and returns
+them to the operating system.
+
+From the same storage panel (or from the CLI), you can preview and confirm what a deletion will
+remove before anything is deleted: the exact session count, event count, byte size, and date range.
+You can forget a single session from its toolbar (**Forget**) or with `salidium forget <id> --yes`,
+keep only the last 30, 90, or 365 days in **Local policy**, forget one project's history from its
+row in **Projects** or with `salidium storage forget --project <path> [--yes]`, or forget every
+session while keeping your settings, consumer credentials, and hook configuration with **Forget
+everything…** or `salidium storage forget --all [--yes]`. Every deletion records session tombstones
+and preserves source cursors so deleted transcripts are not re-imported.
 
 The measurement reads the header of every stored event, so it takes about ten seconds on a store of
 a few gigabytes. It is never run on a timer and never as part of health. The daemon runs it on a
@@ -419,7 +453,11 @@ it covered: a repository over its bounds (20,000 tracked entries) is refused, an
 read, or past the build's byte budget, is listed and counted as not parsed rather than silently
 skipped. A repository whose objects live outside its own git directory, through Git alternates, a
 `commondir` file or a symbolic link, is refused.
-The map's format is experimental and may change in any release.
+The map's format is experimental and may change in any release. When a repository is mapped, the
+**Overview** canvas lens (`Code Map & Impact`) on a session report and the **Where it sits** panel
+place the session's modified files into their declared modules and surface their direct dependency
+edges, co-modified imports, and Ring 1 (direct importer files) and Ring 2 (dependent modules)
+blast-radius neighbors.
 
 ## Commands
 
@@ -439,8 +477,11 @@ The map's format is experimental and may change in any release.
 | `salidium retention` | Preview or set local history retention. |
 | `salidium retention apply` | Apply one bounded cleanup batch while the daemon is stopped. |
 | `salidium retention compact` | Integrity-check and reclaim reusable database pages offline. |
-| `salidium storage` | Inspect the event layout and SQLite page size. |
+| `salidium storage` | Inspect total store size, reusable space, layout, and projects. |
 | `salidium storage composition` | Measure what is using the space, by part and by project. |
+| `salidium storage forget --project <path> [--yes]` | Preview or delete every stored session for one project. |
+| `salidium storage forget --all [--yes]` | Preview or delete all stored sessions while keeping settings and hooks. |
+| `salidium storage compact` | Coordinate a brief pause and return reusable SQLite pages to disk. |
 | `salidium config show` / `set` / `reset` | Inspect or change versioned policy with effective-value sources. |
 | `salidium maintenance queue` / `drain` | Inspect bounded queue metadata or drain durable work safely. |
 | `salidium maintenance optimize [--dry-run]` | Preflight or run the coordinated verified storage workflow. |

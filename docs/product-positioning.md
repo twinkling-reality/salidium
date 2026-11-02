@@ -50,6 +50,17 @@ npm serves the description of the last published version, so between releases th
 be ahead of what npm shows. That is release lag rather than drift, the next publish resolves it,
 and it is not to be corrected by changing the packages back.
 
+## Core product framing: intelligent and personal
+
+Salidium is the most intelligent and personal surface to understand agentic work:
+
+1. **Intelligent**: Grounded in deterministic session telemetry (`@salidium/core`) and static AST
+   dependency and blast-radius analysis (`@salidium/project-map`), automatically adapting layout
+   hierarchy and column structure to observed session state (`salidium.canvas-spec/v1`).
+2. **Personal**: Every developer controls both cognitive granularity (`View`: `Overview` / `Steps` /
+   `Why & How`, `Detail`: `Summary` / `Standard` / `Full`, and per-block visibility) and visual
+   presentation (`salidium.canvas-style/v1`) without gimmick preset names or raw parser jargon.
+
 ## Communication order
 
 Lead public entry points in this order:

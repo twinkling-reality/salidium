@@ -1,15 +1,17 @@
 import {
+  formatBytes,
   ownEntry,
   type SessionView as ProjectedSessionView,
   projectSession,
   type RunState,
   reviveState,
 } from '@salidium/core';
+import type { StorageDeletionPreview } from '@salidium/protocol';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLiveSession } from '../hooks/useLiveSession.ts';
 import { activeExplanationCadence, activeExplanationMode } from '../lib/explanationMode.ts';
 import { relativeTime, shortHome, shortPath, timeOfDay } from '../lib/format.ts';
-import { providerLabel } from '../lib/providerLabel.ts';
+import { entrypointMeta, providerIcon, providerLabel } from '../lib/providerLabel.ts';
 import { downloadSessionExport } from '../lib/sessionExport.ts';
 import { useFootSpace } from '../lib/useFootSpace.ts';
 import { useScrollState } from '../lib/useScrollState.ts';
@@ -19,6 +21,7 @@ import { BrandMark } from './Brand.tsx';
 import { ConnectionBadge, DOCS, ThemeToggle, ToolButton, ToolLink } from './Controls.tsx';
 import { HistoryRail } from './HistoryRail.tsx';
 import { HistoryTable } from './HistoryTable.tsx';
+import { Icon } from './Icon.tsx';
 import { IngestStorageRail } from './IngestStorage.tsx';
 import { Loading } from './Loading.tsx';
 import { Panel, type PanelSection } from './Panel.tsx';
@@ -27,12 +30,13 @@ import {
   EvidenceChecks,
   EvidenceCoverage,
   EvidenceHappened,
-  Explained,
   StatusColumn,
   VerdictBadge,
 } from './Report.tsx';
+import { SessionCanvas } from './SessionCanvas.tsx';
 import { statusGlyph } from './SessionList.tsx';
 import { ExplanationSettings } from './Settings.tsx';
+import { formatDeletionRange } from './StorageComposition.tsx';
 import { Timeline } from './Timeline.tsx';
 import { WhereItSitsPanel } from './WhereItSitsPanel.tsx';
 
@@ -84,6 +88,11 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
     'personalized',
   );
   const [personalizerOpen, setPersonalizerOpen] = useState(false);
+  const [forgetOpen, setForgetOpen] = useState(false);
+  const [forgetPreview, setForgetPreview] = useState<StorageDeletionPreview>();
+  const [forgetting, setForgetting] = useState(false);
+  const [forgetError, setForgetError] = useState<string>();
+  const forgetSession = useAppStore((s) => s.forgetSession);
   const ingestTriggerRef = useRef<HTMLButtonElement>(null);
   const rewindTriggerRef = useRef<HTMLButtonElement>(null);
   const contentRef = useScrollState<HTMLDivElement>();
@@ -108,6 +117,26 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
   useEffect(() => {
     if (live?.scrub?.seq !== undefined) setPersonalizerOpen(false);
   }, [live?.scrub?.seq]);
+
+  useEffect(() => {
+    if (!forgetOpen || !api) {
+      setForgetPreview(undefined);
+      setForgetError(undefined);
+      return;
+    }
+    let cancelled = false;
+    void api
+      .previewStorageDeletion({ kind: 'session', sessionId })
+      .then((preview) => {
+        if (!cancelled) setForgetPreview(preview);
+      })
+      .catch(() => {
+        if (!cancelled) setForgetPreview(undefined);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [forgetOpen, api, sessionId]);
 
   const liveState: RunState | undefined = live?.state;
   const scrubState: RunState | undefined = live?.scrub?.state;
@@ -338,35 +367,18 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
                 <ToolButton
                   icon="table"
                   label="Evidence"
-                  title="Coverage, checks over time, what changed, what happened when"
+                  title="Coverage, checks over time, modified files, and turn-by-turn activity"
                   onClick={() => openPanel('evidence')}
                 />
               )}
               {liveView.changes.files.length > 0 && (
                 <ToolButton
                   icon="where"
-                  label="Where it sits"
-                  title="Place the changed files in the codebase: their modules, what they import and what imports them"
+                  label="Project Map"
+                  title="Committed module membership, dependency edges, and blast-radius neighbors"
                   onClick={() => openPanel('where')}
                 />
               )}
-              <ToolButton
-                icon="save"
-                label="Export"
-                title="Save this report as JSON without raw provider records"
-                onClick={() =>
-                  downloadSessionExport(
-                    {
-                      id: sessionId,
-                      provider: liveState.provider,
-                      title: liveState.title || summary?.title || liveState.cwd,
-                      cwd: liveState.cwd,
-                      ...(liveState.model ? { model: liveState.model } : {}),
-                    },
-                    liveView,
-                  )
-                }
-              />
               <ToolButton
                 icon="latest"
                 label="Rewind"
@@ -374,8 +386,15 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
                 controls="rewind-tray"
                 expanded={rewindOpen}
                 buttonRef={rewindTriggerRef}
-                title="Show the session as it stood at a moment in time"
+                title="Inspect the session at an earlier point in time"
                 onClick={toggleRewind}
+              />
+              <ToolButton
+                icon="history"
+                label="History"
+                on={historyMode !== 'off'}
+                title="Toggle history (h)"
+                onClick={toggleHistory}
               />
               <ToolButton
                 icon="stats"
@@ -413,11 +432,27 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
                 />
               )}
               <ToolButton
-                icon="history"
-                label="History"
-                on={historyMode !== 'off'}
-                title="Toggle history (h)"
-                onClick={toggleHistory}
+                icon="save"
+                label="Export"
+                title="Export session report as JSON without raw provider records"
+                onClick={() =>
+                  downloadSessionExport(
+                    {
+                      id: sessionId,
+                      provider: liveState.provider,
+                      title: liveState.title || summary?.title || liveState.cwd,
+                      cwd: liveState.cwd,
+                      ...(liveState.model ? { model: liveState.model } : {}),
+                    },
+                    liveView,
+                  )
+                }
+              />
+              <ToolButton
+                icon="trash"
+                on={forgetOpen}
+                title="Delete Session"
+                onClick={() => setForgetOpen((open) => !open)}
               />
               {/*
                * The product's route to its own documentation, and for most of a session's life the
@@ -482,28 +517,89 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
                       {st.label}
                       {view.strip.statusSince && ` ${relativeTime(view.strip.statusSince, now)}`}
                     </span>
-                    <span className="tag masthead-path" title={state.cwd}>
-                      <span className="tag-key">in</span>
-                      <span className="mono">{shortHome(shortPath(state.cwd))}</span>
+                    <span className="tag has-ico masthead-path" title={state.cwd}>
+                      <Icon name="folder" />
+                      <span className="tag-key">path</span>
+                      <span className="mono masthead-path-value">
+                        <bdi>{shortHome(shortPath(state.cwd))}</bdi>
+                      </span>
                     </span>
                     {state.gitBranch && (
-                      <span className="tag">
+                      <span className="tag has-ico">
+                        <Icon name="branch" />
                         <span className="tag-key">branch</span>
                         <span className="mono">{state.gitBranch}</span>
                       </span>
                     )}
-                    <span className={`tag is-${state.provider}`}>
+                    {(() => {
+                      const ep = entrypointMeta(state.entrypoint ?? summary?.entrypoint);
+                      return ep ? (
+                        <span className="tag has-ico">
+                          <Icon name={ep.icon} />
+                          <span className="tag-key">surface</span>
+                          <span>{ep.label}</span>
+                        </span>
+                      ) : null;
+                    })()}
+                    <span className={`tag has-ico is-${state.provider}`}>
+                      <Icon name={providerIcon(state.provider)} />
                       <span className="tag-key">agent</span>
                       {providerLabel(state.provider)}
                     </span>
                     {state.model && (
-                      <span className="tag">
+                      <span className="tag has-ico">
+                        <Icon name="model" />
                         <span className="tag-key">model</span>
                         <span className="mono">{state.model}</span>
                       </span>
                     )}
                   </p>
                   <VerdictBadge verdict={view.verdict} strip={view.strip} onOpen={openPanel} />
+                  {forgetOpen && (
+                    <div className="operations-retention-confirm" role="alert">
+                      <p>
+                        Permanently delete this session
+                        {forgetPreview && forgetPreview.sessions > 0 ? (
+                          <>
+                            {' '}
+                            ({forgetPreview.eventCount.toLocaleString()}{' '}
+                            {forgetPreview.eventCount === 1 ? 'event' : 'events'},{' '}
+                            {formatBytes(forgetPreview.bytes)}
+                            {formatDeletionRange(forgetPreview.oldestAt, forgetPreview.newestAt)
+                              ? `, ${formatDeletionRange(forgetPreview.oldestAt, forgetPreview.newestAt)}`
+                              : ''}
+                            )
+                          </>
+                        ) : null}{' '}
+                        from the local store? This cannot be undone, and a tombstone prevents the
+                        transcript from being re-imported.
+                      </p>
+                      {forgetError && <p>{forgetError}</p>}
+                      <button
+                        type="button"
+                        className="btn is-confirm"
+                        disabled={forgetting}
+                        onClick={() => {
+                          setForgetting(true);
+                          setForgetError(undefined);
+                          void forgetSession(sessionId).catch((err) => {
+                            setForgetting(false);
+                            setForgetError(err instanceof Error ? err.message : String(err));
+                          });
+                        }}
+                      >
+                        {forgetting ? 'Deleting…' : 'Delete 1 session'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn"
+                        disabled={forgetting}
+                        onClick={() => setForgetOpen(false)}
+                      >
+                        Keep session
+                      </button>
+                    </div>
+                  )}
                 </header>
 
                 {scrubSeq !== undefined && (
@@ -514,33 +610,30 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
                   </p>
                 )}
 
-                {displayedExplanation ? (
-                  <Explained
-                    ex={displayedExplanation}
-                    sessionId={sessionId}
-                    personalized={showingPersonalized}
-                    analogies={
-                      showingPersonalized ? personalizedPresentation?.analogies : undefined
-                    }
-                    hasAlternate={personalized}
-                    onToggleVersion={
-                      personalized
-                        ? () =>
-                            setExplanationVersion(showOriginalTerms ? 'personalized' : 'original')
-                        : undefined
-                    }
-                    personalizerOpen={personalizerOpen}
-                    onClosePersonalizer={() => setPersonalizerOpen(false)}
-                    personalizationNote={personalization?.profile.guidance}
-                    hasCurrentPresentation={personalized}
-                  />
-                ) : (
-                  <ExplanationPending
-                    turns={view.turns.length}
-                    status={summary?.explanationStatus}
-                    cadence={explanationCadence}
-                  />
-                )}
+                <SessionCanvas
+                  view={view}
+                  sessionId={sessionId}
+                  provider={state.provider}
+                  entrypoint={state.entrypoint ?? summary?.entrypoint}
+                  cwd={state.cwd}
+                  displayedExplanation={displayedExplanation}
+                  showingPersonalized={showingPersonalized}
+                  analogies={showingPersonalized ? personalizedPresentation?.analogies : undefined}
+                  hasAlternate={personalized}
+                  onToggleVersion={
+                    personalized
+                      ? () => setExplanationVersion(showOriginalTerms ? 'personalized' : 'original')
+                      : undefined
+                  }
+                  personalizerOpen={personalizerOpen}
+                  onClosePersonalizer={() => setPersonalizerOpen(false)}
+                  personalizationNote={personalization?.profile.guidance}
+                  hasCurrentPresentation={personalized}
+                  explanationStatus={summary?.explanationStatus}
+                  explanationCadence={explanationCadence}
+                  linksChangedKey={whereKey(liveState)}
+                  onRef={onRef}
+                />
 
                 {/*
                  * Nothing else lives in the page. The report and the timeline are opened from the
@@ -582,10 +675,10 @@ export function SessionView({ sessionId, now }: { sessionId: string; now: number
         <Panel id="checks" title="Verified">
           <StatusColumn which="checks" view={view} onRef={onRef} />
         </Panel>
-        <Panel id="left" title="Left">
+        <Panel id="left" title="Remaining">
           <StatusColumn which="left" view={view} onRef={onRef} />
         </Panel>
-        <Panel id="review" title="Needs you">
+        <Panel id="review" title="Review">
           <StatusColumn which="review" view={view} onRef={onRef} />
         </Panel>
         {/*
@@ -710,80 +803,6 @@ function ModelsUsageRail({
         />
       </div>
     </aside>
-  );
-}
-
-/**
- * The explanation is the page. When there is not one yet, say which of the three reasons applies
- * rather than showing one progress state for all of them — the daemon reports whether a call is
- * actually in flight, and animating a call that finished and returned nothing is a lie the reader
- * cannot catch. An activity chart in this slot is the telemetry dashboard this product replaces.
- */
-function ExplanationPending({
-  turns,
-  status,
-  cadence,
-}: {
-  turns: number;
-  status: 'generating' | 'generated' | 'disabled' | 'unavailable' | 'failed' | undefined;
-  cadence: 'off' | 'session' | 'turn' | undefined;
-}) {
-  if (turns === 0)
-    return (
-      <section className="ex-pending" role="status">
-        <p>Nothing has happened in this session yet.</p>
-      </section>
-    );
-  if (status === 'generating')
-    return (
-      <section className="ex-pending is-running" role="status">
-        <p className="ex-pending-main">
-          <Loading label="Reading the session" size="md" />
-        </p>
-        <p>
-          Your selected agent is writing from a bounded, redacted summary of the session. It takes a
-          few seconds, then the explanation is cached.
-        </p>
-      </section>
-    );
-  if (status === 'disabled')
-    return (
-      <section className="ex-pending" role="status">
-        <p className="ex-pending-main">No model-written Why or How.</p>
-        <p>Local only makes no model calls. Change it in Models &amp; Usage.</p>
-      </section>
-    );
-  if (status === 'unavailable')
-    return (
-      <section className="ex-pending" role="status">
-        <p className="ex-pending-main">No explanation for this session.</p>
-        <p>
-          No compatible Claude Code or Codex command is available, so nothing was sent. Observed
-          facts are still available in Evidence.
-        </p>
-      </section>
-    );
-  if (status === 'failed')
-    return (
-      <section className="ex-pending" role="status">
-        <p className="ex-pending-main">No explanation for this session.</p>
-        <p>
-          The selected agent was asked but returned no usable structured explanation. Observed facts
-          are still available in Evidence; the next turn will try again.
-        </p>
-      </section>
-    );
-  return (
-    <section className="ex-pending" role="status">
-      <p className="ex-pending-main">No explanation yet.</p>
-      <p>
-        {cadence === 'session'
-          ? 'One is written after this session ends or goes quiet.'
-          : cadence === 'turn'
-            ? 'One is written after the agent finishes its next reply.'
-            : 'Choose when to write one in Models & Usage.'}
-      </p>
-    </section>
   );
 }
 

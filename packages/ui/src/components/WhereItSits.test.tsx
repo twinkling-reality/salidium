@@ -212,13 +212,25 @@ describe('WhereItSits', () => {
     expect(out).toContain('Salidium has not been allowed to read this repository, so it has not.');
   });
 
-  it('says how to opt a repository in, quoted to paste', () => {
+  it('says how to opt a repository in, quoted to paste, and offers a one-click allow control when wired', () => {
     const out = text(render(sample()));
     expect(out).toContain("salidium map allow '/work/other repo'");
     expect(out).toContain("salidium map revoke '/work/other repo'");
     expect(out).toContain('never your working tree');
     expect(shellWord('/work/acme')).toBe('/work/acme');
     expect(shellWord("/work/it's")).toBe(`'/work/it'\\''s'`);
+    const withButton = text(
+      renderToStaticMarkup(
+        <WhereItSits
+          links={sample()}
+          widened={false}
+          onWiden={() => {}}
+          onRetry={() => {}}
+          onAllowRepository={() => {}}
+        />,
+      ),
+    );
+    expect(withButton).toContain('Allow this repository');
   });
 
   it('says why a repository has no map, and never claims a revision it did not see', () => {

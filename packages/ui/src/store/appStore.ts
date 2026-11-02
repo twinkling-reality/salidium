@@ -13,226 +13,132 @@ import type {
   SemanticChange,
   SessionList,
   SessionSummary,
+  StorageCompactResult,
+  StorageDeletionResult,
+  StorageDeletionScope,
   StoredEvent,
 } from '@salidium/protocol';
 import { create } from 'zustand';
 import { ApiClient, clearToken } from '../api/client.ts';
+import {
+  type CanvasStyleConfig,
+  DEFAULT_CANVAS_STYLE_CONFIG,
+  loadCanvasStyleConfig,
+  saveCanvasStyleConfig,
+} from '../lib/visualPresets.ts';
+import {
+  ALL_FACETS,
+  byTime,
+  type ConnectionStatus,
+  collectionFromOperations,
+  errorMessage,
+  type LiveError,
+  type LiveSession,
+  merged,
+  type OperationsAction,
+  type SessionSearch,
+  sortIds,
+} from './sessionStoreHelpers.ts';
+import {
+  applyTheme,
+  CANVAS_BLAST_KEY,
+  CANVAS_DENSITY_KEY,
+  CANVAS_LENS_KEY,
+  CANVAS_STYLE_KEY,
+  CANVAS_VERIF_KEY,
+  type CanvasDensity,
+  type CanvasLens,
+  type CanvasStyle,
+  DETAIL_KEY,
+  type Detail,
+  type HistoryMode,
+  INGEST_KEY,
+  type PanelId,
+  REWIND_KEY,
+  SIDE_FOLDS_KEY,
+  SIDEBAR_KEY,
+  STATS_KEY,
+  storageGet,
+  storageSet,
+  storedCanvasDensity,
+  storedCanvasLens,
+  storedCanvasStyle,
+  storedDetail,
+  storedFolds,
+  storedTheme,
+  THEME_KEY,
+  type Theme,
+} from './storagePreferences.ts';
 
-/** Every kind of change the log records, in the order the rail and the table list them. */
-export const ALL_FACETS: Facet[] = ['status', 'what', 'why', 'how', 'verified', 'left', 'review'];
-
-export type ConnectionStatus = 'connecting' | 'open' | 'reconnecting' | 'closed';
-
-export type OperationsAction = 'collection' | 'policy' | 'reset' | 'drain' | 'alert' | 'disconnect';
-
-/** Why a session's snapshot could not be loaded; rendered in place of the session. */
-export interface LiveError {
-  kind: 'not-found' | 'unreachable' | 'failed';
-  message: string;
-}
-
-export interface LiveSession {
-  state: RunState;
-  /** Bumped whenever `state` was mutated by the reducer; components key memoization on it. */
-  revision: number;
-  changes: SemanticChange[];
-  connection: ConnectionStatus;
-  error?: string;
-  /** History scrubbing: state as of a past moment (undefined = live). */
-  scrub?: { ts: string; seq: number; state: RunState; loading: boolean };
-  /** Sequence number when the user last looked at this session (for "since you looked"). */
-  lastSeenSeq: number;
-}
-
-/**
- * What the daemon answered for a query: which sessions matched, how many matched, and how many
- * were searched.
- *
- * Kept apart from `sessions` because they are different things. `sessions` is everything this
- * client has been told about, which the summary stream adds to continuously; this is one answer to
- * one question, and a session that changed while you were typing may not belong in a list it does
- * not match. It carries the query it answers so a result cannot be shown against newer typing.
- */
-export interface SessionSearch {
-  /** Trimmed, as it was sent. */
-  query: string;
-  /** Matched ids in the daemon's order, or undefined for the default view, which is not a search. */
-  ids: string[] | undefined;
-  /** How many user sessions matched over the whole store. `ids` is the newest page of them. */
-  matched: number;
-  /**
-   * How many user sessions the store holds. Independent of the query — it is what was searched —
-   * so it stays true while newer typing is still in flight.
-   */
-  total: number;
-}
-
-/**
- * One control, concrete ends, and semantic depth rather than verbosity:
- * 0 = Summary (the explanation), 1 = Detail (what the evidence shows), 2 = Source (the evidence).
- */
-export type Detail = 0 | 1 | 2;
-
-const DETAIL_KEY = 'salidium.detail';
-const SIDEBAR_KEY = 'salidium.sidebar';
-const THEME_KEY = 'salidium.theme';
-const STATS_KEY = 'salidium.stats';
-const INGEST_KEY = 'salidium.ingest';
-const REWIND_KEY = 'salidium.rewind';
-const SIDE_FOLDS_KEY = 'salidium.sideFolds';
-
-/** The one group whose name the store has to know, because it is the one folded by default. */
-export const NOTHING_RECORDED = 'Nothing recorded';
-
-/**
- * Which group heads in the session list are folded away.
- *
- * Stored as a list of the group's own name rather than a flag per group, so a group added later
- * starts open without a migration, and "Nothing recorded" — the one group that was always folded
- * by default — keeps that default by being the seed value.
- */
-function storedFolds(): string[] {
-  const raw = localStorage.getItem(SIDE_FOLDS_KEY);
-  if (raw === null) return [NOTHING_RECORDED];
-  try {
-    const v: unknown = JSON.parse(raw);
-    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Where the change log is shown. The rail is for glancing while you read the page; the table is
- * for actually working through a long one, which a 320 px column is a poor place to do.
- */
-export type HistoryMode = 'off' | 'rail' | 'table';
-
-/** `system` follows the OS; the other two pin it. Stored, because a theme that resets is a bug. */
-export type Theme = 'system' | 'light' | 'dark';
-
-/**
- * The stylesheet reads `[data-theme]`, and its absence means "follow `prefers-color-scheme`".
- * Applied at module load rather than in an effect so the first paint is already correct.
- */
-function applyTheme(theme: Theme): void {
-  if (theme === 'system') delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = theme;
-}
-
-function storedTheme(): Theme {
-  const t = localStorage.getItem(THEME_KEY);
-  return t === 'light' || t === 'dark' ? t : 'system';
-}
-
-/**
- * The explanation alone, unless a level was actually chosen.
- *
- * It opened one stop deeper, which meant the first thing a new reader met was several screens of
- * evidence with the diagram sharing the page with blocks nobody asked for yet. At this stop the
- * title, verdict, one sentence, and diagrams lead. Every other stop is one press away and is remembered once
- * chosen, so nothing is lost — it is the *first* impression that is being decided here, and the
- * answer to "what is this" should be the picture, not the appendix.
- *
- * Matching the strings rather than `Number(stored) || 0` is deliberate: with the default at 0,
- * `||` would now silently swallow a stored choice of `Explanation` *and* leave `Number(null)`
- * indistinguishable from it. The bug this file used to have simply changes which value it eats.
- */
-function storedDetail(): Detail {
-  const d = localStorage.getItem(DETAIL_KEY);
-  if (d === '1') return 1;
-  if (d === '2') return 2;
-  return 0;
-}
+export {
+  ALL_FACETS,
+  byTime,
+  type ConnectionStatus,
+  type LiveError,
+  type LiveSession,
+  type OperationsAction,
+  type SessionSearch,
+} from './sessionStoreHelpers.ts';
+export {
+  type CanvasDensity,
+  type CanvasLens,
+  type CanvasStyle,
+  type Detail,
+  type HistoryMode,
+  NOTHING_RECORDED,
+  type PanelId,
+  type Theme,
+} from './storagePreferences.ts';
 
 applyTheme(storedTheme());
-
-/** The section summoned over the page. Nothing is a section of the document any more. */
-export type PanelId = 'checks' | 'left' | 'review' | 'evidence' | 'where';
 
 interface AppState {
   api: ApiClient | undefined;
   detail: Detail;
-  /** Which section is open over the document, if any. */
   panel: PanelId | undefined;
   openPanel(panel: PanelId): void;
   closePanel(): void;
-  /** The session list is a surface you choose, not furniture; it folds away and stays folded. */
   sidebarOpen: boolean;
-  /** Models and measured usage, in the supporting inspector shared with History. */
   statsOpen: boolean;
-  /** Local collection cost and controls in the same supporting inspector slot. */
   ingestOpen: boolean;
-  /**
-   * The time scrubber, at the foot of the session rather than inside a section of a panel.
-   *
-   * It replays the whole page as it stood at a moment, so it is a control over the document and
-   * not a picture in one of its sections. Buried in a panel it was unfindable and then
-   * disorienting: dragging it changed the page underneath while the reader's eye was inside a
-   * drawer, so they arrived somewhere new with the control they had just used no longer in view.
-   */
+  ingestFocus: 'storage' | 'operations' | undefined;
   rewindOpen: boolean;
   toggleRewind(): void;
-  /**
-   * Find-as-you-type over the session list, matched against the name, the repo and the id.
-   *
-   * Not stored, unlike every other choice in this file. A fold or a theme is a preference; a
-   * filter is a question you are asking right now, and one that survived a reload would answer
-   * the next one by hiding most of the panel with no memory of why.
-   */
   sessionQuery: string;
-  /** The daemon's answer for the last query it was asked; undefined until the first reply. */
   sessionSearch: SessionSearch | undefined;
-  /** Group heads folded away in the session list, by name. Remembered. */
   folded: string[];
   historyMode: HistoryMode;
-  /** Which kinds of change the history shows, shared by both of its views. */
   historyKinds: Facet[];
   theme: Theme;
+  canvasLens: CanvasLens;
+  canvasStyle: CanvasStyle;
+  canvasDensity: CanvasDensity;
+  canvasBlastRadius: boolean;
+  canvasVerification: boolean;
+  canvasStyleConfig: CanvasStyleConfig;
   sessions: Record<string, SessionSummary>;
   sessionOrder: string[];
   sessionsLoaded: boolean;
   listConnection: ConnectionStatus;
   selectedId: string | undefined;
   live: Record<string, LiveSession>;
-  /** Snapshot load failures, per session (cleared when a snapshot succeeds). */
   liveErrors: Record<string, LiveError | undefined>;
   rawOpen: { sessionId: string; eventId: string } | undefined;
-  /**
-   * What the explainer will use and when it runs, as the daemon last reported it. Undefined until
-   * it answers.
-   *
-   * Not stored in localStorage like the other choices in this file, and that is the whole point:
-   * this one is not the browser's. The daemon does the scheduling, so the daemon holds the answer,
-   * and a copy kept here would be the one a second tab disagreed with.
-   */
   explainer: ExplainerSettings | undefined;
-  /** One versioned daemon-owned model for health, policy, maintenance, and local alerts. */
   operations: OperationsOverview | undefined;
   collection: CollectionStatus | undefined;
   collectionInfo: DaemonInfo | undefined;
   collectionLoading: boolean;
   collectionError: string | undefined;
-  /** The one explicit operations mutation in flight; mutations are serialized per tab. */
   operationsPending: OperationsAction | undefined;
-  /** Mutation failures persist across background health polls until the next explicit action. */
   operationsActionError: string | undefined;
-  /** Daemon-owned and independently deletable; never copied into browser storage. */
   personalization: PersonalizationSettings | undefined;
   personalizationLoading: boolean;
   personalizationLoadError: string | undefined;
-  /** Presentation-only results for this tab. Never persisted or folded into session state. */
   personalized: Record<string, PersonalizedExplanation | undefined>;
-  /*
-   * The message, and whether it means the daemon is not answering at all. The banner used to hold
-   * only the string, so it printed `daemon unreachable (Failed to fetch)` with no instruction, and
-   * could not have offered one without guessing at the cause.
-   */
   daemonError: { message: string; unreachable: boolean } | undefined;
-  /** The daemon rejected the stored token; the gate explains how to get a fresh one. */
   authRejected: boolean;
 
-  /** Builds the client for a token; a 401 anywhere drops the token and returns to the gate. */
   setToken(token: string): void;
   unauthorized(): void;
   setDetail(detail: Detail): void;
@@ -244,6 +150,13 @@ interface AppState {
   acknowledgeAlert(id: string): Promise<void>;
   setCollection(action: 'pause' | 'resume'): Promise<void>;
   disconnectHooks(provider: string): Promise<void>;
+  connectHooks(provider: string): Promise<void>;
+  forgetSession(sessionId: string): Promise<void>;
+  deleteStorage(
+    scope: StorageDeletionScope,
+    expectedSessions?: number,
+  ): Promise<StorageDeletionResult>;
+  compactStorage(): Promise<StorageCompactResult>;
   loadPersonalization(): void;
   setExplainerSettings(settings: ExplainerSettingsRequest): void;
   savePersonalization(settings: PersonalizationSettingsRequest): Promise<void>;
@@ -252,12 +165,21 @@ interface AppState {
   toggleSidebar(): void;
   toggleStats(): void;
   toggleIngest(): void;
+  openIngest(focus?: 'storage' | 'operations'): void;
+  clearIngestFocus(): void;
   setSessionQuery(q: string): void;
   setSessionSearch(result: SessionList): void;
   toggleFold(group: string): void;
   setHistoryMode(mode: HistoryMode): void;
   setHistoryKinds(kinds: Facet[]): void;
   setTheme(theme: Theme): void;
+  setCanvasLens(lens: CanvasLens): void;
+  setCanvasStyle(style: CanvasStyle): void;
+  setCanvasDensity(density: CanvasDensity): void;
+  toggleCanvasBlastRadius(): void;
+  toggleCanvasVerification(): void;
+  updateCanvasStyleConfig(patch: Partial<CanvasStyleConfig>): void;
+  resetCanvasStyleConfig(): void;
   upsertSessions(list: SessionSummary[]): void;
   removeSession(id: string): void;
   select(id: string | undefined): void;
@@ -273,102 +195,32 @@ interface AppState {
   closeRaw(): void;
 }
 
-/** History is displayed in wall-clock order; seq breaks ties (multi-source ingest can be out of order). */
-export function byTime(a: SemanticChange, b: SemanticChange): number {
-  return a.ts.localeCompare(b.ts) || a.seq - b.seq || a.ordinal - b.ordinal;
-}
-
 /** Invalidates older profile reads when a write, reconnect, or newer read overtakes them. */
 let personalizationLoadGeneration = 0;
 /** Invalidates older operations reads when a mutation, reconnect, or newer read overtakes them. */
 let operationsLoadGeneration = 0;
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-/**
- * Salidium's own enrichment runs are agent sessions too. The daemon filters them, but a session's
- * opening summary has no title yet, so one can arrive before it is knowable — and once listed it
- * would never be corrected. Drop it here as well, and evict any that reveal themselves later.
- */
-function merged(
-  current: Record<string, SessionSummary>,
-  list: SessionSummary[],
-): Record<string, SessionSummary> {
-  const sessions = { ...current };
-  for (const item of list) {
-    if (item.internal || item.title?.includes('[salidium-explainer]')) {
-      delete sessions[item.id];
-      continue;
-    }
-    sessions[item.id] = item;
-  }
-  return sessions;
-}
-
-function sortIds(sessions: Record<string, SessionSummary>): string[] {
-  return Object.values(sessions)
-    .sort((a, b) =>
-      (b.lastEventAt ?? b.startedAt ?? '').localeCompare(a.lastEventAt ?? a.startedAt ?? ''),
-    )
-    .map((s) => s.id);
-}
-
-/** Compatibility view for the few existing collection controls; health itself is not recomputed. */
-function collectionFromOperations(operations: OperationsOverview): CollectionStatus {
-  const health = operations.health;
-  return {
-    observedAt: health.observedAt,
-    state: health.collection.state,
-    pause:
-      health.collection.pausedAt &&
-      health.collection.pauseExpiresAt &&
-      health.collection.pauseReason
-        ? {
-            pausedAt: health.collection.pausedAt,
-            expiresAt: health.collection.pauseExpiresAt,
-            reason: health.collection.pauseReason,
-          }
-        : null,
-    queue: {
-      files: health.queue.files ?? 0,
-      bytes: health.queue.bytes ?? 0,
-      oldestAt: health.queue.oldestAt,
-    },
-    store: {
-      bytes: health.store.totalBytes,
-      retention: health.store.retention,
-      lastIngestAt: health.store.lastIngestAt,
-    },
-    health:
-      health.overall === 'critical'
-        ? 'runaway'
-        : health.overall === 'attention'
-          ? 'attention'
-          : 'healthy',
-    gaps: {
-      active: health.gaps.activeEpisodes,
-      recovered: health.gaps.recoveredEpisodes,
-      omittedEpisodes: health.gaps.omitted,
-    },
-  };
-}
-
 export const useAppStore = create<AppState>((set, get) => ({
   api: undefined,
   detail: storedDetail(),
   panel: undefined,
-  sidebarOpen: localStorage.getItem(SIDEBAR_KEY) !== '0',
-  statsOpen: localStorage.getItem(STATS_KEY) === '1',
-  ingestOpen: localStorage.getItem(INGEST_KEY) === '1',
-  rewindOpen: localStorage.getItem(REWIND_KEY) === '1',
+  sidebarOpen: storageGet(SIDEBAR_KEY) !== '0',
+  statsOpen: storageGet(STATS_KEY) === '1',
+  ingestOpen: storageGet(INGEST_KEY) === '1',
+  ingestFocus: undefined,
+  rewindOpen: storageGet(REWIND_KEY) === '1',
   sessionQuery: '',
   sessionSearch: undefined,
   folded: storedFolds(),
   historyMode: 'off',
   historyKinds: [...ALL_FACETS],
   theme: storedTheme(),
+  canvasLens: storedCanvasLens(),
+  canvasStyle: storedCanvasStyle(),
+  canvasDensity: storedCanvasDensity(),
+  canvasBlastRadius: storageGet(CANVAS_BLAST_KEY) !== '0',
+  canvasVerification: storageGet(CANVAS_VERIF_KEY) !== '0',
+  canvasStyleConfig: loadCanvasStyleConfig(),
   sessions: {},
   sessionOrder: [],
   sessionsLoaded: false,
@@ -441,15 +293,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
   setDetail: (detail) => {
-    localStorage.setItem(DETAIL_KEY, String(detail));
+    storageSet(DETAIL_KEY, String(detail));
     set({ detail });
   },
   loadExplainer: () => {
     const api = get().api;
     if (!api) return;
-    // Silent on failure. The stop is a preference on a surface nobody has opened yet; a daemon
-    // error banner raised by a background read would be reporting the wrong thing in the wrong
-    // place, and the panel simply shows nothing until an answer arrives.
     void api.explainerSettings().then(
       (explainer) => set({ explainer }),
       () => {},
@@ -457,8 +306,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   loadCollection: () => {
     const api = get().api;
-    // A mutation owns the current revision. Let it finish rather than launching a read that can
-    // capture the pre-mutation snapshot and later paint it over the accepted write.
     if (!api || get().operationsPending) return;
     const request = ++operationsLoadGeneration;
     if (!get().operations) set({ collectionLoading: true, collectionError: undefined });
@@ -581,8 +428,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       const alerts = await api.acknowledgeAlert(id);
       if (request === operationsLoadGeneration && api === get().api)
         set((state) => ({
-          // Merge into the latest overview rather than the snapshot captured before the request.
-          // A newer health/config update must survive an alert acknowledgement.
           operations: state.operations ? { ...state.operations, alerts } : state.operations,
           operationsPending: undefined,
         }));
@@ -613,6 +458,134 @@ export const useAppStore = create<AppState>((set, get) => ({
           operationsPending: undefined,
           operationsActionError: errorMessage(error),
         });
+    }
+  },
+  connectHooks: async (provider) => {
+    const api = get().api;
+    if (!api) {
+      set({ operationsActionError: 'daemon is not connected' });
+      return;
+    }
+    if (get().operationsPending) throw new Error('another operations action is still running');
+    const request = ++operationsLoadGeneration;
+    set({ operationsPending: 'connect', operationsActionError: undefined });
+    try {
+      const collection = await api.connectHooks(provider);
+      const collectionInfo = await api.info();
+      const operations = await api.operations();
+      if (request === operationsLoadGeneration && api === get().api)
+        set({ collection, operations, collectionInfo, operationsPending: undefined });
+    } catch (error) {
+      if (request === operationsLoadGeneration && api === get().api)
+        set({
+          operationsPending: undefined,
+          operationsActionError: errorMessage(error),
+        });
+    }
+  },
+  forgetSession: async (sessionId) => {
+    const api = get().api;
+    if (!api) throw new Error('daemon is not connected');
+    await api.deleteStorage({ kind: 'session', sessionId });
+    get().removeSession(sessionId);
+    if (get().operations) get().loadCollection();
+  },
+  deleteStorage: async (scope, expectedSessions) => {
+    const api = get().api;
+    if (!api) throw new Error('daemon is not connected');
+    if (get().operationsPending) throw new Error('another operations action is still running');
+    const request = ++operationsLoadGeneration;
+    set({ operationsPending: 'storage-delete', operationsActionError: undefined });
+    try {
+      const result = await api.deleteStorage(scope, expectedSessions);
+      const [operations, list] = await Promise.all([api.operations(), api.sessions()]);
+      if (request === operationsLoadGeneration && api === get().api) {
+        if (scope.kind === 'all') {
+          set({
+            sessions: {},
+            sessionOrder: [],
+            sessionSearch: undefined,
+            live: {},
+            liveErrors: {},
+            personalized: {},
+            selectedId: undefined,
+            rawOpen: undefined,
+            operations,
+            collection: collectionFromOperations(operations),
+            operationsPending: undefined,
+          });
+        } else {
+          const sessions = merged({}, list);
+          const sessionOrder = sortIds(sessions);
+          const live = Object.fromEntries(
+            Object.entries(get().live).filter(([id]) => Boolean(sessions[id])),
+          );
+          const liveErrors = Object.fromEntries(
+            Object.entries(get().liveErrors).filter(([id]) => Boolean(sessions[id])),
+          );
+          const personalized = Object.fromEntries(
+            Object.entries(get().personalized).filter(([id]) => Boolean(sessions[id])),
+          );
+          const prevSearch = get().sessionSearch;
+          const sessionSearch = prevSearch
+            ? {
+                ...prevSearch,
+                ids: prevSearch.ids?.filter((id) => Boolean(sessions[id])),
+              }
+            : undefined;
+          const prevRaw = get().rawOpen;
+          const rawOpen = prevRaw && sessions[prevRaw.sessionId] ? prevRaw : undefined;
+          const currentSelected = get().selectedId;
+          const selectedId =
+            currentSelected && sessions[currentSelected] ? currentSelected : sessionOrder[0];
+          set({
+            sessions,
+            sessionOrder,
+            sessionSearch,
+            live,
+            liveErrors,
+            personalized,
+            rawOpen,
+            selectedId,
+            operations,
+            collection: collectionFromOperations(operations),
+            operationsPending: undefined,
+          });
+        }
+      }
+      return result;
+    } catch (error) {
+      if (request === operationsLoadGeneration && api === get().api)
+        set({
+          operationsPending: undefined,
+          operationsActionError: errorMessage(error),
+        });
+      throw error;
+    }
+  },
+  compactStorage: async () => {
+    const api = get().api;
+    if (!api) throw new Error('daemon is not connected');
+    if (get().operationsPending) throw new Error('another operations action is still running');
+    const request = ++operationsLoadGeneration;
+    set({ operationsPending: 'storage-compact', operationsActionError: undefined });
+    try {
+      const result = await api.compactStorage();
+      const operations = await api.operations();
+      if (request === operationsLoadGeneration && api === get().api)
+        set({
+          operations,
+          collection: collectionFromOperations(operations),
+          operationsPending: undefined,
+        });
+      return result;
+    } catch (error) {
+      if (request === operationsLoadGeneration && api === get().api)
+        set({
+          operationsPending: undefined,
+          operationsActionError: errorMessage(error),
+        });
+      throw error;
     }
   },
   loadPersonalization: () => {
@@ -646,8 +619,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     const api = get().api;
     if (!api) return;
     const previous = get().explainer;
-    // Move the visible choice first so every control answers immediately. The daemon's complete
-    // reply then replaces it with resolved routes and environment locks from the authority.
     if (previous) set({ explainer: { ...previous, ...change } });
     void api.setExplainerSettings(change).then(
       (explainer) => set({ explainer }),
@@ -707,43 +678,91 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({ personalized: { ...state.personalized, [sessionId]: presentation } }));
   },
   setTheme: (theme) => {
-    localStorage.setItem(THEME_KEY, theme);
+    storageSet(THEME_KEY, theme);
     applyTheme(theme);
     set({ theme });
   },
+  setCanvasLens: (canvasLens) => {
+    storageSet(CANVAS_LENS_KEY, canvasLens);
+    set({ canvasLens });
+  },
+  setCanvasStyle: (canvasStyle) => {
+    storageSet(CANVAS_STYLE_KEY, canvasStyle);
+    set({ canvasStyle });
+  },
+  setCanvasDensity: (canvasDensity) => {
+    storageSet(CANVAS_DENSITY_KEY, canvasDensity);
+    set({ canvasDensity });
+  },
+  toggleCanvasBlastRadius: () =>
+    set((s) => {
+      const canvasBlastRadius = !s.canvasBlastRadius;
+      storageSet(CANVAS_BLAST_KEY, canvasBlastRadius ? '1' : '0');
+      return { canvasBlastRadius };
+    }),
+  toggleCanvasVerification: () =>
+    set((s) => {
+      const canvasVerification = !s.canvasVerification;
+      storageSet(CANVAS_VERIF_KEY, canvasVerification ? '1' : '0');
+      return { canvasVerification };
+    }),
+  updateCanvasStyleConfig: (patch) =>
+    set((s) => {
+      const canvasStyleConfig: CanvasStyleConfig = {
+        ...s.canvasStyleConfig,
+        ...patch,
+        sections: {
+          ...s.canvasStyleConfig.sections,
+          ...(patch.sections ?? {}),
+        },
+      };
+      saveCanvasStyleConfig(canvasStyleConfig);
+      return { canvasStyleConfig };
+    }),
+  resetCanvasStyleConfig: () =>
+    set(() => {
+      saveCanvasStyleConfig(DEFAULT_CANVAS_STYLE_CONFIG);
+      return { canvasStyleConfig: DEFAULT_CANVAS_STYLE_CONFIG };
+    }),
   toggleSidebar: () =>
     set((s) => {
       const sidebarOpen = !s.sidebarOpen;
-      localStorage.setItem(SIDEBAR_KEY, sidebarOpen ? '1' : '0');
+      storageSet(SIDEBAR_KEY, sidebarOpen ? '1' : '0');
       return { sidebarOpen };
     }),
   toggleRewind: () =>
     set((s) => {
       const rewindOpen = !s.rewindOpen;
-      localStorage.setItem(REWIND_KEY, rewindOpen ? '1' : '0');
+      storageSet(REWIND_KEY, rewindOpen ? '1' : '0');
       return { rewindOpen };
     }),
   toggleStats: () =>
     set((s) => {
       const statsOpen = !s.statsOpen;
-      localStorage.setItem(STATS_KEY, statsOpen ? '1' : '0');
-      if (statsOpen) localStorage.setItem(INGEST_KEY, '0');
+      storageSet(STATS_KEY, statsOpen ? '1' : '0');
+      if (statsOpen) storageSet(INGEST_KEY, '0');
       return { statsOpen, ...(statsOpen ? { ingestOpen: false } : {}) };
     }),
   toggleIngest: () =>
     set((s) => {
       const ingestOpen = !s.ingestOpen;
-      localStorage.setItem(INGEST_KEY, ingestOpen ? '1' : '0');
-      if (ingestOpen) localStorage.setItem(STATS_KEY, '0');
-      return { ingestOpen, ...(ingestOpen ? { statsOpen: false } : {}) };
+      storageSet(INGEST_KEY, ingestOpen ? '1' : '0');
+      if (ingestOpen) storageSet(STATS_KEY, '0');
+      return { ingestOpen, ingestFocus: undefined, ...(ingestOpen ? { statsOpen: false } : {}) };
     }),
+  openIngest: (focus) => {
+    storageSet(INGEST_KEY, '1');
+    storageSet(STATS_KEY, '0');
+    set({ ingestOpen: true, ingestFocus: focus, statsOpen: false, historyMode: 'off' });
+  },
+  clearIngestFocus: () => set({ ingestFocus: undefined }),
   setSessionQuery: (sessionQuery) => set({ sessionQuery }),
   toggleFold: (group) =>
     set((s) => {
       const folded = s.folded.includes(group)
         ? s.folded.filter((g) => g !== group)
         : [...s.folded, group];
-      localStorage.setItem(SIDE_FOLDS_KEY, JSON.stringify(folded));
+      storageSet(SIDE_FOLDS_KEY, JSON.stringify(folded));
       return { folded };
     }),
   setHistoryMode: (historyMode) => set({ historyMode }),
@@ -755,18 +774,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       const sessions = merged(s.sessions, list);
       return { sessions, sessionOrder: sortIds(sessions), sessionsLoaded: true };
     }),
-  /*
-   * A search's rows are folded into `sessions` as well as remembered as an answer. The list is
-   * capped, so a match can be a fortnight older than anything the default view holds; without this
-   * the row you clicked would vanish the moment you cleared the query, taking `selectedId` with it.
-   * They are only ever added — `sessionOrder` is the whole client's recency order, and the answer
-   * to the query is `ids`, which the panel reads instead while that query is the one on screen.
-   */
   setSessionSearch: (result) =>
     set((s) => {
-      // Responses can land out of order: a broad query issued two keystrokes ago is slower than the
-      // narrow one issued since, and repainting the list with it would show rows for a query the
-      // reader has already moved past. The abort catches most of them; this catches the rest.
       if (result.query !== s.sessionQuery.trim()) return {};
       const sessions = merged(s.sessions, result.sessions);
       return {
@@ -784,20 +793,34 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => {
       const sessions = { ...s.sessions };
       delete sessions[id];
+      const sessionOrder = sortIds(sessions);
       const live = { ...s.live };
       delete live[id];
+      const liveErrors = { ...s.liveErrors };
+      delete liveErrors[id];
+      const personalized = { ...s.personalized };
+      delete personalized[id];
+      const sessionSearch = s.sessionSearch
+        ? {
+            ...s.sessionSearch,
+            ids: s.sessionSearch.ids?.filter((item) => item !== id),
+          }
+        : undefined;
       return {
         sessions,
-        sessionOrder: sortIds(sessions),
+        sessionOrder,
+        sessionSearch,
         live,
-        selectedId: s.selectedId === id ? undefined : s.selectedId,
+        liveErrors,
+        personalized,
+        rawOpen: s.rawOpen?.sessionId === id ? undefined : s.rawOpen,
+        selectedId: s.selectedId === id ? sessionOrder[0] : s.selectedId,
       };
     }),
   select: (id) => set({ selectedId: id, rawOpen: undefined }),
   setListConnection: (listConnection) =>
     set((s) => ({
       listConnection,
-      // A healthy list stream proves the daemon is reachable again.
       daemonError:
         listConnection === 'open'
           ? undefined
@@ -819,8 +842,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       live: {
         ...s.live,
         [id]: {
-          // Events are folded into this state here, so its id-keyed records need the same
-          // protection the daemon's have.
           state: reviveState(state),
           revision: 1,
           changes: [...changes].sort(byTime),
@@ -841,7 +862,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     if (applied > 0 && changes.length === 0) cur.changes.sort(byTime);
     if (changes.length) {
-      // Prefer server-provided changes for exact ordinals; dedupe by seq+ordinal.
       const have = new Set(cur.changes.map((c) => `${c.seq}:${c.ordinal}`));
       for (const c of changes) if (!have.has(`${c.seq}:${c.ordinal}`)) cur.changes.push(c);
       cur.changes.sort(byTime);
