@@ -1,4 +1,4 @@
-export { codexAdapter, codexProvider } from './codexAdapter.ts';
+export { CODEX_EXTRA_HOMES_ENV, codexAdapter, codexHomes, codexProvider } from './codexAdapter.ts';
 export { buildCodexHooks, isSalidiumHook } from './hookConfig.ts';
 export {
   CODEX_HOOK_EVENT_BUDGET,

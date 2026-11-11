@@ -22,11 +22,15 @@ import { delimiter, join } from 'node:path';
  * The variables that redirect provider state away from a `userHome` a caller passed.
  * `XDG_DATA_HOME` locates OpenCode's store, which also holds its credentials; cleared, code given a
  * `userHome` looks under that home's `.local/share` instead of the developer's real data directory.
+ * The two `SALIDIUM_EXTRA_*` settings add provider sources beside the defaults, so a developer who
+ * set them for another local tool would otherwise have its sessions read into a test.
  */
 export const PROVIDER_STATE_OVERRIDES = [
   'CLAUDE_CONFIG_DIR',
   'CODEX_HOME',
   'XDG_DATA_HOME',
+  'SALIDIUM_EXTRA_CODEX_HOMES',
+  'SALIDIUM_EXTRA_OPENCODE_STORES',
 ] as const;
 
 /** Provider command line tools a spawned daemon could otherwise find and run. */
@@ -96,8 +100,14 @@ export function isolateProviders(options: ProviderIsolationOptions = {}): Provid
     codexHome,
     xdgDataHome,
     environment(overrides = {}, base = process.env) {
+      // Extra sources are dropped rather than pointed at scratch: a test that wants one names it.
+      const {
+        SALIDIUM_EXTRA_CODEX_HOMES: _codexHomes,
+        SALIDIUM_EXTRA_OPENCODE_STORES: _openCodeStores,
+        ...inherited
+      } = base;
       return {
-        ...base,
+        ...inherited,
         CLAUDE_CONFIG_DIR: claudeConfigDir,
         CODEX_HOME: codexHome,
         XDG_DATA_HOME: xdgDataHome,

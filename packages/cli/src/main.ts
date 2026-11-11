@@ -128,6 +128,12 @@ Environment:
   SALIDIUM_NO_GIT=1      Disable read-only git snapshots and changed-file locations
   SALIDIUM_EXPLAINER     Visual explainer: auto, claude, codex, ollama, or off (default auto)
   SALIDIUM_EXPLAIN_MODEL Optional model override for the selected explainer
+  SALIDIUM_EXTRA_CODEX_HOMES
+                         Codex homes to read beside CODEX_HOME (or ~/.codex): absolute paths
+                         separated by ':'; one path component may be a * pattern
+  SALIDIUM_EXTRA_OPENCODE_STORES
+                         OpenCode opencode.db files to read beside the default store, the same
+                         way; read only while salidium/opencode is enabled
 
 Native Windows imports transcript history but does not install the POSIX live-hook relay.
 Ordinary commands resume an expired or manual pause. help, version, pause, stop, service commands,

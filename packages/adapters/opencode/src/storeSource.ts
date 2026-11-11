@@ -1,14 +1,16 @@
 import { existsSync, statSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
-import type {
-  StoreCursor,
-  StorePollBatch,
-  StorePollRequest,
-  StorePollResult,
-  StoreRawRecord,
-  StoreSource,
+import {
+  asObject,
+  asString,
+  expandSourceList,
+  type StoreCursor,
+  type StorePollBatch,
+  type StorePollRequest,
+  type StorePollResult,
+  type StoreRawRecord,
+  type StoreSource,
 } from '@salidium/adapter-kit';
-import { asObject, asString } from '@salidium/adapter-kit';
 import {
   type CanonicalEvent,
   type EventSource,
@@ -63,6 +65,28 @@ export function openCodeStorePath(userHome: string, env: NodeJS.ProcessEnv): str
   const xdg = env.XDG_DATA_HOME;
   const base = xdg && isAbsolute(xdg) ? xdg : join(userHome, '.local', 'share');
   return join(base, 'opencode', 'opencode.db');
+}
+
+/**
+ * OpenCode stores read beside the default one, for a local tool that runs OpenCode with data
+ * folders of its own. Colon-separated absolute paths to `opencode.db` files; one component of a
+ * path may be a `*` pattern, such as a folder named `opencode-sandbox-*` above `data/opencode`, which matches
+ * only real folders and a real file, never links. See `expandSourceList`.
+ */
+export const OPENCODE_EXTRA_STORES_ENV = 'SALIDIUM_EXTRA_OPENCODE_STORES';
+
+/**
+ * Every OpenCode store to read now: the default store first, then each extra store, each once and
+ * only when it is a regular file (opening a FIFO or device would block the daemon's thread).
+ */
+export function openCodeStorePaths(userHome: string, env: NodeJS.ProcessEnv): string[] {
+  const paths: string[] = [];
+  for (const path of [
+    openCodeStorePath(userHome, env),
+    ...expandSourceList(env[OPENCODE_EXTRA_STORES_ENV], 'file'),
+  ])
+    if (!paths.includes(path) && isRegularFile(path)) paths.push(path);
+  return paths;
 }
 
 export function cursorKey(storePath: string, sessionId: string): string {
@@ -336,10 +360,8 @@ export function createOpenCodeStoreSource(): StoreSource {
   const seen = new Map<string, { sequence: number; position: number; count: number }>();
 
   return {
-    locate({ userHome, env }) {
-      const path = openCodeStorePath(userHome, env);
-      // Only a regular file: opening a FIFO or device would block the daemon's thread.
-      return isRegularFile(path) ? path : undefined;
+    locateAll({ userHome, env }) {
+      return openCodeStorePaths(userHome, env);
     },
 
     changeIndicators(path) {

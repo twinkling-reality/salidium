@@ -16,5 +16,11 @@ export {
   restrictedReadsSupported,
   withOpenCodeStore,
 } from './storeAccess.ts';
-export { createOpenCodeStoreSource, cursorKey, openCodeStorePath } from './storeSource.ts';
+export {
+  createOpenCodeStoreSource,
+  cursorKey,
+  OPENCODE_EXTRA_STORES_ENV,
+  openCodeStorePath,
+  openCodeStorePaths,
+} from './storeSource.ts';
 export { canonicalToolName, mapToolInput, mapToolResult, patchPaths } from './toolMapping.ts';

@@ -654,6 +654,14 @@ const RAW: Array<Omit<Page, "n">> = [
         ["`SALIDIUM_EXPLAIN`", "Set to `0` to switch explanations off. The older spelling of `SALIDIUM_EXPLAINER=off`."],
         ["`CLAUDE_CONFIG_DIR`", "Where Claude Code keeps its settings. Defaults to `~/.claude`."],
         ["`CODEX_HOME`", "Where Codex keeps its state. Defaults to `~/.codex`."],
+        [
+          "`SALIDIUM_EXTRA_CODEX_HOMES`",
+          "More Codex homes to read, beside `CODEX_HOME`, for a tool that runs Codex in homes of its own. Absolute paths separated by `:`. One part of a path may be a `*` pattern, such as `/data/codex-confined/*`, which matches real folders only, never links. Unset, only the default home is read.",
+        ],
+        [
+          "`SALIDIUM_EXTRA_OPENCODE_STORES`",
+          "More OpenCode stores to read, beside the default one, each read only and restricted like it. Absolute paths to `opencode.db` files separated by `:`, with the same `*` pattern rule. Read only while `salidium/opencode` is enabled.",
+        ],
         ["`OLLAMA_HOST`", "Where the Local model route reaches Ollama. Defaults to `127.0.0.1:11434`. Only a loopback address is accepted."],
       ]),
     ],

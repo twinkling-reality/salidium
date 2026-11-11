@@ -129,11 +129,7 @@ export class TranscriptTailer {
   /** Starts watching provider roots and resolves after the initial recent-file backfill. */
   start(userHome: string, historyDays: number): Promise<void> {
     this.startedWith = { userHome, historyDays };
-    for (const adapter of this.adapters) {
-      for (const root of adapter.sessionRoots(userHome)) {
-        if (!this.roots.includes(root)) this.roots.push(root);
-      }
-    }
+    this.refreshRoots();
     this.ensureRootWatchers();
     // Explicit jobs are durable and bypass the ordinary age window. Process them before the
     // opportunistic recent-history scan so an adapter upgrade cannot strand old sessions.
@@ -143,6 +139,7 @@ export class TranscriptTailer {
     this.rescanTimer = setInterval(() => void this.scanRoots(historyDays, false), 60_000);
     this.rescanTimer.unref?.();
     this.rootDiscoveryTimer = setInterval(() => {
+      this.refreshRoots();
       if (this.ensureRootWatchers()) void this.scanRoots(historyDays, false);
     }, this.rootDiscoveryIntervalMs);
     this.rootDiscoveryTimer.unref?.();
@@ -152,6 +149,36 @@ export class TranscriptTailer {
   private async startBackfill(historyDays: number): Promise<void> {
     await this.processReingestJobs();
     if (!this.stopped && !this.paused) await this.scanRoots(historyDays, true);
+  }
+
+  /**
+   * Asks the adapters for their roots again. A provider's roots can change while the daemon runs:
+   * an extra-home pattern matches each new home another tool makes. A root no longer named loses
+   * its watcher; the files already tracked under it are left to the ordinary idle eviction.
+   */
+  private refreshRoots(): void {
+    const started = this.startedWith;
+    if (!started) return;
+    const next: string[] = [];
+    try {
+      for (const adapter of this.adapters)
+        for (const root of adapter.sessionRoots(started.userHome))
+          if (!next.includes(root)) next.push(root);
+    } catch (err) {
+      // Keep the roots already known rather than dropping a provider for one bad listing.
+      this.log.warn('provider roots could not be listed', { err: String(err) });
+      return;
+    }
+    for (const [root, watcher] of this.watchers) {
+      if (next.includes(root)) continue;
+      watcher.close();
+      this.watchers.delete(root);
+      this.watcherRetryAfter.delete(root);
+      this.discoveredRoots.delete(root);
+    }
+    for (const root of this.discoveredRoots)
+      if (!next.includes(root)) this.discoveredRoots.delete(root);
+    this.roots = next;
   }
 
   /** Attaches watchers to roots that appeared after startup and forgets roots that vanished. */

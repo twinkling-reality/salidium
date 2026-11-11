@@ -25,7 +25,7 @@ export interface StoreCursor {
 }
 
 export interface StorePollRequest {
-  /** Absolute path of the store, as returned by `locate`. */
+  /** Absolute path of one store, as returned by `locateAll`. */
   path: string;
   /** Sessions with no cursor that were last active before this instant are not read. */
   activeSinceMs: number;
@@ -78,8 +78,13 @@ export type StoreRawRecord =
  * persistence and redaction, exactly as for line files.
  */
 export interface StoreSource {
-  /** The store file for this user, or undefined when the provider has not created one. */
-  locate(context: { userHome: string; env: NodeJS.ProcessEnv }): string | undefined;
+  /**
+   * Every store file to read now, each once: the provider's default store for this user first,
+   * when it exists, then any extra stores the owner named. Empty when there is none. Each path is
+   * polled, cursored and backed off on its own; a cursor key names its store, so two stores never
+   * share one.
+   */
+  locateAll(context: { userHome: string; env: NodeJS.ProcessEnv }): string[];
   /** Files whose size or modification time changes when the provider commits new records. */
   changeIndicators(path: string): string[];
   /** Reads what changed since the cursors, bounded by the row budget. Never writes. */
@@ -87,8 +92,8 @@ export interface StoreSource {
   /**
    * Re-reads the record an event cites and verifies its fingerprint. Returns the record's text,
    * unredacted (the caller redacts), or an explicit reason; never content that changed since
-   * ingestion. `storePath` is the store currently located for this user; a reference to any
-   * other file is refused.
+   * ingestion. `storePath` is the located store the reference names (or, when it names none, any
+   * located store, so the source explains the refusal); a reference to any other file is refused.
    */
   readRawRecord(storePath: string, ref: NonNullable<EventSource['ref']>): StoreRawRecord;
 }

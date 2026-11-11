@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Read Codex homes and OpenCode stores that another local tool keeps for the agents it runs, beside
+  your own. `SALIDIUM_EXTRA_CODEX_HOMES` and `SALIDIUM_EXTRA_OPENCODE_STORES` each take absolute
+  paths separated by `:`, and one part of a path may be a `*` pattern so a folder per task needs one
+  entry. A pattern matches real folders and files only, never links, and new matches are found
+  while the daemon runs. The default Codex home and OpenCode store are always read and nothing
+  changes when the settings are absent. Sessions are still looked up by the agent's own session id,
+  so the consumer contract is unchanged; a tool can tell from `salidium.version` in the discovery
+  document that the installed Salidium reads these settings. Each OpenCode store is polled and backs
+  off on its own, so one unreadable store holds back no other.
+
 ## 0.8.3 - 2026-10-08
 
 - Rewind is a tray revealed beneath the report instead of a scrubber at its foot. One horizontal

@@ -194,7 +194,7 @@ describe('OpenCode store source', () => {
       '/home/p/.local/share/opencode/opencode.db',
     );
     const source = createOpenCodeStoreSource();
-    expect(source.locate({ userHome: '/nowhere', env: { XDG_DATA_HOME: dir } })).toBeUndefined();
+    expect(source.locateAll({ userHome: '/nowhere', env: { XDG_DATA_HOME: dir } })).toEqual([]);
     expect(source.changeIndicators(path)).toEqual([path, `${path}-wal`]);
   });
 
@@ -1027,8 +1027,8 @@ describe('OpenCode raw records', () => {
     mkdirSync(join(xdg, 'opencode'), { recursive: true });
     execFileSync('mkfifo', [join(xdg, 'opencode', 'opencode.db')]);
     expect(
-      createOpenCodeStoreSource().locate({ userHome: dir, env: { XDG_DATA_HOME: xdg } }),
-    ).toBeUndefined();
+      createOpenCodeStoreSource().locateAll({ userHome: dir, env: { XDG_DATA_HOME: xdg } }),
+    ).toEqual([]);
   });
 
   it.each([

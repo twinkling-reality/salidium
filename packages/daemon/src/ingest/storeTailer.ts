@@ -43,9 +43,10 @@ export class StoreTailer {
   private readonly env: NodeJS.ProcessEnv;
   private readonly pollIntervalMs: number;
   private readonly rowBudget: number;
-  private readonly tracked = new Map<ProviderId, Tracked>();
+  /** Per provider and store path (`trackKey`): one provider may read several stores. */
+  private readonly tracked = new Map<string, Tracked>();
   private readonly failures = new Map<
-    ProviderId,
+    string,
     { attempts: number; retryAt: number; message: string }
   >();
   private timer: NodeJS.Timeout | undefined;
@@ -79,7 +80,10 @@ export class StoreTailer {
   }
 
   countForProvider(providerId: string): number {
-    return this.tracked.get(providerId as ProviderId)?.cursors.size ?? 0;
+    let n = 0;
+    for (const tracked of this.tracked.values())
+      if (tracked.provider.id === providerId) n += tracked.cursors.size;
+    return n;
   }
 
   /** Reads re-ingest jobs, then the history window, then keeps polling. */
@@ -127,7 +131,10 @@ export class StoreTailer {
   ): StoreRawRecord | undefined {
     const provider = this.providers.find((p) => p.id === providerId);
     if (!provider || !this.startedWith) return undefined;
-    const path = provider.source.locate({ userHome: this.startedWith.userHome, env: this.env });
+    const paths = provider.source.locateAll({ userHome: this.startedWith.userHome, env: this.env });
+    // Only a store located now is ever opened. A reference to any other file is handed to the
+    // source with a located store, which refuses it in its own words.
+    const path = paths.find((p) => p === ref.path) ?? paths[0];
     if (!path) return { raw: undefined, reason: 'provider store no longer on disk' };
     return provider.source.readRawRecord(path, ref);
   }
@@ -146,28 +153,59 @@ export class StoreTailer {
     if (!started || this.stopped || this.paused) return;
     for (const provider of this.providers) {
       if (this.stopped || this.paused) return;
-      const failure = this.failures.get(provider.id);
-      if (failure && Date.now() < failure.retryAt) continue;
+      let paths: string[];
       try {
-        await this.pollProvider(provider, started, initial);
-        if (failure) {
-          this.failures.delete(provider.id);
-          this.log.info('provider store readable again', { provider: provider.id });
-        }
+        paths = provider.source.locateAll({ userHome: started.userHome, env: this.env });
       } catch (error) {
-        // A store being migrated, locked by its writer, or in a shape this version cannot read is
-        // retried with backoff, and the same error is logged once rather than on every tick.
-        const message = String(error);
-        const attempts = (failure?.attempts ?? 0) + 1;
-        const delay = Math.min(MAX_RETRY_MS, this.pollIntervalMs * 2 ** Math.min(attempts, 10));
-        this.failures.set(provider.id, { attempts, retryAt: Date.now() + delay, message });
-        if (failure?.message !== message)
-          this.log.warn('provider store could not be read', {
-            provider: provider.id,
-            err: message,
-            retryInMs: delay,
-          });
+        this.log.warn('provider stores could not be listed', {
+          provider: provider.id,
+          err: String(error),
+        });
+        continue;
       }
+      // Stores no longer located are forgotten, so a tool that removes its folders frees them.
+      for (const [key, tracked] of this.tracked)
+        if (tracked.provider.id === provider.id && !paths.includes(tracked.path)) {
+          this.tracked.delete(key);
+          this.failures.delete(key);
+        }
+      this.settleOrphanedJobs(provider, paths);
+      for (const path of paths) {
+        if (this.stopped || this.paused) return;
+        const key = trackKey(provider.id, path);
+        const failure = this.failures.get(key);
+        if (failure && Date.now() < failure.retryAt) continue;
+        try {
+          await this.pollStore(provider, path, started, initial);
+          if (failure) {
+            this.failures.delete(key);
+            this.log.info('provider store readable again', { provider: provider.id });
+          }
+        } catch (error) {
+          // A store being migrated, locked by its writer, or in a shape this version cannot read is
+          // retried with backoff, and the same error is logged once rather than on every tick. Each
+          // store backs off alone, so one unreadable store does not hold back the others.
+          const message = String(error);
+          const attempts = (failure?.attempts ?? 0) + 1;
+          const delay = Math.min(MAX_RETRY_MS, this.pollIntervalMs * 2 ** Math.min(attempts, 10));
+          this.failures.set(key, { attempts, retryAt: Date.now() + delay, message });
+          if (failure?.message !== message)
+            this.log.warn('provider store could not be read', {
+              provider: provider.id,
+              err: message,
+              retryInMs: delay,
+            });
+        }
+      }
+    }
+  }
+
+  /** Re-ingest jobs whose store is not located now cannot run; they are closed as missing. */
+  private settleOrphanedJobs(provider: StoreProvider, paths: readonly string[]): void {
+    for (const job of this.store.pendingReingestJobs()) {
+      if (job.provider !== provider.id || jobStore(job, paths) !== undefined) continue;
+      this.store.startReingestJob(job.id);
+      this.store.finishReingestJob(job.id, 'missing', 'provider store no longer exists');
     }
   }
 
@@ -186,8 +224,9 @@ export class StoreTailer {
   }
 
   private trackedFor(provider: StoreProvider, path: string): Tracked {
-    const existing = this.tracked.get(provider.id);
-    if (existing?.path === path) return existing;
+    const key = trackKey(provider.id, path);
+    const existing = this.tracked.get(key);
+    if (existing) return existing;
     const cursors = new Map<string, StoreCursor>();
     for (const source of this.store.allSources()) {
       if (source.provider !== provider.id || storePathOf(source.path) !== path) continue;
@@ -195,24 +234,19 @@ export class StoreTailer {
       if (cursor) cursors.set(cursor.key, cursor);
     }
     const tracked: Tracked = { provider, path, signature: '', cursors };
-    this.tracked.set(provider.id, tracked);
+    this.tracked.set(key, tracked);
     return tracked;
   }
 
-  private async pollProvider(
+  private async pollStore(
     provider: StoreProvider,
+    path: string,
     started: { userHome: string; historyDays: number },
     initial: boolean,
   ): Promise<void> {
-    const path = provider.source.locate({ userHome: started.userHome, env: this.env });
-    const jobs = this.store.pendingReingestJobs().filter((job) => job.provider === provider.id);
-    if (!path) {
-      for (const job of jobs) {
-        this.store.startReingestJob(job.id);
-        this.store.finishReingestJob(job.id, 'missing', 'provider store no longer exists');
-      }
-      return;
-    }
+    const jobs = this.store
+      .pendingReingestJobs()
+      .filter((job) => job.provider === provider.id && jobStore(job, [path]) === path);
     const tracked = this.trackedFor(provider, path);
     let origin: 'ingest' | 'backfill' = 'ingest';
     if (jobs.length) {
@@ -240,7 +274,9 @@ export class StoreTailer {
       // than holding this one, and the providers after it, forever.
       if (round >= MAX_ROUNDS_PER_TICK) {
         complete = false;
-        this.log.warn('provider store read did not finish in one tick', { provider: provider.id });
+        this.log.warn('provider store read did not finish in one tick', {
+          provider: provider.id,
+        });
         break;
       }
       const result = provider.source.poll({
@@ -290,4 +326,16 @@ export class StoreTailer {
         tracked.cursors.set(key, { ...cursor, position: -1, count: 0 });
     }
   }
+}
+
+function trackKey(provider: ProviderId, path: string): string {
+  return JSON.stringify([provider, path]);
+}
+
+/**
+ * The located store a re-ingest job belongs to: the store itself, or the store its cursor key
+ * names. Matched against the whole path first, since a store path may itself contain `#`.
+ */
+function jobStore(job: ReingestJob, paths: readonly string[]): string | undefined {
+  return paths.find((path) => job.path === path) ?? paths.find((p) => storePathOf(job.path) === p);
 }

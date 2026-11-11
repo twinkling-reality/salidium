@@ -421,6 +421,39 @@ promise. Enabling or disabling an agent shows there after Salidium restarts. The
 [ADR 0005](decisions/0005-read-only-consumer-contract.md) and in the
 `@salidium/consumer-contract` package.
 
+### Agents a tool runs in folders of its own
+
+Some tools run Codex or OpenCode with state folders of their own instead of yours, so their sessions
+are not in `~/.codex` or OpenCode's data folder and Salidium does not see them. Name those folders
+and Salidium reads them too, beside your own:
+
+| Setting | What it names |
+| --- | --- |
+| `SALIDIUM_EXTRA_CODEX_HOMES` | Codex homes, each read like `CODEX_HOME`: its `sessions` and `archived_sessions` folders |
+| `SALIDIUM_EXTRA_OPENCODE_STORES` | OpenCode `opencode.db` files, each opened read only through the same restricted connection as the default store |
+
+Each is a list of absolute paths separated by `:`. One part of a path may be a pattern with a single
+`*`, which stands for any name not starting with a dot, so a tool that makes one folder per task
+needs a single entry for all of them:
+
+```bash
+export SALIDIUM_EXTRA_CODEX_HOMES="$HOME/.tool/codex-home:$HOME/.tool/codex-confined/*"
+export SALIDIUM_EXTRA_OPENCODE_STORES="$HOME/.tool/opencode-sandbox-*/data/opencode/opencode.db"
+```
+
+A path named as it is, is read exactly as the default is. What a pattern finds was not named by you,
+so it must be real: the folder that matched, every folder below it, and the home or store itself,
+never a link. A pattern reads at most 256 matches, the most recently modified when there are more,
+and a setting holds at most 32 entries. New matches are picked up while Salidium runs, within about a second for a Codex home
+and on the next poll for an OpenCode store. Your own `CODEX_HOME` (or `~/.codex`) and your own
+OpenCode store are always read; these settings only add to them, and when they are absent nothing
+changes. OpenCode stores are read only while `salidium/opencode` is in `providers.enabled`. A
+session in an extra folder is looked up as any other, by the agent's own session id, so the
+consumer contract does not change. The always-on service copies both settings when it is installed,
+like the other `SALIDIUM_*` overrides; re-run `salidium service install` after changing them.
+Releases after 0.8.3 read these settings, which a tool can tell from `salidium.version` in the
+discovery document.
+
 ## Map a repository (experimental)
 
 Salidium can map a repository at one commit: its tracked files, the modules its `package.json`,
