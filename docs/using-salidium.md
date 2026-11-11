@@ -451,8 +451,8 @@ changes. OpenCode stores are read only while `salidium/opencode` is in `provider
 session in an extra folder is looked up as any other, by the agent's own session id, so the
 consumer contract does not change. The always-on service copies both settings when it is installed,
 like the other `SALIDIUM_*` overrides; re-run `salidium service install` after changing them.
-Releases after 0.8.3 read these settings, which a tool can tell from `salidium.version` in the
-discovery document.
+Salidium 0.9.0 and later read these settings, which a tool can tell from `salidium.version` in
+the discovery document.
 
 ## Map a repository (experimental)
 

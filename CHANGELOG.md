@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.0 - 2026-11-10
 
 - Read Codex homes and OpenCode stores that another local tool keeps for the agents it runs, beside
   your own. `SALIDIUM_EXTRA_CODEX_HOMES` and `SALIDIUM_EXTRA_OPENCODE_STORES` each take absolute
@@ -9,8 +9,31 @@
   while the daemon runs. The default Codex home and OpenCode store are always read and nothing
   changes when the settings are absent. Sessions are still looked up by the agent's own session id,
   so the consumer contract is unchanged; a tool can tell from `salidium.version` in the discovery
-  document that the installed Salidium reads these settings. Each OpenCode store is polled and backs
-  off on its own, so one unreadable store holds back no other.
+  document, 0.9.0 or later, that the installed Salidium reads these settings. Each OpenCode store
+  is polled and backs off on its own, so one unreadable store holds back no other.
+- The report opens with an interactive session canvas that adapts its layout to what the session
+  did. **View** switches between **Overview**, **Steps**, and **Why & How**; **Detail** moves
+  between **Summary**, **Standard**, and **Full**; and **Customize** sets layout direction, density,
+  connector style, colors, and which blocks show. Colors are checked for perceptual contrast across
+  the backdrop, container, and card tiers, and a style can be exported and imported. With a mapped
+  repository, **Overview** places changed files in their modules with their dependency edges and
+  nearest dependents.
+- See and reclaim storage: `salidium storage` reports total size, reusable space, layout, and
+  projects. `salidium storage forget --project <path>` and `salidium storage forget --all` preview,
+  then delete, one project's sessions or every session while keeping settings, consumer credentials,
+  and hooks. `salidium storage compact` coordinates a brief pause and returns reusable pages to the
+  operating system. Every deletion records tombstones so deleted transcripts are not imported again.
+- On macOS, **Open Salidium**, **See What Happened**, **Storage...**, and **Local Operations...** in
+  the menu open a native window that shows in the Dock and `Cmd+Tab` while it is open; **Open in
+  Browser** remains. The menu's status reads the size of the session history it is recording.
+- A pause set by `salidium stop` now lasts across inspection and configuration commands until you
+  start, open, or resume Salidium, instead of being cleared by the next ordinary command.
+- A link on another site can open Salidium's interface. Only a top-level navigation to the shell
+  page with no query is allowed; the page holds no session data, cannot be framed, and severs the
+  page that opened it. Every other cross-site request is still refused.
+- Every tab shares one sign-in while the daemon runs, so a link that names a session opens it
+  without a terminal step. A token from an earlier daemon run is refused once and forgotten in
+  every tab.
 
 ## 0.8.3 - 2026-10-08
 

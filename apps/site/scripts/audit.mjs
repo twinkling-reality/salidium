@@ -9,16 +9,7 @@ import { spawnSync } from "node:child_process";
  * and the audit fails when an excepted advisory is no longer reported, so the list cannot outlive
  * its reasons.
  */
-const exceptions = [
-  {
-    id: "GHSA-vfj7-8cjw-p6xm",
-    revisitBy: "2026-11-08",
-    reason:
-      "braces <=3.0.3 has no patched release. It reaches only lint and build tooling " +
-      "(the Next lint plugin and vinext, through fast-glob), which expands patterns this " +
-      "repository writes and never ships to a visitor.",
-  },
-];
+const exceptions = [];
 
 const result = spawnSync("npm", ["audit", "--json"], { encoding: "utf8" });
 let report;
