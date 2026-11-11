@@ -118,7 +118,7 @@
   --ok-soft: rgba(21, 128, 61, 0.12);
   --warn: #8a5a12;
   --warn-soft: rgba(183, 121, 31, 0.14);
-  --danger: #c0392b;
+  --danger: #b93628;
   --danger-soft: rgba(192, 57, 43, 0.12);
   /* Two facets have no status meaning to borrow a colour from, so they get their own. */
   --facet-why: #7c4bb0;

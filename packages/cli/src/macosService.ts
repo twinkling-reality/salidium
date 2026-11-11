@@ -481,6 +481,8 @@ export function prepareMacOSService(options: MacOSServiceOptions = {}): MacOSSer
       'SALIDIUM_EXPLAINER',
       'SALIDIUM_EXPLAIN_MODEL',
       'SALIDIUM_LOG',
+      'SALIDIUM_EXTRA_CODEX_HOMES',
+      'SALIDIUM_EXTRA_OPENCODE_STORES',
     ]) {
       const value = resolved.environment[key];
       if (value !== undefined) commonEnvironment[key] = value;

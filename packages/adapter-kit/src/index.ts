@@ -28,6 +28,15 @@ export {
   pathArgumentMetadata,
   safeJson,
 } from './recordHelpers.ts';
+export {
+  expandSourceEntry,
+  expandSourceList,
+  MAX_PATTERN_MATCHES,
+  MAX_SOURCE_ENTRIES,
+  type ParsedSourceList,
+  parseSourceList,
+  type SourceEntry,
+} from './sourcePaths.ts';
 export type {
   StoreCursor,
   StorePollBatch,

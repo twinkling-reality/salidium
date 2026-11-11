@@ -183,6 +183,8 @@ describe('macOS always-on service', () => {
       environment: {
         PATH: `${join(value.root, 'node_modules', '.bin')}:/usr/bin:/bin`,
         SALIDIUM_PORT: '49111',
+        SALIDIUM_EXTRA_CODEX_HOMES: '/data/codex-home:/data/codex-confined/*',
+        SALIDIUM_EXTRA_OPENCODE_STORES: '/data/opencode-sandbox-*/data/opencode/opencode.db',
       },
       version: '1.2.3',
       now: () => 1_700_000_000_000,
@@ -216,6 +218,12 @@ describe('macOS always-on service', () => {
     const menuPlist = readFileSync(paths.menuPlist, 'utf8');
     expect(daemonPlist).toContain(paths.daemonLauncher);
     expect(daemonPlist).toContain('<key>SALIDIUM_PORT</key>\n      <string>49111</string>');
+    expect(daemonPlist).toContain(
+      '<key>SALIDIUM_EXTRA_CODEX_HOMES</key>\n      <string>/data/codex-home:/data/codex-confined/*</string>',
+    );
+    expect(daemonPlist).toContain(
+      '<key>SALIDIUM_EXTRA_OPENCODE_STORES</key>\n      <string>/data/opencode-sandbox-*/data/opencode/opencode.db</string>',
+    );
     expect(daemonPlist).toContain('<string>/usr/bin:/bin:/usr/sbin:/sbin</string>');
     expect(daemonPlist).not.toContain('node_modules/.bin');
     expect(`${daemonPlist}${menuPlist}`).not.toContain('token');

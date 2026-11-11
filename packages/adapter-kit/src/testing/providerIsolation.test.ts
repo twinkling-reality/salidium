@@ -11,6 +11,8 @@ describe('provider isolation', () => {
       CLAUDE_CONFIG_DIR: '/real/claude',
       CODEX_HOME: '/real/codex',
       XDG_DATA_HOME: '/real/share',
+      SALIDIUM_EXTRA_CODEX_HOMES: '/real/tool/codex-home',
+      SALIDIUM_EXTRA_OPENCODE_STORES: '/real/tool/opencode.db',
       KEEP: 'yes',
     };
     clearProviderStateOverrides(environment);
@@ -21,8 +23,12 @@ describe('provider isolation', () => {
     expect(PROVIDER_EXECUTABLES).toContain('opencode');
     const isolation = isolateProviders();
     try {
-      const env = isolation.environment({}, { PATH: '' });
+      const env = isolation.environment(
+        {},
+        { PATH: '', SALIDIUM_EXTRA_CODEX_HOMES: '/real/tool/codex-home' },
+      );
       expect(env.XDG_DATA_HOME).toBe(isolation.xdgDataHome);
+      expect(env).not.toHaveProperty('SALIDIUM_EXTRA_CODEX_HOMES');
     } finally {
       isolation.dispose();
     }
