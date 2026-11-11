@@ -53,7 +53,7 @@ export const DEFAULT_CANVAS_STYLE_CONFIG: CanvasStyleConfig = {
   borderOpacity: 100,
   headingColor: '#1f1e1b',
   textColor: '#1f1e1b',
-  mutedTextColor: '#66635b',
+  mutedTextColor: '#5e5b53',
   accentColor: '#2b59c3',
   connectorStyle: 'bezier',
   connectorWidthPx: 1.5,
@@ -261,7 +261,7 @@ export function canvasStyleToInlineVars(config: CanvasStyleConfig): Record<strin
   );
 
   const rawMutedRgb =
-    parseHexRgb(config.mutedTextColor) ?? (isLightSurface ? [102, 99, 91] : [148, 163, 184]);
+    parseHexRgb(config.mutedTextColor) ?? (isLightSurface ? [94, 91, 83] : [148, 163, 184]);
   const safeMutedRgb = ensureContrastAgainstSurfaces(
     rawMutedRgb,
     [effectiveTier1Rgb, tier2Rgb],
